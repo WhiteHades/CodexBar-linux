@@ -1326,7 +1326,10 @@ extension StatusItemController {
             }
             let costSubmenu = webItems.hasCostHistory ? self
                 .makeCostHistorySubmenu(provider: provider, width: width) : nil
-            menu.addItem(self.makeCostMenuCardItem(model: model, submenu: costSubmenu))
+            menu.addItem(self.makeCostMenuCardItem(
+                model: model,
+                submenu: costSubmenu,
+                width: width))
         }
     }
 
