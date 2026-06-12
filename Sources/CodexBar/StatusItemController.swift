@@ -796,12 +796,8 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
         if self.mergedMenu == nil {
             self.mergedMenu = self.makeMenu()
         }
-        if self.statusItem.menu != nil {
-            self.statusItem.menu = nil
-        }
-        if let button = self.statusItem.button {
-            button.target = self
-            button.action = #selector(self.showMergedMenu(_:))
+        if self.statusItem.menu !== self.mergedMenu {
+            self.statusItem.menu = self.mergedMenu
         }
         self.prepareAttachedClosedMenusIfNeeded()
     }

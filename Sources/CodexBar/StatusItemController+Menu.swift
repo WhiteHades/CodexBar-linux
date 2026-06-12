@@ -56,6 +56,11 @@ extension StatusItemController {
         return self.makeBaseMenu()
     }
 
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard self.shouldMergeIcons, menu === self.mergedMenu else { return }
+        self.refreshMenuForOpenIfNeeded(menu, provider: self.resolvedMenuProvider())
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         let trace = self.beginMenuOperationTrace("menuWillOpen", breadcrumb: "menuWillOpen")
         defer { self.endMenuOperationTrace(trace, menu: menu, provider: self.menuProvider(for: menu)) }

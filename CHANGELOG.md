@@ -2,6 +2,8 @@
 
 ## 0.34.1 — Unreleased
 
+- Menu bar: restore native macOS positioning for merged provider dropdowns while preparing current content before AppKit lays out the menu.
+
 ## 0.34.0 — 2026-06-12
 
 ### Added
