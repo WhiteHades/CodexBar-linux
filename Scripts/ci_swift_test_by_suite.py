@@ -50,7 +50,16 @@ def run_command(command: list[str], timeout: int | None = None) -> int:
 
 
 def swift_test_list(swift_command: list[str]) -> list[TestSelection]:
-    result = subprocess.run([*swift_command, "test", "list"], check=True, capture_output=True, text=True)
+    command = [*swift_command, "test", "list"]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as error:
+        print(f"+ {swift_command[0]} test list", flush=True)
+        if error.stdout:
+            print(error.stdout, end="" if error.stdout.endswith("\n") else "\n", flush=True)
+        if error.stderr:
+            print(error.stderr, end="" if error.stderr.endswith("\n") else "\n", file=sys.stderr, flush=True)
+        raise
     selections: set[TestSelection] = set()
     unknown: list[str] = []
     for line in result.stdout.splitlines():

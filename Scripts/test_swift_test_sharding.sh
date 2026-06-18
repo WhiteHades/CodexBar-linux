@@ -11,6 +11,11 @@ set -euo pipefail
 
 printf '%s\n' "$*" >> "${FAKE_SWIFT_LOG}"
 if [[ "$*" == "test list" ]]; then
+  if [[ "${FAKE_SWIFT_LIST_FAIL:-0}" == "1" ]]; then
+    printf 'test-list stdout marker\n'
+    printf 'test-list stderr marker\n' >&2
+    exit 42
+  fi
   printf '%s\n' \
     "CodexBarTests.Alpha/test_one()" \
     "CodexBarTests.Alpha/test_two(argument:)" \
@@ -95,5 +100,21 @@ if FAKE_SWIFT_GROUP_ALWAYS_FAIL=1 \
   echo "ERROR: Repeated shard failure was masked." >&2
   exit 1
 fi
+
+if FAKE_SWIFT_LIST_FAIL=1 \
+  python3 "${ROOT_DIR}/Scripts/ci_swift_test_by_suite.py" \
+    --group-size 1 \
+    --timeout 10 \
+    --list-only \
+    --swift-command /bin/bash \
+    --swift-command-arg=-c \
+    --swift-command-arg="${FAKE_SWIFT_SCRIPT}" \
+    --swift-command-arg=fake-swift \
+    >"${TEMP_DIR}/list-failure.log" 2>&1; then
+  echo "ERROR: Failed test discovery was masked." >&2
+  exit 1
+fi
+grep -Fq "test-list stdout marker" "${TEMP_DIR}/list-failure.log"
+grep -Fq "test-list stderr marker" "${TEMP_DIR}/list-failure.log"
 
 echo "Swift test sharding tests passed."
