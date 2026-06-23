@@ -2,6 +2,9 @@
 
 ## 0.37.3 — Unreleased
 
+### Fixed
+- Memory pressure: finish isolating utility-queue source reads from main-actor state to prevent the remaining callback crash. Thanks @Zihao-Qi!
+
 ## 0.37.2 — 2026-06-22
 
 ### Added
