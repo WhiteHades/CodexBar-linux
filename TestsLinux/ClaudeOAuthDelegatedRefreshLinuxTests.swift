@@ -16,6 +16,24 @@ struct ClaudeOAuthDelegatedRefreshLinuxTests {
         }
     }
 
+    private actor VersionDetectionCapture {
+        private var value: Bool?
+
+        func record(_ value: Bool) {
+            self.value = value
+        }
+
+        func current() -> Bool? {
+            self.value
+        }
+    }
+
+    @Test
+    func cliOAuthSkipsVersionDetectionWhileAppPreservesIt() async throws {
+        #expect(try await self.detectsClaudeVersion(runtime: .cli) == false)
+        #expect(try await self.detectsClaudeVersion(runtime: .app) == true)
+    }
+
     @Test
     func cliOAuthDoesNotDelegateRefreshEvenForUserAction() async {
         let result = await self.runDelegatedRefresh(
@@ -98,5 +116,52 @@ struct ClaudeOAuthDelegatedRefreshLinuxTests {
             Issue.record("Expected ClaudeUsageError, got \(error)")
             return (await counter.current(), "")
         }
+    }
+
+    private func detectsClaudeVersion(runtime: ProviderRuntime) async throws -> Bool {
+        let capture = VersionDetectionCapture()
+        let fetcher = ClaudeUsageFetcher(
+            browserDetection: BrowserDetection(cacheTTL: 0),
+            environment: [:],
+            runtime: runtime,
+            dataSource: .oauth)
+        let credentialsOverride: @Sendable (
+            [String: String],
+            Bool,
+            Bool) async throws -> ClaudeOAuthCredentials = { _, _, _ in
+                ClaudeOAuthCredentials(
+                    accessToken: "access-token",
+                    refreshToken: nil,
+                    expiresAt: Date(timeIntervalSinceNow: 3600),
+                    scopes: ["user:profile"],
+                    rateLimitTier: nil)
+            }
+        let fetchOverride: @Sendable (String, Bool) async throws -> OAuthUsageResponse = {
+            _, detectClaudeVersion in
+            await capture.record(detectClaudeVersion)
+            return try Self.makeOAuthUsageResponse()
+        }
+
+        _ = try await ClaudeUsageFetcher.$loadOAuthCredentialsOverride.withValue(credentialsOverride) {
+            try await ClaudeUsageFetcher.$fetchOAuthUsageOverride.withValue(fetchOverride) {
+                try await fetcher.loadLatestUsage(model: "sonnet")
+            }
+        }
+
+        guard let value = await capture.current() else {
+            Issue.record("Expected OAuth fetch to report its version-detection policy")
+            return false
+        }
+        return value
+    }
+
+    private static func makeOAuthUsageResponse() throws -> OAuthUsageResponse {
+        let json = """
+        {
+          "five_hour": { "utilization": 7, "resets_at": "2025-12-23T16:00:00.000Z" },
+          "seven_day": { "utilization": 21, "resets_at": "2025-12-29T23:00:00.000Z" }
+        }
+        """
+        return try ClaudeOAuthUsageFetcher._decodeUsageResponseForTesting(Data(json.utf8))
     }
 }
