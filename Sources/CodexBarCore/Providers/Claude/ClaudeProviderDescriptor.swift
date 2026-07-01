@@ -374,22 +374,27 @@ struct ClaudeOAuthFetchStrategy: ProviderFetchStrategy {
 }
 
 struct ClaudeWebFetchStrategy: ProviderFetchStrategy {
+    typealias UsageLoader = @Sendable (ProviderFetchContext) async throws -> ClaudeUsageSnapshot
+
     let id: String = "claude.web"
     let kind: ProviderFetchKind = .web
     let browserDetection: BrowserDetection
+    private let usageLoader: UsageLoader?
+
+    init(
+        browserDetection: BrowserDetection,
+        usageLoader: UsageLoader? = nil)
+    {
+        self.browserDetection = browserDetection
+        self.usageLoader = usageLoader
+    }
 
     func isAvailable(_ context: ProviderFetchContext) async -> Bool {
         Self.isAvailableForFallback(context: context, browserDetection: self.browserDetection)
     }
 
     func fetch(_ context: ProviderFetchContext) async throws -> ProviderFetchResult {
-        let fetcher = ClaudeUsageFetcher(
-            browserDetection: browserDetection,
-            dataSource: .web,
-            useWebExtras: false,
-            manualCookieHeader: Self.manualCookieHeader(from: context),
-            webOrganizationID: context.settings?.claude?.organizationID)
-        let usage = try await fetcher.loadLatestUsage(model: "sonnet")
+        let usage = try await self.loadUsage(before: context.webTimeout, context: context)
         return self.makeResult(
             usage: ClaudeOAuthFetchStrategy.snapshot(from: usage),
             sourceLabel: "web")
@@ -417,6 +422,46 @@ struct ClaudeWebFetchStrategy: ProviderFetchStrategy {
     private static func manualCookieHeader(from context: ProviderFetchContext) -> String? {
         guard context.settings?.claude?.cookieSource == .manual else { return nil }
         return CookieHeaderNormalizer.normalize(context.settings?.claude?.manualCookieHeader)
+    }
+
+    private func loadUsage(
+        before timeout: TimeInterval,
+        context: ProviderFetchContext) async throws -> ClaudeUsageSnapshot
+    {
+        let sourceTask = Task<ClaudeUsageSnapshot, Error> {
+            if let usageLoader = self.usageLoader {
+                return try await usageLoader(context)
+            }
+            let fetcher = ClaudeUsageFetcher(
+                browserDetection: self.browserDetection,
+                dataSource: .web,
+                useWebExtras: false,
+                manualCookieHeader: Self.manualCookieHeader(from: context),
+                webOrganizationID: context.settings?.claude?.organizationID)
+            return try await fetcher.loadLatestUsage(model: "sonnet")
+        }
+        let race = BoundedTaskJoin(sourceTask: sourceTask)
+        switch await race.value(joinGrace: .seconds(max(0, timeout))) {
+        case let .value(usage):
+            try Task.checkCancellation()
+            return usage
+        case let .failure(error):
+            throw error
+        case .timedOut:
+            try Task.checkCancellation()
+            throw ClaudeWebFetchStrategyError.timedOut(seconds: timeout)
+        }
+    }
+}
+
+enum ClaudeWebFetchStrategyError: LocalizedError, Equatable, Sendable {
+    case timedOut(seconds: TimeInterval)
+
+    var errorDescription: String? {
+        switch self {
+        case let .timedOut(seconds):
+            "Claude web usage fetch timed out after \(seconds.formatted()) seconds."
+        }
     }
 }
 
