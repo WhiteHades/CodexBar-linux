@@ -750,12 +750,19 @@ extension UsageStore {
                 providerBuckets: &providerBuckets)
         }
 
+        // Claude's unscoped history is only safe to adopt during the first unambiguous migration.
+        // The sentinel marks identityless OAuth, while any scoped bucket proves multiple owners may exist.
+        let canAdoptUnscopedHistory = shouldAdoptUnscopedHistory
+            && !(provider == .claude
+                && (providerBuckets.preferredAccountKey == Self.planUtilizationUnscopedPreferredKey
+                    || !providerBuckets.accounts.isEmpty))
+
         let resolvedAccount = preferredAccount ?? self.settings.selectedTokenAccount(for: provider)
         if let tokenAccountKey = Self.planUtilizationAccountKey(provider: provider, account: resolvedAccount) {
             if shouldUpdatePreferredAccountKey {
                 providerBuckets.preferredAccountKey = tokenAccountKey
             }
-            if shouldAdoptUnscopedHistory {
+            if canAdoptUnscopedHistory {
                 self.adoptPlanUtilizationUnscopedHistoryIfNeeded(
                     into: tokenAccountKey,
                     provider: provider,
@@ -788,7 +795,7 @@ extension UsageStore {
             if shouldUpdatePreferredAccountKey {
                 providerBuckets.preferredAccountKey = resolvedIdentityAccountKey
             }
-            if shouldAdoptUnscopedHistory {
+            if canAdoptUnscopedHistory {
                 self.adoptPlanUtilizationUnscopedHistoryIfNeeded(
                     into: resolvedIdentityAccountKey,
                     provider: provider,

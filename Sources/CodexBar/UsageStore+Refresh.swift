@@ -280,12 +280,18 @@ extension UsageStore {
             }
             let isClaudeOAuthSample = provider == .claude
                 && result.strategyKind == .oauth
+            let claudeOAuthPersistentRefHash: String? = if isClaudeOAuthSample,
+                                                           result.claudeOAuthKeychainPersistentRefHash == context
+                                                               .claudeOAuthHistoryPersistentRefHash
+            {
+                result.claudeOAuthKeychainPersistentRefHash
+            } else {
+                nil
+            }
             await self.recordPlanUtilizationHistorySample(
                 provider: provider,
                 snapshot: backfilled,
-                claudeOAuthPersistentRefHash: isClaudeOAuthSample
-                    ? context.claudeOAuthHistoryPersistentRefHash
-                    : nil,
+                claudeOAuthPersistentRefHash: claudeOAuthPersistentRefHash,
                 isClaudeOAuthSample: isClaudeOAuthSample)
             guard self.isCurrentProviderRefreshGeneration(provider, generation: context.generation) else { return }
             if let runtime = self.providerRuntimes[provider] {

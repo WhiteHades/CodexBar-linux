@@ -370,9 +370,14 @@ struct ClaudeOAuthFetchStrategy: ProviderFetchStrategy {
                 (context.sourceMode == .auto || context.sourceMode == .oauth),
             useWebExtras: false)
         let usage = try await fetcher.loadLatestUsage(model: "sonnet")
-        return self.makeResult(
+        return ProviderFetchResult(
             usage: Self.snapshot(from: usage),
-            sourceLabel: "oauth")
+            credits: nil,
+            dashboard: nil,
+            sourceLabel: "oauth",
+            strategyID: self.id,
+            strategyKind: self.kind,
+            claudeOAuthKeychainPersistentRefHash: usage.oauthKeychainPersistentRefHash)
     }
 
     func shouldFallback(on _: Error, context: ProviderFetchContext) -> Bool {

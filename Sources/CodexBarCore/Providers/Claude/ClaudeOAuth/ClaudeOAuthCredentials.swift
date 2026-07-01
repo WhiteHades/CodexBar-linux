@@ -1107,6 +1107,18 @@ public enum ClaudeOAuthCredentialsStore {
         allowKeychainPrompt: Bool = true,
         respectKeychainPromptCooldown: Bool = false) async throws -> ClaudeOAuthCredentials
     {
+        try await self.loadRecordWithAutoRefresh(
+            environment: environment,
+            allowKeychainPrompt: allowKeychainPrompt,
+            respectKeychainPromptCooldown: respectKeychainPromptCooldown).credentials
+    }
+
+    /// Record-preserving variant used when callers must distinguish the credential that actually won routing.
+    public static func loadRecordWithAutoRefresh(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        allowKeychainPrompt: Bool = true,
+        respectKeychainPromptCooldown: Bool = false) async throws -> ClaudeOAuthCredentialRecord
+    {
         let context = self.currentCollaboratorContext()
         let repository = Repository(context: context)
         let refresher = Refresher(context: context)
@@ -1133,7 +1145,7 @@ public enum ClaudeOAuthCredentialsStore {
         // If not expired, return as-is
         guard isExpired else {
             self.log.debug("Claude OAuth credentials loaded for usage", metadata: expiryMetadata)
-            return credentials
+            return record
         }
 
         self.log.info("Claude OAuth credentials considered expired", metadata: expiryMetadata)
@@ -1165,7 +1177,10 @@ public enum ClaudeOAuthCredentialsStore {
                 existingRateLimitTier: credentials.rateLimitTier,
                 existingSubscriptionType: credentials.subscriptionType)
             self.log.info("Token refresh successful, expires in \(refreshed.expiresIn ?? 0) seconds")
-            return refreshed
+            return ClaudeOAuthCredentialRecord(
+                credentials: refreshed,
+                owner: .codexbar,
+                source: .memoryCache)
         } catch {
             self.log.error("Token refresh failed: \(error.localizedDescription)")
             throw error
@@ -1289,6 +1304,21 @@ public enum ClaudeOAuthCredentialsStore {
         case let .value(fingerprint):
             fingerprint?.persistentRefHash
         }
+    }
+
+    /// Returns the current Keychain item's persistent-reference hash only when it owns the credential
+    /// that actually won OAuth routing. Token material is compared in memory and is never hashed or persisted.
+    public static func matchingClaudeKeychainPersistentRefHashWithoutPrompt(
+        for record: ClaudeOAuthCredentialRecord) -> String?
+    {
+        guard record.owner == .claudeCLI,
+              let keychainData = try? self.loadFromClaudeKeychainNonInteractive(),
+              let keychainCredentials = try? ClaudeOAuthCredentials.parse(data: keychainData),
+              keychainCredentials.accessToken == record.credentials.accessToken
+        else {
+            return nil
+        }
+        return self.claudeKeychainPersistentRefHashWithoutPrompt()
     }
 
     private enum ClaudeKeychainProbe<Value> {

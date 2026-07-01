@@ -101,6 +101,9 @@ public struct ProviderFetchResult: Sendable {
     public let sourceLabel: String
     public let strategyID: String
     public let strategyKind: ProviderFetchKind
+    /// Transient account ownership evidence for plan-utilization history.
+    /// The raw Keychain reference never enters the persisted usage snapshot.
+    public let claudeOAuthKeychainPersistentRefHash: String?
 
     public init(
         usage: UsageSnapshot,
@@ -108,7 +111,8 @@ public struct ProviderFetchResult: Sendable {
         dashboard: OpenAIDashboardSnapshot?,
         sourceLabel: String,
         strategyID: String,
-        strategyKind: ProviderFetchKind)
+        strategyKind: ProviderFetchKind,
+        claudeOAuthKeychainPersistentRefHash: String? = nil)
     {
         self.usage = usage
         self.credits = credits
@@ -116,6 +120,7 @@ public struct ProviderFetchResult: Sendable {
         self.sourceLabel = sourceLabel
         self.strategyID = strategyID
         self.strategyKind = strategyKind
+        self.claudeOAuthKeychainPersistentRefHash = claudeOAuthKeychainPersistentRefHash
     }
 }
 
