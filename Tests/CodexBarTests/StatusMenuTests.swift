@@ -165,6 +165,58 @@ struct StatusMenuTests {
     }
 
     @Test
+    func `qoder dashboard action follows current manual header`() {
+        self.disableMenuCardsForTesting()
+        let settings = self.makeSettings()
+        settings.statusChecksEnabled = false
+        settings.refreshFrequency = .manual
+        settings.qoderCookieSource = .manual
+        settings.qoderCookieHeader = "curl https://qoder.com.cn -H 'Cookie: sid=abc'"
+
+        let fetcher = UsageFetcher()
+        let store = UsageStore(fetcher: fetcher, browserDetection: BrowserDetection(cacheTTL: 0), settings: settings)
+        store.lastSourceLabels[.qoder] = "manual / qoder.com"
+        let controller = StatusItemController(
+            store: store,
+            settings: settings,
+            account: fetcher.loadAccountInfo(),
+            updater: DisabledUpdaterController(),
+            preferencesSelection: PreferencesSelection(),
+            statusBar: self.makeStatusBarForTesting())
+
+        #expect(controller.dashboardURL(for: .qoder) == QoderWebSite.china.dashboardURL)
+
+        settings.qoderCookieHeader = "curl https://qoder.com -H 'Host: qoder.com.cn' -H 'Cookie: sid=abc'"
+        store.lastSourceLabels[.qoder] = "manual / qoder.com.cn"
+        #expect(controller.dashboardURL(for: .qoder) == QoderWebSite.international.dashboardURL)
+    }
+
+    @Test
+    func `qoder dashboard action follows store source label in auto mode`() {
+        self.disableMenuCardsForTesting()
+        let settings = self.makeSettings()
+        settings.statusChecksEnabled = false
+        settings.refreshFrequency = .manual
+        settings.qoderCookieSource = .auto
+
+        let fetcher = UsageFetcher()
+        let store = UsageStore(fetcher: fetcher, browserDetection: BrowserDetection(cacheTTL: 0), settings: settings)
+        let controller = StatusItemController(
+            store: store,
+            settings: settings,
+            account: fetcher.loadAccountInfo(),
+            updater: DisabledUpdaterController(),
+            preferencesSelection: PreferencesSelection(),
+            statusBar: self.makeStatusBarForTesting())
+
+        store.lastSourceLabels[.qoder] = "Chrome / qoder.com.cn"
+        #expect(controller.dashboardURL(for: .qoder) == QoderWebSite.china.dashboardURL)
+
+        store.lastSourceLabels[.qoder] = "Chrome / qoder.com"
+        #expect(controller.dashboardURL(for: .qoder) == QoderWebSite.international.dashboardURL)
+    }
+
+    @Test
     func `claude subscription dashboard action opens usage page`() {
         for plan in ["Claude Pro", "Claude Team"] {
             self.disableMenuCardsForTesting()

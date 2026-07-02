@@ -21,7 +21,7 @@ public enum QoderProviderDescriptor {
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
                 browserCookieOrder: ProviderBrowserCookieDefaults.qoderCookieImportOrder,
-                dashboardURL: "https://qoder.com/account/usage",
+                dashboardURL: QoderWebSite.international.dashboardURL.absoluteString,
                 statusPageURL: nil,
                 statusLinkURL: nil),
             branding: ProviderBranding(
@@ -38,6 +38,26 @@ public enum QoderProviderDescriptor {
                 name: "qoder",
                 aliases: [],
                 versionDetector: nil))
+    }
+
+    public static func dashboardURL(
+        settings: ProviderSettingsSnapshot.QoderProviderSettings?,
+        sourceLabel: String?) -> URL
+    {
+        guard settings?.cookieSource == .manual else {
+            return self.dashboardURL(forSourceLabel: sourceLabel)
+        }
+        guard let site = QoderWebFetchStrategy.site(forManualCookieHeader: settings?.manualCookieHeader) else {
+            return QoderWebSite.international.dashboardURL
+        }
+        return site.dashboardURL
+    }
+
+    public static func dashboardURL(forSourceLabel sourceLabel: String?) -> URL {
+        guard let sourceLabel, !sourceLabel.isEmpty else {
+            return QoderWebSite.international.dashboardURL
+        }
+        return QoderWebFetchStrategy.site(for: sourceLabel).dashboardURL
     }
 }
 

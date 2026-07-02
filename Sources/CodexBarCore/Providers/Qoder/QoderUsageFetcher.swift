@@ -16,6 +16,15 @@ public enum QoderWebSite: CaseIterable, Sendable {
         }
     }
 
+    public var dashboardURL: URL {
+        switch self {
+        case .international:
+            URL(string: "https://qoder.com/account/usage")!
+        case .china:
+            URL(string: "https://qoder.com.cn/account/usage")!
+        }
+    }
+
     var webOrigin: String {
         switch self {
         case .international:
