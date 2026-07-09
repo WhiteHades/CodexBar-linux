@@ -220,31 +220,29 @@ extension ClaudeStatusProbe {
 
         var sessionPct = self.extractPercent(labelSubstring: "Current session", context: labelContext)
         var weeklyPct = self.extractPercent(labelSubstring: "Current week (all models)", context: labelContext)
-        var opusPct = self.extractPercent(
-            labelSubstrings: [
-                "Current week (Opus)",
-                "Current week (Sonnet only)",
-                "Current week (Sonnet)",
-            ],
-            context: labelContext)
+        let opusLabels = [
+            "Current week (Opus)",
+            "Current week (Sonnet only)",
+            "Current week (Sonnet)",
+        ]
+        let opusPct = self.extractPercent(labelSubstrings: opusLabels, context: labelContext)
 
         // Fallback: order-based percent scraping when labels are present but the surrounding layout moved.
         // Only apply the fallback when the corresponding label exists in the rendered panel; enterprise accounts
         // may omit the weekly panel entirely, and we should treat that as "unavailable" rather than guessing.
         let hasAllModelsWeeklyLabel = labelContext.contains(
             self.normalizedForLabelSearch("Current week (all models)"))
-        let hasOpusLabel = labelContext.contains("opus") || labelContext.contains("sonnet")
+        let hasOpusLabel = opusLabels.contains {
+            labelContext.contains(self.normalizedForLabelSearch($0))
+        }
 
-        if sessionPct == nil || (hasAllModelsWeeklyLabel && weeklyPct == nil) || (hasOpusLabel && opusPct == nil) {
+        if sessionPct == nil || (hasAllModelsWeeklyLabel && weeklyPct == nil) {
             let ordered = self.allPercents(usagePanelText)
             if sessionPct == nil, ordered.indices.contains(0) {
                 sessionPct = ordered[0]
             }
             if hasAllModelsWeeklyLabel, weeklyPct == nil, ordered.indices.contains(1) {
                 weeklyPct = ordered[1]
-            }
-            if hasOpusLabel, opusPct == nil, ordered.indices.contains(2) {
-                opusPct = ordered[2]
             }
         }
 
@@ -270,13 +268,7 @@ extension ClaudeStatusProbe {
             ? self.extractReset(labelSubstring: "Current week (all models)", context: labelContext)
             : nil
         let opusReset = hasOpusLabel
-            ? self.extractReset(
-                labelSubstrings: [
-                    "Current week (Opus)",
-                    "Current week (Sonnet only)",
-                    "Current week (Sonnet)",
-                ],
-                context: labelContext)
+            ? self.extractReset(labelSubstrings: opusLabels, context: labelContext)
             : nil
         let scopedWeeklyUsages = self.extractScopedWeeklyUsages(context: labelContext)
         let extraRateWindows = self.extraRateWindows(
@@ -736,7 +728,9 @@ extension ClaudeStatusProbe {
     }
 
     private static func resetFromLine(_ line: String) -> String? {
-        guard let range = line.range(of: #"(?i)\bresets?\b"#, options: .regularExpression) else { return nil }
+        let range = line.range(of: #"(?i)\bresets?\b"#, options: .regularExpression)
+            ?? line.range(of: #"\b(?:Reset|Resets)(?=[A-Z0-9])"#, options: .regularExpression)
+        guard let range else { return nil }
         let raw = String(line[range.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         return self.cleanResetLine(raw)
     }

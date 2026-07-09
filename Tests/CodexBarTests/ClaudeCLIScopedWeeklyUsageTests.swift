@@ -98,6 +98,26 @@ struct ClaudeCLIScopedWeeklyUsageTests {
     }
 
     @Test
+    func `informational Sonnet prose does not duplicate a scoped limit`() throws {
+        let snapshot = try ClaudeStatusProbe.parse(text: """
+        Current session
+        9% used
+
+        Current week (all models)
+        20% used
+
+        Current week (Fable)
+        42% used
+
+        Sonnet now has its own limit.
+        """)
+
+        #expect(snapshot.opusPercentLeft == nil)
+        #expect(snapshot.extraRateWindows.map(\.title) == ["Fable only"])
+        #expect(snapshot.extraRateWindows.first?.window.usedPercent == 42)
+    }
+
+    @Test
     func `later complete scoped panel replaces partial redraw`() throws {
         let spacer = Array(repeating: "rendering", count: 14).joined(separator: "\n")
         let cliUsage = """
