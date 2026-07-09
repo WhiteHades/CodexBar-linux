@@ -151,6 +151,70 @@ struct OllamaUsageFetcherRetryMappingTests {
     }
 
     @Test
+    func `api validation preserves cancellation`() async {
+        let transport = ProviderHTTPTransportHandler { _ in
+            throw CancellationError()
+        }
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await OllamaAPIUsageFetcher.fetchUsage(apiKey: "ollama-test", transport: transport)
+        }
+    }
+
+    @Test
+    func `model catalog fetch preserves URL cancellation`() async throws {
+        let validationURL = try #require(URL(string: "https://ollama.test/api/web_search"))
+        let tagsURL = try #require(URL(string: "https://ollama.test/api/tags"))
+        let transport = ProviderHTTPTransportHandler { request in
+            guard request.url == validationURL else { throw URLError(.cancelled) }
+            let response = HTTPURLResponse(
+                url: validationURL,
+                statusCode: 400,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil)!
+            return (Data(#"{"error":"query is required"}"#.utf8), response)
+        }
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await OllamaAPIUsageFetcher.fetchUsage(
+                apiKey: "ollama-test",
+                tagsURL: tagsURL,
+                validationURL: validationURL,
+                transport: transport)
+        }
+    }
+
+    @Test
+    func `unproven validation status fails closed`() async throws {
+        let validationURL = try #require(URL(string: "https://ollama.test/api/web_search"))
+        let transport = ProviderHTTPTransportHandler { request in
+            #expect(request.url == validationURL)
+            let response = HTTPURLResponse(
+                url: validationURL,
+                statusCode: 422,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil)!
+            return (Data(#"{"error":"unprocessable"}"#.utf8), response)
+        }
+
+        do {
+            _ = try await OllamaAPIUsageFetcher.fetchUsage(
+                apiKey: "ollama-test",
+                validationURL: validationURL,
+                transport: transport)
+            Issue.record("Expected an HTTP 422 network error")
+        } catch let error as OllamaUsageError {
+            guard case let .networkError(message) = error else {
+                Issue.record("Expected networkError, got \(error)")
+                return
+            }
+            #expect(message == "HTTP 422")
+        } catch {
+            Issue.record("Expected OllamaUsageError.networkError, got \(error)")
+        }
+    }
+
+    @Test
     func `missing usage shape surfaces public parse failed message`() async {
         defer { OllamaRetryMappingStubURLProtocol.handler = nil }
 

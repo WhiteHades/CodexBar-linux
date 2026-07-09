@@ -738,6 +738,9 @@ public enum OllamaAPIUsageFetcher {
         do {
             response = try await transport.response(for: request)
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
+                throw CancellationError()
+            }
             throw OllamaUsageError.networkError(error.localizedDescription)
         }
 
@@ -769,11 +772,14 @@ public enum OllamaAPIUsageFetcher {
         do {
             response = try await transport.response(for: request)
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
+                throw CancellationError()
+            }
             throw OllamaUsageError.networkError(error.localizedDescription)
         }
 
         switch response.statusCode {
-        case 200, 400, 422:
+        case 200, 400:
             return
         case 401, 403:
             throw OllamaUsageError.apiUnauthorized
