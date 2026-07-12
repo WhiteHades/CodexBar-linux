@@ -14,8 +14,7 @@ extension UsageStore {
         _ = self.knownLimitsAvailabilityByProvider
         _ = self.lastSourceLabels
         _ = self.lastFetchAttempts
-        _ = self.accountSnapshots
-        _ = self.codexAccountSnapshots
+        _ = (self.accountSnapshots, self.tokenAccountLiveStateProviders, self.codexAccountSnapshots)
         _ = self.kiloScopeSnapshots
         _ = self.claudeSwapAccountSnapshots
         _ = self.claudeSwapLastError
@@ -167,6 +166,7 @@ final class UsageStore {
     var lastSourceLabels: [UsageProvider: String] = [:]
     var lastFetchAttempts: [UsageProvider: [ProviderFetchAttempt]] = [:]
     var accountSnapshots: [UsageProvider: [TokenAccountUsageSnapshot]] = [:]
+    var tokenAccountLiveStateProviders: Set<UsageProvider> = []
     var codexAccountSnapshots: [CodexAccountUsageSnapshot] = []
     var kiloScopeSnapshots: [KiloScopeSnapshot] = []
     var claudeSwapAccountSnapshots: [ProviderAccountUsageSnapshot] = []
@@ -1092,6 +1092,7 @@ extension UsageStore {
                 .chutes: "Chutes debug log not yet implemented",
                 .clawrouter: "ClawRouter debug log not yet implemented",
                 .wayfinder: "Wayfinder debug log not yet implemented",
+                .sub2api: "sub2api debug log not yet implemented",
             ]
             let buildText = {
                 switch provider {
@@ -1173,7 +1174,7 @@ extension UsageStore {
                      .sakana, .abacus, .mistral, .codebuff, .crof, .windsurf, .venice, .manus, .commandcode, .qoder,
                      .stepfun,
                      .bedrock, .grok, .groq, .t3chat, .llmproxy, .litellm, .zed, .deepgram, .poe, .chutes,
-                     .clawrouter, .wayfinder:
+                     .clawrouter, .wayfinder, .sub2api:
                     return unimplementedDebugLogMessages[provider] ?? "Debug log not yet implemented"
                 }
             }

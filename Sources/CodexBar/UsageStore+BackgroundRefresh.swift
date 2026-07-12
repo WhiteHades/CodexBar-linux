@@ -32,6 +32,7 @@ extension UsageStore {
         self.lastSourceLabels.removeValue(forKey: provider)
         self.lastFetchAttempts.removeValue(forKey: provider)
         self.accountSnapshots.removeValue(forKey: provider)
+        self.tokenAccountLiveStateProviders.remove(provider)
         if provider == .codex {
             self.codexAccountSnapshots = []
             self.lastCodexUsagePublicationGuard = nil

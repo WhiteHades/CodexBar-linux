@@ -105,6 +105,35 @@ struct UsageStoreDisabledProviderCleanupTests {
     }
 
     @Test
+    func `base URL change rejects suspended token account result and cache`() async throws {
+        let settings = Self.makeSettingsStore(suite: "UsageStoreDisabledProviderCleanupTests-token-base-url")
+        settings.refreshFrequency = .manual
+        settings.statusChecksEnabled = false
+        try Self.setOnlyProvider(.sub2api, enabled: true, settings: settings)
+        settings.updateProviderConfig(provider: .sub2api) { config in
+            config.enterpriseHost = "https://first.example.test"
+        }
+        settings.addTokenAccount(provider: .sub2api, label: "Primary", token: "k1")
+        let store = Self.makeUsageStore(settings: settings)
+        let gate = CleanupAsyncGate()
+        store._test_providerFetchOutcomeOverride = { _ in
+            await gate.suspend()
+            return Self.providerOutcome(snapshot: Self.usageSnapshot(usedPercent: 71))
+        }
+
+        let staleTask = Task { await store.refreshProvider(.sub2api) }
+        await gate.waitUntilStarted()
+        settings.updateProviderConfig(provider: .sub2api) { config in
+            config.enterpriseHost = "https://second.example.test"
+        }
+        await gate.resume()
+        await staleTask.value
+
+        #expect(store.snapshot(for: .sub2api) == nil)
+        #expect(store.accountSnapshots[.sub2api] == nil)
+    }
+
+    @Test
     func `disabled cleanup preserves explicit allow-disabled refresh`() async throws {
         let settings = Self.makeSettingsStore(suite: "UsageStoreDisabledProviderCleanupTests-allow-disabled")
         settings.refreshFrequency = .manual
