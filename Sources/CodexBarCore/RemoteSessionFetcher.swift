@@ -30,6 +30,11 @@ public enum TailscaleStatusParser {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["Self"] != nil || root["Version"] != nil || root["BackendState"] != nil || root["Peer"] != nil
         else { return nil }
+        if let backendState = root["BackendState"] as? String,
+           backendState.caseInsensitiveCompare("Running") != .orderedSame
+        {
+            return nil
+        }
         let peers: [[String: Any]] = if let dictionary = root["Peer"] as? [String: [String: Any]] {
             Array(dictionary.values)
         } else if let array = root["Peer"] as? [[String: Any]] {
@@ -96,7 +101,7 @@ public struct RemoteSessionFetcher: Sendable {
     }
 
     /// Runs `tailscale status --json` on each candidate in order, falling through to the next when a
-    /// candidate fails (`run` returns nil) or returns output that isn't valid Tailscale status JSON.
+    /// candidate fails (`run` returns nil), returns invalid status JSON, or reports an inactive backend.
     /// Returns the first candidate's parsed hosts (possibly empty), or `[]` if none succeed. This keeps
     /// the app-binary fallback working even when an earlier — but non-functional — `tailscale` variant
     /// is installed (e.g. an open-source/Homebrew CLI that isn't the active client).

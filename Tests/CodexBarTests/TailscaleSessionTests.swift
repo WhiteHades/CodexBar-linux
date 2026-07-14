@@ -75,6 +75,26 @@ struct TailscaleSessionTests {
     }
 
     @Test
+    func `discovery falls through when an earlier candidate needs login`() async {
+        let inactiveStatus = Data(#"{"Version":"1.0","BackendState":"NeedsLogin","Peer":null}"#.utf8)
+        let runningStatus = Data(#"""
+        {"Version":"1.0","BackendState":"Running","Self":{"HostName":"local-mac"},
+         "Peer":{"n":{"Online":true,"OS":"linux","DNSName":"linuxbox.tail.ts.net."}}}
+        """#.utf8)
+        var probed: [String] = []
+        let hosts = await RemoteSessionFetcher.firstDiscoveredHosts(
+            candidates: ["/inactive/tailscale", "/running/tailscale"],
+            localHost: "local-mac")
+        { binary in
+            probed.append(binary)
+            return binary == "/inactive/tailscale" ? inactiveStatus : runningStatus
+        }
+
+        #expect(hosts == ["linuxbox"])
+        #expect(probed == ["/inactive/tailscale", "/running/tailscale"])
+    }
+
+    @Test
     func `discovery returns empty when no candidate yields a valid status`() async {
         let hosts = await RemoteSessionFetcher.firstDiscoveredHosts(
             candidates: ["/a/tailscale", "/b/tailscale"],
@@ -89,8 +109,11 @@ struct TailscaleSessionTests {
         #expect(TailscaleStatusParser.parseHosts(from: Data("not json".utf8)) == nil)
         #expect(TailscaleStatusParser.parseHosts(from: Data("Tailscale help text".utf8)) == nil)
         // …a valid status with no eligible peers -> [] (a real answer, stop probing).
-        let empty = TailscaleStatusParser.parseHosts(from: Data(#"{"Version":"1.0","Self":{},"Peer":null}"#.utf8))
+        let empty = TailscaleStatusParser.parseHosts(
+            from: Data(#"{"Version":"1.0","BackendState":"Running","Self":{},"Peer":null}"#.utf8))
         #expect(empty == [])
+        #expect(TailscaleStatusParser.parseHosts(
+            from: Data(#"{"Version":"1.0","BackendState":"NeedsLogin","Peer":null}"#.utf8)) == nil)
     }
 
     @Test
