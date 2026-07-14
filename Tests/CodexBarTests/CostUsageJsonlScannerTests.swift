@@ -58,6 +58,69 @@ struct CostUsageJsonlScannerTests {
         #expect(scanned[1].wasTruncated == true)
     }
 
+    @Test
+    func `jsonl scanner retries an incomplete final record after append`() throws {
+        let root = try self.makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fileURL = root.appendingPathComponent("appending.jsonl", isDirectory: false)
+        let initial = #"{"type":"message","id":"partial"#
+        try initial.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        var firstPass: [String] = []
+        let resumeOffset = try CostUsageJsonl.scan(
+            fileURL: fileURL,
+            maxLineBytes: 1024,
+            prefixBytes: 1024)
+        { line in
+            firstPass.append(String(decoding: line.bytes, as: UTF8.self))
+        }
+
+        #expect(firstPass.isEmpty)
+        #expect(resumeOffset == 0)
+
+        let completion = #""}"# + "\n"
+        let handle = try FileHandle(forWritingTo: fileURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(completion.utf8))
+
+        var secondPass: [String] = []
+        let endOffset = try CostUsageJsonl.scan(
+            fileURL: fileURL,
+            offset: resumeOffset,
+            maxLineBytes: 1024,
+            prefixBytes: 1024)
+        { line in
+            secondPass.append(String(decoding: line.bytes, as: UTF8.self))
+        }
+
+        #expect(secondPass == [initial + String(completion.dropLast())])
+        #expect(endOffset == Int64(Data((initial + completion).utf8).count))
+    }
+
+    @Test
+    func `jsonl scanner accepts a complete final record without newline`() throws {
+        let root = try self.makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fileURL = root.appendingPathComponent("final-record.jsonl", isDirectory: false)
+        let record = #"{"type":"message","id":"complete"}"#
+        try record.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        var scanned: [String] = []
+        let endOffset = try CostUsageJsonl.scan(
+            fileURL: fileURL,
+            maxLineBytes: 1024,
+            prefixBytes: 1024)
+        { line in
+            scanned.append(String(decoding: line.bytes, as: UTF8.self))
+        }
+
+        #expect(scanned == [record])
+        #expect(endOffset == Int64(Data(record.utf8).count))
+    }
+
     private func makeTemporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "codexbar-cost-usage-jsonl-\(UUID().uuidString)",

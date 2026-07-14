@@ -2,6 +2,9 @@
 
 ## 0.43.1 — Unreleased
 
+### Fixed
+- Cost usage: retain an incomplete trailing JSONL record for the next scan so active Codex, Claude, and Pi sessions do not lose newly appended token usage.
+
 ## 0.43.0 — 2026-07-14
 
 ### Added
