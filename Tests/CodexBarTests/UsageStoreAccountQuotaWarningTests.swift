@@ -34,8 +34,8 @@ struct UsageStoreAccountQuotaWarningTests {
         settings.setQuotaWarningWindowEnabled(.weekly, enabled: false)
         settings.sessionQuotaNotificationsEnabled = false
         settings.predictivePaceWarningNotificationsEnabled = false
-        settings.addTokenAccount(provider: .deepseek, label: "First", token: "first-token")
-        settings.addTokenAccount(provider: .deepseek, label: "Second", token: "second-token")
+        settings.addTokenAccount(provider: .deepseek, label: "First", token: "fixture")
+        settings.addTokenAccount(provider: .deepseek, label: "Second", token: "fixture")
         #expect(settings.tokenAccounts(for: .deepseek).map(\.label) == ["First", "Second"])
 
         let notifier = NotifierSpy()
@@ -83,13 +83,13 @@ struct UsageStoreAccountQuotaWarningTests {
             ProviderTokenAccount(
                 id: #require(UUID(uuidString: "00000000-0000-0000-0000-000000000001")),
                 label: "First",
-                token: "first-token",
+                token: "fixture",
                 addedAt: 0,
                 lastUsed: nil),
             ProviderTokenAccount(
                 id: #require(UUID(uuidString: "00000000-0000-0000-0000-000000000002")),
                 label: "Second",
-                token: "second-token",
+                token: "fixture",
                 addedAt: 0,
                 lastUsed: nil),
         ]
