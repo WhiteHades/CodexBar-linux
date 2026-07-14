@@ -54,6 +54,46 @@ struct TailscaleSessionTests {
     }
 
     @Test
+    func `discovery falls through to the next candidate when the first fails`() async {
+        // First candidate exists but is a wrong/broken tailscale variant: its status output isn't valid
+        // Tailscale JSON. Discovery must try the next candidate rather than returning no hosts.
+        let validStatus = Data(#"""
+        {"Version":"1.0","Self":{"HostName":"local-mac"},
+         "Peer":{"n":{"Online":true,"OS":"linux","DNSName":"linuxbox.tail.ts.net."}}}
+        """#.utf8)
+        var probed: [String] = []
+        let hosts = await RemoteSessionFetcher.firstDiscoveredHosts(
+            candidates: ["/first/tailscale", "/second/tailscale"],
+            localHost: "local-mac")
+        { binary in
+            probed.append(binary)
+            return binary == "/first/tailscale" ? Data("command not found".utf8) : validStatus
+        }
+
+        #expect(hosts == ["linuxbox"])
+        #expect(probed == ["/first/tailscale", "/second/tailscale"]) // fell through, in order
+    }
+
+    @Test
+    func `discovery returns empty when no candidate yields a valid status`() async {
+        let hosts = await RemoteSessionFetcher.firstDiscoveredHosts(
+            candidates: ["/a/tailscale", "/b/tailscale"],
+            localHost: nil) { _ in Data("nope".utf8) }
+
+        #expect(hosts.isEmpty)
+    }
+
+    @Test
+    func `parseHosts distinguishes invalid output from an empty tailnet`() {
+        // Non-status output -> nil so the caller falls through to the next candidate…
+        #expect(TailscaleStatusParser.parseHosts(from: Data("not json".utf8)) == nil)
+        #expect(TailscaleStatusParser.parseHosts(from: Data("Tailscale help text".utf8)) == nil)
+        // …a valid status with no eligible peers -> [] (a real answer, stop probing).
+        let empty = TailscaleStatusParser.parseHosts(from: Data(#"{"Version":"1.0","Self":{},"Peer":null}"#.utf8))
+        #expect(empty == [])
+    }
+
+    @Test
     func `ssh destinations reject options whitespace and controls`() {
         let hosts = RemoteSessionFetcher.sanitizedHosts([
             "user@clawmac",
