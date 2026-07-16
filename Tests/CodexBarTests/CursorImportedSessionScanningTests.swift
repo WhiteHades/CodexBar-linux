@@ -194,7 +194,7 @@ struct CursorImportedSessionScanningTests {
     }
 
     @Test
-    func `browser fallback cannot overwrite a login committed during an earlier request`() async {
+    func `browser fallback cannot publish or overwrite a login committed during an earlier request`() async {
         let probe = CursorStatusProbe(browserDetection: BrowserDetection(cacheTTL: 0))
         let background = Self.makeSessionInfo(sourceLabel: "Background", cookieValue: "background")
         let service = "cursor-login-race-\(UUID().uuidString)"
@@ -225,8 +225,8 @@ struct CursorImportedSessionScanningTests {
                     },
                     cacheObservation: observation)
 
-                guard case .succeeded = outcome else {
-                    Issue.record("Expected the stale background fetch itself to succeed")
+                guard case .tryNextBrowser = outcome else {
+                    Issue.record("Expected the stale background fetch snapshot to be discarded")
                     return
                 }
                 #expect(CookieHeaderCache.load(provider: .cursor)?.cookieHeader == "fixtureSession=selected")

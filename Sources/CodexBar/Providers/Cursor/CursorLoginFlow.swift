@@ -3,9 +3,12 @@ import CodexBarCore
 @MainActor
 extension StatusItemController {
     func runCursorLoginFlow() async -> Bool {
-        let currentIdentity = self.store.snapshot(for: .cursor)?.identity(for: .cursor)
-        let priorAccount = currentIdentity.map {
-            CursorLoginRunner.AccountIdentity(accountID: $0.accountID, email: $0.accountEmail)
+        let currentSnapshot = self.store.snapshot(for: .cursor)
+        let currentIdentity = currentSnapshot?.identity(for: .cursor)
+        let priorAccount = currentSnapshot.map { _ in
+            CursorLoginRunner.AccountIdentity(
+                accountID: currentIdentity?.accountID,
+                email: currentIdentity?.accountEmail)
         }
 
         // Stop older refreshes from publishing while the interactive login replaces the session.

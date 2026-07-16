@@ -125,8 +125,7 @@ final class CursorLoginRunner {
             await CursorLoginRunner.replaceCachedSession(session)
         })
     {
-        let resolvedPriorAccount = priorAccount?.hasIdentity == true ? priorAccount : nil
-        self.priorAccount = resolvedPriorAccount
+        self.priorAccount = priorAccount
         self.browserApplicationResolver = browserApplicationResolver
         self.routeResolver = routeResolver ?? { loginURL, handlerApplicationURL in
             CursorLoginBrowserRouter.resolve(
@@ -421,6 +420,13 @@ final class CursorLoginRunner {
         priorAccount: AccountIdentity?) -> Bool
     {
         guard let priorAccount else {
+            return normalizedCursorAccountID(snapshot.accountID) != nil ||
+                normalizedCursorAccountEmail(snapshot.accountEmail) != nil
+        }
+
+        guard priorAccount.hasIdentity else {
+            // Preserve Switch intent when the current usage response lacks identity metadata. The candidate still
+            // requires explicit confirmation because `selectCandidate` sees a non-nil prior account.
             return normalizedCursorAccountID(snapshot.accountID) != nil ||
                 normalizedCursorAccountEmail(snapshot.accountEmail) != nil
         }

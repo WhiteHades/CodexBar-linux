@@ -246,6 +246,45 @@ struct CursorLoginRunnerTests {
     }
 
     @Test
+    func `switch with unknown prior identity still requires candidate confirmation`() async {
+        let committedHeaders = LockedArray<String>()
+        var presentedChoices: [CursorLoginAccountSelector.Choice] = []
+        let runner = CursorLoginRunner(
+            browserDetection: BrowserDetection(cacheTTL: 0),
+            priorAccount: .init(email: nil),
+            timeout: 1,
+            pollInterval: 0.001,
+            launchRoute: { _ in true },
+            loadBrowserLoginCandidates: { _, _ in [
+                Self.browserCandidate(
+                    id: "candidate-account",
+                    email: "candidate@example.com",
+                    cookieValue: "candidate-cookie",
+                    source: "Comet"),
+            ] },
+            sleeper: { _ in },
+            browserApplicationResolver: { _ in Self.cometApplicationURL },
+            routeResolver: Self.fixtureRouteResolver,
+            accountChooser: { choices in
+                presentedChoices = choices
+                return nil
+            },
+            replaceSessionCache: { session in
+                committedHeaders.append(session.cookieHeader)
+                return true
+            })
+
+        let result = await runner.run { _ in }
+
+        guard case .cancelled = result.outcome else {
+            Issue.record("Expected explicit candidate confirmation to remain cancellable")
+            return
+        }
+        #expect(presentedChoices.map(\.displayLabel) == ["candidate@example.com · Comet"])
+        #expect(committedHeaders.snapshot().isEmpty)
+    }
+
+    @Test
     func `switch account accepts a different stable ID with the same email`() async {
         let sequence = SnapshotSequence([
             Self.snapshot(id: "current-id", email: "same@example.com"),

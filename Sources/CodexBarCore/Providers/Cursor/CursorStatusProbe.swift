@@ -1308,11 +1308,15 @@ public struct CursorStatusProbe: Sendable {
             if let cacheAcceptedSession {
                 cacheAcceptedSession(session)
             } else if let cacheObservation {
-                _ = CookieHeaderCache.storeIfObservationCurrent(
+                let stored = CookieHeaderCache.storeIfObservationCurrent(
                     provider: .cursor,
                     expected: cacheObservation,
                     cookieHeader: session.cookieHeader,
                     sourceLabel: session.sourceLabel)
+                guard stored else {
+                    log("Cursor session from \(session.sourceLabel) lost cache ownership; discarding snapshot")
+                    return .tryNextBrowser
+                }
             } else {
                 CookieHeaderCache.store(
                     provider: .cursor,
