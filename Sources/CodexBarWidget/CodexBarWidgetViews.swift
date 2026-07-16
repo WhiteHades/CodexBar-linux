@@ -233,12 +233,15 @@ enum CompactMetricFormatter {
     static func costMetricLabel(_ label: String, provider: UsageProvider) -> String {
         guard provider == .codex else { return "\(label) cost" }
         // Existing widget timelines may predate the estimate labels. Do not leave a bare
-        // dollar value labelled only "Today" or "30d" until the app next republishes it.
-        return switch label {
-        case "Today": "Today API est. · not billed"
-        case "30d": "30d API est. · not billed"
-        default: label
+        // dollar value labelled only "Today" or "Nd" until the app next republishes it.
+        if label == "Today" {
+            return "Today API est. · not billed"
         }
+        let dayCount = label.dropLast()
+        if label.last == "d", !dayCount.isEmpty, dayCount.allSatisfy(\.isNumber) {
+            return "\(label) API est. · not billed"
+        }
+        return label
     }
 }
 

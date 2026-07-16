@@ -947,6 +947,9 @@ extension CodexBarWidgetProviderTests {
 
         #expect(todayMetric.label.hasPrefix("Today API est. · not billed · "))
         #expect(historyMetric.label.hasPrefix("30d API est. · not billed · "))
+        #expect(CompactMetricFormatter.costMetricLabel("7d", provider: .codex) == "7d API est. · not billed")
+        #expect(CompactMetricFormatter.costMetricLabel("90d", provider: .codex) == "90d API est. · not billed")
+        #expect(CompactMetricFormatter.costMetricLabel("This month", provider: .codex) == "This month")
     }
 
     @Test
