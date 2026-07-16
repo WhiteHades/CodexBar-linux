@@ -547,7 +547,7 @@ struct UsageStorePlanUtilizationTests {
         store.settings.addTokenAccount(
             provider: .cursor,
             label: "Dormant manual account",
-            token: "WorkosCursorSessionToken=dormant")
+            token: "fixture")
         let dormantAccount = try #require(store.settings.selectedTokenAccount(for: .cursor))
         let dormantAccountKey = try #require(
             UsageStore._planUtilizationTokenAccountKeyForTesting(
