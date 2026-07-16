@@ -464,7 +464,7 @@ extension UsageMenuCardView.Model {
         pace: UsagePace?,
         showUsed: Bool) -> PaceDetail?
     {
-        guard let pace else { return nil }
+        guard let pace, window.remainingPercent > 0 else { return nil }
         let detail = UsagePaceText.weeklyDetail(provider: provider, pace: pace, now: now)
         let expectedUsed = detail.expectedUsedPercent
         let actualUsed = window.usedPercent
