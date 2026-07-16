@@ -2,6 +2,23 @@ import Foundation
 import Testing
 @testable import CodexBarCore
 
+private final class ClaudeDelegatedTouchCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        self.lock.lock()
+        self.value += 1
+        self.lock.unlock()
+    }
+
+    func count() -> Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.value
+    }
+}
+
 @Suite(.serialized)
 struct ClaudeOAuthDelegatedRefreshCoordinatorTests {
     private enum StubError: Error, LocalizedError {
@@ -141,24 +158,7 @@ struct ClaudeOAuthDelegatedRefreshCoordinatorTests {
         promptMode: ClaudeOAuthKeychainPromptMode,
         keychainAccessDisabled: Bool) async
     {
-        final class TouchCounter: @unchecked Sendable {
-            private let lock = NSLock()
-            private var value = 0
-
-            func increment() {
-                self.lock.lock()
-                self.value += 1
-                self.lock.unlock()
-            }
-
-            func count() -> Int {
-                self.lock.lock()
-                defer { self.lock.unlock() }
-                return self.value
-            }
-        }
-
-        let touches = TouchCounter()
+        let touches = ClaudeDelegatedTouchCounter()
         let outcome = await self.withCoordinatorOverrides(
             cliAvailable: true,
             promptMode: promptMode,
@@ -178,24 +178,7 @@ struct ClaudeOAuthDelegatedRefreshCoordinatorTests {
 
     @Test
     func `opaque delegated CLI honors stored prompt mode when read strategy effective mode differs`() async {
-        final class TouchCounter: @unchecked Sendable {
-            private let lock = NSLock()
-            private var value = 0
-
-            func increment() {
-                self.lock.lock()
-                self.value += 1
-                self.lock.unlock()
-            }
-
-            func count() -> Int {
-                self.lock.lock()
-                defer { self.lock.unlock() }
-                return self.value
-            }
-        }
-
-        let touches = TouchCounter()
+        let touches = ClaudeDelegatedTouchCounter()
         let backgroundOutcome = await ClaudeOAuthKeychainReadStrategyPreference.withTaskOverrideForTesting(
             .securityCLIExperimental)
         {
