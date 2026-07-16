@@ -945,8 +945,8 @@ extension CodexBarWidgetProviderTests {
         let todayMetric = CompactMetricFormatter.display(for: entry, metric: .todayCost)
         let historyMetric = CompactMetricFormatter.display(for: entry, metric: .last30DaysCost)
 
-        #expect(todayMetric.label.hasPrefix("Today · "))
-        #expect(historyMetric.label.hasPrefix("30d · "))
+        #expect(todayMetric.label.hasPrefix("Today API est. · not billed · "))
+        #expect(historyMetric.label.hasPrefix("30d API est. · not billed · "))
     }
 
     @Test

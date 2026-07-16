@@ -397,8 +397,9 @@ extension UsageMenuCardView.Model {
             details.append(L("cost_estimate_hint"))
         }
         let providerName = ProviderDefaults.metadata[provider]?.displayName ?? provider.rawValue
+        let codexEstimateHeader = L("codex_api_estimate_header")
         let accessibilityLabel = if provider == .codex {
-            "\(providerName) \(periodLabel) \(L(\"codex_api_estimate_header\")) trend"
+            "\(providerName) \(periodLabel) \(codexEstimateHeader) trend"
         } else {
             "\(providerName) \(periodLabel) cost trend"
         }

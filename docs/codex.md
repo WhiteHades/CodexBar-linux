@@ -143,9 +143,6 @@ Example:
 - CLI PTY diagnostics can still parse `Credits:` from saved/manual `/status` output.
 
 ## Cost usage (local log scan)
-- **Meaning:** USD totals are API-equivalent estimates: CodexBar reads tokens from local session logs and
-  applies public model pricing. They are not ChatGPT/Codex subscription invoices, and must not be used as
-  a measure of the amount billed for Plus, Pro, 20x, or another flat subscription plan.
 - Source files:
   - Native Codex logs:
     - `~/.codex/sessions/YYYY/MM/DD/*.jsonl`

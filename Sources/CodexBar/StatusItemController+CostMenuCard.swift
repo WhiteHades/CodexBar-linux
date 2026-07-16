@@ -116,9 +116,10 @@ extension StatusItemController {
         // item. Otherwise Codex's API-equivalent estimate can be opened as a chart labelled as
         // cost with no visible non-billing disclaimer.
         guard !hasSubmenu else {
-            return [tokenUsage?.hintLine]
-                .compactMap(\.self)
-                .filter { !$0.isEmpty }
+            return tokenUsage?.hintLine?
+                .split(separator: "\n")
+                .map(String.init)
+                .filter { !$0.isEmpty } ?? []
         }
         let primaryLines = ([
             tokenUsage?.sessionLine,

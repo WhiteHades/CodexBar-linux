@@ -8,7 +8,7 @@ import Testing
 @Suite(.serialized)
 struct StatusMenuCostMenuCardTests {
     @Test
-    func `cost menu shows no detail lines`() {
+    func `cost menu keeps the estimate hint beside a history submenu`() {
         let tokenUsage = UsageMenuCardView.Model.TokenUsageSection(
             sessionLine: "Today: $74.83 - 87M tokens",
             monthLine: "Last 30 days: $4,279.64 - 5.7B tokens",
@@ -19,12 +19,12 @@ struct StatusMenuCostMenuCardTests {
         let visibleLines = StatusItemController.costMenuVisibleDetailLines(
             tokenUsage: tokenUsage,
             hasSubmenu: true)
-        #expect(visibleLines == [])
+        #expect(visibleLines == ["Costs are estimated from local usage."])
 
         let fallbackTitle = StatusItemController.costMenuFallbackAttributedTitle(
             title: "API-equivalent estimate",
             visibleDetailLines: visibleLines)
-        #expect(fallbackTitle.string == "API-equivalent estimate")
+        #expect(fallbackTitle.string == "API-equivalent estimate  Costs are estimated from local usage.")
     }
 
     @Test
