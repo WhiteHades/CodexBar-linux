@@ -216,6 +216,7 @@ static void test_parse_canonical_collections(void) {
     json_object_put(rendered_object);
     g_free(rendered);
     codexbar_snapshot_free(snapshot);
+
 }
 
 static void test_empty_canonical_collections_fall_back_to_legacy(void) {
@@ -488,6 +489,197 @@ static void test_waybar_rendering(void) {
     json_object_put(object);
     g_free(rendered);
     codexbar_snapshot_free(snapshot);
+
+}
+
+static void test_claude_presentation_metadata(void) {
+    const char *json =
+        "[{\"provider\":\"claude\",\"account\":\"owner@example.com\",\"plan\":\"Max\","
+        "\"source\":\"oauth\",\"status\":{\"indicator\":\"minor\","
+        "\"description\":\"Elevated API errors\",\"url\":\"https://status.anthropic.com\","
+        "\"updatedAt\":\"2026-07-17T10:00:00Z\"},\"usage\":{"
+        "\"primary\":{\"label\":\"Session\",\"usedPercent\":42,\"windowMinutes\":300,"
+        "\"resetsAt\":\"2026-07-17T15:00:00Z\"},"
+        "\"secondary\":{\"label\":\"Weekly\",\"usedPercent\":74,\"windowMinutes\":10080,"
+        "\"resetsAt\":\"2026-07-21T10:00:00Z\"},"
+        "\"extraRateWindows\":[{\"id\":\"sonnet\",\"title\":\"Sonnet\","
+        "\"window\":{\"usedPercent\":18},\"usageKnown\":true}],"
+        "\"updatedAt\":\"2026-07-17T09:55:00Z\","
+        "\"identity\":{\"providerID\":\"claude\",\"accountEmail\":\"fallback@example.com\","
+        "\"accountOrganization\":\"Example Labs\",\"loginMethod\":\"OAuth\","
+        "\"accountID\":\"acct_claude_123\"},"
+        "\"subscriptionExpiresAt\":\"2026-08-01T00:00:00Z\","
+        "\"subscriptionRenewsAt\":\"2026-07-24T00:00:00Z\","
+        "\"providerCost\":{\"used\":12.5,\"limit\":50,\"currencyCode\":\"USD\","
+        "\"period\":\"Monthly\",\"resetsAt\":\"2026-08-01T00:00:00Z\","
+        "\"nextRegenAmount\":5,\"personalUsed\":7.25,"
+        "\"updatedAt\":\"2026-07-17T09:54:00Z\"}},"
+        "\"pace\":{\"primary\":{\"stage\":\"slightlyBehind\",\"deltaPercent\":-4,"
+        "\"expectedUsedPercent\":46,\"willLastToReset\":true,\"etaSeconds\":null,"
+        "\"runOutProbability\":0.12,"
+        "\"summary\":\"4% in reserve | Expected 46% used | Lasts until reset\"},"
+        "\"secondary\":{\"stage\":\"ahead\",\"deltaPercent\":9,"
+        "\"expectedUsedPercent\":65,\"willLastToReset\":false,\"etaSeconds\":172800,"
+        "\"runOutProbability\":null,"
+        "\"summary\":\"9% in deficit | Expected 65% used | Runs out Friday\"}},"
+        "\"tokenCost\":{\"sessionTokens\":123456,\"sessionCostUSD\":1.25,"
+        "\"sessionRequests\":14,\"last30DaysTokens\":9876543,\"last30DaysCostUSD\":98.75,"
+        "\"last30DaysRequests\":321,\"currencyCode\":\"USD\",\"historyDays\":30,"
+        "\"historyLabel\":\"Last 30 days\",\"updatedAt\":\"2026-07-17T09:53:00Z\"}}]";
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(snapshot);
+    g_assert_cmpuint(snapshot->providers->len, ==, 1);
+
+    const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpstr(provider->account, ==, "owner@example.com");
+    g_assert_cmpstr(provider->plan, ==, "Max");
+    g_assert_cmpstr(provider->identity->organization, ==, "Example Labs");
+    g_assert_cmpstr(provider->identity->account_id, ==, "acct_claude_123");
+    g_assert_cmpstr(provider->identity->login_method, ==, "OAuth");
+    g_assert_true(provider->has_updated_at);
+    g_assert_true(provider->has_subscription_expires_at);
+    g_assert_true(provider->has_subscription_renews_at);
+    g_assert_cmpint(provider->status->indicator, ==, CODEXBAR_STATUS_MINOR);
+    g_assert_cmpstr(provider->status->description, ==, "Elevated API errors");
+    g_assert_true(provider->status->has_updated_at);
+
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    const CodexBarQuotaWindow *session = window_at(provider, 0);
+    const CodexBarQuotaWindow *weekly = window_at(provider, 1);
+    g_assert_cmpstr(session->title, ==, "Session");
+    g_assert_cmpstr(weekly->title, ==, "Weekly");
+    g_assert_cmpstr(window_at(provider, 2)->title, ==, "Sonnet");
+    g_assert_nonnull(session->pace);
+    g_assert_cmpint(session->pace->stage, ==, CODEXBAR_PACE_SLIGHTLY_BEHIND);
+    g_assert_true(session->pace->will_last);
+    g_assert_true(session->pace->has_runout_probability);
+    g_assert_cmpfloat(session->pace->runout_probability, ==, 0.12);
+    g_assert_nonnull(weekly->pace);
+    g_assert_cmpint(weekly->pace->stage, ==, CODEXBAR_PACE_AHEAD);
+    g_assert_true(weekly->pace->has_eta);
+    g_assert_cmpfloat(weekly->pace->eta_seconds, ==, 172800.0);
+
+    g_assert_nonnull(provider->provider_cost);
+    g_assert_cmpfloat(provider->provider_cost->used, ==, 12.5);
+    g_assert_cmpfloat(provider->provider_cost->limit, ==, 50.0);
+    g_assert_cmpstr(provider->provider_cost->period, ==, "Monthly");
+    g_assert_true(provider->provider_cost->has_resets_at);
+    g_assert_true(provider->provider_cost->has_next_regen);
+    g_assert_true(provider->provider_cost->has_personal_used);
+    g_assert_true(provider->provider_cost->has_updated_at);
+
+    g_assert_nonnull(provider->token_cost);
+    g_assert_true(provider->token_cost->has_today_tokens);
+    g_assert_cmpint(provider->token_cost->today_tokens, ==, 123456);
+    g_assert_true(provider->token_cost->has_last_days_cost);
+    g_assert_cmpfloat(provider->token_cost->last_days_cost, ==, 98.75);
+    g_assert_cmpstr(provider->token_cost->history_label, ==, "Last 30 days");
+    g_assert_true(provider->token_cost->has_updated_at);
+    g_assert_cmpfloat(codexbar_provider_highest_used(provider), ==, 74.0);
+
+    char *rendered = codexbar_render_waybar(snapshot);
+    json_object *object = json_tokener_parse(rendered);
+    json_object *tooltip = NULL;
+    g_assert_true(json_object_object_get_ex(object, "tooltip", &tooltip));
+    const char *text = json_object_get_string(tooltip);
+    g_assert_nonnull(strstr(text, "claude · owner@example.com"));
+    g_assert_nonnull(strstr(text, "Max · oauth"));
+    g_assert_nonnull(strstr(text, "Example Labs"));
+    g_assert_nonnull(strstr(text, "acct_claude_123"));
+    g_assert_nonnull(strstr(text, "updated Fri, Jul 17 2026"));
+    g_assert_nonnull(strstr(text, "subscription expires"));
+    g_assert_nonnull(strstr(text, "Pace: 4% in reserve"));
+    g_assert_nonnull(strstr(text, "Pace: 9% in deficit"));
+    g_assert_nonnull(strstr(text, "Extra usage  $12.50 / $50.00 · Monthly"));
+    g_assert_nonnull(strstr(text, "Cost\n    Today"));
+    g_assert_nonnull(strstr(text, "$1.25 · 123K tokens · 14 requests"));
+    g_assert_nonnull(strstr(text, "Last 30 days"));
+    g_assert_nonnull(strstr(text, "$98.75 · 9.88M tokens · 321 requests"));
+    g_assert_nonnull(strstr(text, "status    Partial outage · Elevated API errors"));
+    g_assert_nonnull(strstr(text, "https://status.anthropic.com"));
+
+    json_object_put(object);
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+}
+
+static void test_freshness_and_login_method_fallback(void) {
+    gint64 now_ms = g_get_real_time() / 1000;
+    char *json = g_strdup_printf(
+        "[{\"provider\":\"claude\",\"usage\":{\"updatedAt\":%" G_GINT64_FORMAT ","
+        "\"identity\":{\"providerID\":\"claude\",\"loginMethod\":\"OAuth\"}}}]",
+        now_ms);
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
+    g_assert_no_error(error);
+    const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpstr(provider->plan, ==, "OAuth");
+
+    char *rendered = codexbar_render_waybar(snapshot);
+    json_object *object = json_tokener_parse(rendered);
+    json_object *tooltip = NULL;
+    g_assert_true(json_object_object_get_ex(object, "tooltip", &tooltip));
+    const char *text = json_object_get_string(tooltip);
+    g_assert_nonnull(strstr(text, "\n  OAuth"));
+    g_assert_null(strstr(strstr(text, "\n  OAuth") + 1, "\n  OAuth"));
+    g_assert_nonnull(strstr(text, "updated just now"));
+    json_object_put(object);
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+    g_free(json);
+
+    json = g_strdup_printf(
+        "[{\"provider\":\"claude\",\"updatedAt\":%" G_GINT64_FORMAT "}]", now_ms + 120000);
+    snapshot = codexbar_snapshot_parse(json, &error);
+    g_assert_no_error(error);
+    rendered = codexbar_render_waybar(snapshot);
+    object = json_tokener_parse(rendered);
+    g_assert_true(json_object_object_get_ex(object, "tooltip", &tooltip));
+    g_assert_null(strstr(json_object_get_string(tooltip), "updated just now"));
+    json_object_put(object);
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+    g_free(json);
+}
+
+static void test_identity_provider_siloing_and_operational_status(void) {
+    const char *json =
+        "[{\"provider\":\"claude\",\"status\":{\"indicator\":\"none\","
+        "\"url\":\"https://status.anthropic.com\"},\"usage\":{\"updatedAt\":0,"
+        "\"identity\":{\"providerID\":\"codex\",\"accountEmail\":\"wrong@example.com\","
+        "\"accountOrganization\":\"Wrong Org\",\"accountID\":\"wrong-id\"}}}]";
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
+    g_assert_no_error(error);
+    const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_null(provider->account);
+    g_assert_null(provider->identity);
+    g_assert_true(provider->has_updated_at);
+
+    char *rendered = codexbar_render_waybar(snapshot);
+    json_object *object = json_tokener_parse(rendered);
+    json_object *tooltip = NULL;
+    g_assert_true(json_object_object_get_ex(object, "tooltip", &tooltip));
+    const char *text = json_object_get_string(tooltip);
+    g_assert_null(strstr(text, "wrong@example.com"));
+    g_assert_null(strstr(text, "Wrong Org"));
+    g_assert_null(strstr(text, "Operational"));
+    g_assert_null(strstr(text, "status.anthropic.com"));
+    json_object_put(object);
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+
+    snapshot = codexbar_snapshot_parse(
+        "[{\"provider\":\"claude\",\"usage\":{\"identity\":{"
+        "\"accountEmail\":\"unknown@example.com\",\"loginMethod\":\"OAuth\"}}}]",
+        &error);
+    g_assert_no_error(error);
+    provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_null(provider->account);
+    g_assert_null(provider->identity);
+    codexbar_snapshot_free(snapshot);
 }
 
 static void test_openrouter_credits(void) {
@@ -643,6 +835,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/http/redirect-policy", test_http_redirect_policy);
     g_test_add_func("/config/extended-provider-fields", test_extended_provider_config);
     g_test_add_func("/render/waybar", test_waybar_rendering);
+    g_test_add_func("/render/claude-presentation-metadata", test_claude_presentation_metadata);
+    g_test_add_func("/render/freshness-login-fallback", test_freshness_and_login_method_fallback);
+    g_test_add_func("/render/provider-siloing-operational-status", test_identity_provider_siloing_and_operational_status);
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);

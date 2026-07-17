@@ -83,6 +83,56 @@ static void draw_progress(int y, int x, int width, double used_percent) {
     }
 }
 
+static char *format_timestamp(gint64 timestamp_ms, const char *prefix) {
+    GDateTime *utc = g_date_time_new_from_unix_utc(timestamp_ms / 1000);
+    GDateTime *local = utc ? g_date_time_to_local(utc) : NULL;
+    char *date = local ? g_date_time_format(local, "%a, %b %d %Y at %H:%M") : NULL;
+    char *result = date ? g_strdup_printf("%s %s", prefix, date) : NULL;
+    g_free(date);
+    if (local) g_date_time_unref(local);
+    if (utc) g_date_time_unref(utc);
+    return result;
+}
+
+static char *format_freshness(gint64 timestamp_ms) {
+    gint64 delta_seconds = (g_get_real_time() / 1000 - timestamp_ms) / 1000;
+    if (delta_seconds >= -60 && delta_seconds < 60) return g_strdup("updated just now");
+    if (delta_seconds < 0) return format_timestamp(timestamp_ms, "updated");
+    if (delta_seconds < 3600) return g_strdup_printf("updated %" G_GINT64_FORMAT "m ago", delta_seconds / 60);
+    if (delta_seconds < 86400) return g_strdup_printf("updated %" G_GINT64_FORMAT "h ago", delta_seconds / 3600);
+    return format_timestamp(timestamp_ms, "updated");
+}
+
+static char *format_count(gint64 value) {
+    if (value >= 1000000000) return g_strdup_printf("%.2fB", value / 1000000000.0);
+    if (value >= 1000000) return g_strdup_printf("%.2fM", value / 1000000.0);
+    if (value >= 1000) return g_strdup_printf("%.0fK", value / 1000.0);
+    return g_strdup_printf("%" G_GINT64_FORMAT, value);
+}
+
+static char *format_money(double value, const char *currency) {
+    return g_ascii_strcasecmp(currency, "USD") == 0 ? g_strdup_printf("$%.2f", value)
+                                                     : g_strdup_printf("%.2f %s", value, currency);
+}
+
+static const char *status_label(CodexBarServiceStatusIndicator indicator) {
+    switch (indicator) {
+    case CODEXBAR_STATUS_NONE:
+        return "Operational";
+    case CODEXBAR_STATUS_MINOR:
+        return "Partial outage";
+    case CODEXBAR_STATUS_MAJOR:
+        return "Major outage";
+    case CODEXBAR_STATUS_CRITICAL:
+        return "Critical issue";
+    case CODEXBAR_STATUS_MAINTENANCE:
+        return "Maintenance";
+    case CODEXBAR_STATUS_UNKNOWN:
+        return "Status unknown";
+    }
+    return "Status unknown";
+}
+
 static int draw_rate_window(int y,
                             int x,
                             int width,
@@ -110,22 +160,26 @@ static int draw_rate_window(int y,
         attroff(COLOR_PAIR(COLOR_MUTED));
     }
     if (rate_window->has_resets_at) {
-        GDateTime *utc = g_date_time_new_from_unix_utc(rate_window->resets_at_ms / 1000);
-        GDateTime *local = utc ? g_date_time_to_local(utc) : NULL;
-        char *reset = local ? g_date_time_format(local, "resets %a, %b %d %Y at %H:%M") : NULL;
+        char *reset = format_timestamp(rate_window->resets_at_ms, "resets");
         attron(COLOR_PAIR(COLOR_MUTED));
         draw_text(y++, x, width, reset);
         attroff(COLOR_PAIR(COLOR_MUTED));
         g_free(reset);
-        if (local) g_date_time_unref(local);
-        if (utc) g_date_time_unref(utc);
+    }
+    if (rate_window->pace && rate_window->pace->summary) {
+        char *summary = g_strdup_printf("Pace: %s", rate_window->pace->summary);
+        attron(COLOR_PAIR(COLOR_MUTED));
+        draw_text(y++, x, width, summary);
+        attroff(COLOR_PAIR(COLOR_MUTED));
+        g_free(summary);
     }
     return y + 1;
 }
 
 static int rate_window_height(const CodexBarQuotaWindow *window) {
     return 2 + (window->usage_known ? 1 : 0) + (window->detail ? 1 : 0) +
-           (window->reset_description ? 1 : 0) + (window->has_resets_at ? 1 : 0);
+           (window->reset_description ? 1 : 0) + (window->has_resets_at ? 1 : 0) +
+           ((window->pace && window->pace->summary) ? 1 : 0);
 }
 
 static int balance_height(const CodexBarBalance *balance) {
@@ -148,44 +202,166 @@ static int draw_balance(int y, int x, int width, const CodexBarBalance *balance)
         g_string_free(detail, TRUE);
     }
     if (balance->has_expiry) {
-        GDateTime *utc = g_date_time_new_from_unix_utc(balance->expiry_ms / 1000);
-        GDateTime *local = utc ? g_date_time_to_local(utc) : NULL;
-        char *expiry = local ? g_date_time_format(local, "expires %a, %b %d %Y at %H:%M") : NULL;
+        char *expiry = format_timestamp(balance->expiry_ms, "expires");
         draw_text(y++, x, width, expiry);
         g_free(expiry);
-        if (local) g_date_time_unref(local);
-        if (utc) g_date_time_unref(utc);
     }
     if (balance->has_resets_at) {
-        GDateTime *utc = g_date_time_new_from_unix_utc(balance->resets_at_ms / 1000);
-        GDateTime *local = utc ? g_date_time_to_local(utc) : NULL;
-        char *reset = local ? g_date_time_format(local, "resets %a, %b %d %Y at %H:%M") : NULL;
+        char *reset = format_timestamp(balance->resets_at_ms, "resets");
         draw_text(y++, x, width, reset);
         g_free(reset);
-        if (local) g_date_time_unref(local);
-        if (utc) g_date_time_unref(utc);
     }
     attroff(COLOR_PAIR(COLOR_MUTED));
     return y;
 }
 
-static int provider_content_height(const CodexBarProvider *provider) {
-    int height = ((provider->source || provider->account || provider->plan) ? 2 : 0) +
-                  (provider->note ? 1 : 0) + (provider->error ? 1 : 0);
-    for (guint index = 0; index < provider->quota_windows->len; index++) {
-        height += rate_window_height(codexbar_provider_quota_window(provider, index));
-    }
-    for (guint index = 0; index < provider->balances->len; index++) {
-        height += balance_height(codexbar_provider_balance(provider, index));
-    }
-    return height;
+static int provider_cost_height(const CodexBarProviderCost *cost) {
+    return 2 + (cost->has_personal_used ? 1 : 0) + (cost->has_next_regen ? 1 : 0) +
+           (cost->has_resets_at ? 1 : 0);
 }
 
-static void draw_provider(
-    const CodexBarProvider *provider, guint first_metric, int y, int x, int height, int width) {
-    int bottom = y + height;
+static int draw_provider_cost(int y, int x, int width, const CodexBarProviderCost *cost) {
+    attron(COLOR_PAIR(COLOR_MUTED));
+    GString *summary = g_string_new(NULL);
+    char *used = format_money(cost->used, cost->currency);
+    char *limit = format_money(cost->limit, cost->currency);
+    g_string_append_printf(summary, "%s  %s", cost->limit > 0 ? "Extra usage" : "API spend", used);
+    if (cost->limit > 0) g_string_append_printf(summary, " / %s", limit);
+    g_free(used);
+    g_free(limit);
+    if (cost->period) g_string_append_printf(summary, " · %s", cost->period);
+    draw_text(y++, x, width, summary->str);
+    g_string_free(summary, TRUE);
+    if (cost->has_personal_used) {
+        char *money = format_money(cost->personal_used, cost->currency);
+        char *personal = g_strdup_printf("%s personal used", money);
+        g_free(money);
+        draw_text(y++, x, width, personal);
+        g_free(personal);
+    }
+    if (cost->has_next_regen) {
+        char *amount = format_money(cost->next_regen, cost->currency);
+        char *regen = g_strdup_printf("%s next regeneration", amount);
+        g_free(amount);
+        draw_text(y++, x, width, regen);
+        g_free(regen);
+    }
+    if (cost->has_resets_at) {
+        char *reset = format_timestamp(cost->resets_at_ms, "resets");
+        draw_text(y++, x, width, reset);
+        g_free(reset);
+    }
+    attroff(COLOR_PAIR(COLOR_MUTED));
+    return y + 1;
+}
+
+static int token_cost_height(const CodexBarTokenCost *cost) {
+    gboolean has_today = cost->has_today_tokens || cost->has_today_cost || cost->has_today_requests;
+    gboolean has_history = cost->has_last_days_tokens || cost->has_last_days_cost || cost->has_last_days_requests;
+    return 2 + (has_today ? 1 : 0) + (has_history ? 1 : 0);
+}
+
+static char *token_cost_line(const char *label,
+                             gboolean has_tokens,
+                             gint64 tokens,
+                             gboolean has_cost,
+                             double cost,
+                             gboolean has_requests,
+                             gint64 requests,
+                             const char *currency) {
+    GString *line = g_string_new(label);
+    g_string_append(line, "  ");
+    gboolean has_value = FALSE;
+    if (has_cost) {
+        char *money = format_money(cost, currency);
+        g_string_append(line, money);
+        g_free(money);
+        has_value = TRUE;
+    }
+    if (has_tokens) {
+        char *count = format_count(tokens);
+        g_string_append_printf(line, "%s%s tokens", has_value ? " · " : "", count);
+        g_free(count);
+        has_value = TRUE;
+    }
+    if (has_requests) {
+        g_string_append_printf(line, "%s%" G_GINT64_FORMAT " requests", has_value ? " · " : "", requests);
+    }
+    return g_string_free(line, FALSE);
+}
+
+static int draw_token_cost(int y, int x, int width, const CodexBarTokenCost *cost) {
+    attron(COLOR_PAIR(COLOR_MUTED));
+    draw_text(y++, x, width, "Cost");
+    if (cost->has_today_tokens || cost->has_today_cost || cost->has_today_requests) {
+        char *line = token_cost_line("Today",
+                                     cost->has_today_tokens,
+                                     cost->today_tokens,
+                                     cost->has_today_cost,
+                                     cost->today_cost,
+                                     cost->has_today_requests,
+                                     cost->today_requests,
+                                     cost->currency);
+        draw_text(y++, x, width, line);
+        g_free(line);
+    }
+    if (cost->has_last_days_tokens || cost->has_last_days_cost || cost->has_last_days_requests) {
+        char *fallback = cost->has_history_days
+                             ? g_strdup_printf("Last %" G_GINT64_FORMAT " days", cost->history_days)
+                             : g_strdup("Last 30 days");
+        char *line = token_cost_line(cost->history_label ? cost->history_label : fallback,
+                                     cost->has_last_days_tokens,
+                                     cost->last_days_tokens,
+                                     cost->has_last_days_cost,
+                                     cost->last_days_cost,
+                                     cost->has_last_days_requests,
+                                     cost->last_days_requests,
+                                     cost->currency);
+        draw_text(y++, x, width, line);
+        g_free(line);
+        g_free(fallback);
+    }
+    attroff(COLOR_PAIR(COLOR_MUTED));
+    return y + 1;
+}
+
+static int service_status_height(const CodexBarServiceStatus *status) {
+    return 3 + (status->description ? 1 : 0) + (status->has_updated_at ? 1 : 0);
+}
+
+static int draw_service_status(int y, int x, int width, const CodexBarServiceStatus *status) {
+    attron(COLOR_PAIR(COLOR_ERROR));
+    char *summary = g_strdup_printf("Service status  %s", status_label(status->indicator));
+    draw_text(y++, x, width, summary);
+    g_free(summary);
+    if (status->description) draw_text(y++, x, width, status->description);
+    draw_text(y++, x, width, status->url);
+    if (status->has_updated_at) {
+        char *updated = format_freshness(status->updated_at_ms);
+        draw_text(y++, x, width, updated);
+        g_free(updated);
+    }
+    attroff(COLOR_PAIR(COLOR_ERROR));
+    return y + 1;
+}
+
+static int provider_overview_height(const CodexBarProvider *provider) {
+    int metadata_lines = (provider->source || provider->account || provider->plan) ? 1 : 0;
+    if (provider->identity &&
+        (provider->identity->organization || provider->identity->account_id ||
+         (provider->identity->login_method &&
+          (!provider->plan || g_strcmp0(provider->plan, provider->identity->login_method) != 0)))) {
+        metadata_lines++;
+    }
+    metadata_lines += (provider->has_updated_at ? 1 : 0) + (provider->has_subscription_expires_at ? 1 : 0) +
+                      (provider->has_subscription_renews_at ? 1 : 0);
+    metadata_lines += provider->note ? 1 : 0;
+    return metadata_lines > 0 ? metadata_lines + 1 : 0;
+}
+
+static int draw_provider_overview(int y, int x, int width, const CodexBarProvider *provider) {
+    attron(COLOR_PAIR(COLOR_MUTED));
     if (provider->source || provider->account || provider->plan) {
-        attron(COLOR_PAIR(COLOR_MUTED));
         GString *metadata = g_string_new(NULL);
         const char *values[] = {provider->account, provider->plan, provider->source};
         for (size_t index = 0; index < G_N_ELEMENTS(values); index++) {
@@ -193,39 +369,141 @@ static void draw_provider(
             if (metadata->len > 0) g_string_append(metadata, " · ");
             g_string_append(metadata, values[index]);
         }
-        draw_text(y, x, width, metadata->str);
+        draw_text(y++, x, width, metadata->str);
         g_string_free(metadata, TRUE);
-        attroff(COLOR_PAIR(COLOR_MUTED));
-        y += 2;
     }
-    if (provider->note) {
-        attron(COLOR_PAIR(COLOR_MUTED));
-        draw_text(y++, x, width, provider->note);
-        attroff(COLOR_PAIR(COLOR_MUTED));
+    if (provider->identity &&
+        (provider->identity->organization || provider->identity->account_id ||
+         (provider->identity->login_method &&
+          (!provider->plan || g_strcmp0(provider->plan, provider->identity->login_method) != 0)))) {
+        const char *values[] = {
+            provider->identity->organization,
+            provider->identity->account_id,
+            provider->plan && g_strcmp0(provider->plan, provider->identity->login_method) == 0
+                ? NULL
+                : provider->identity->login_method,
+        };
+        GString *identity = g_string_new(NULL);
+        for (size_t index = 0; index < G_N_ELEMENTS(values); index++) {
+            if (!values[index]) continue;
+            if (identity->len > 0) g_string_append(identity, " · ");
+            g_string_append(identity, values[index]);
+        }
+        draw_text(y++, x, width, identity->str);
+        g_string_free(identity, TRUE);
     }
+    if (provider->has_updated_at) {
+        char *updated = format_freshness(provider->updated_at_ms);
+        draw_text(y++, x, width, updated);
+        g_free(updated);
+    }
+    if (provider->has_subscription_expires_at) {
+        char *expires = format_timestamp(provider->subscription_expires_at_ms, "subscription expires");
+        draw_text(y++, x, width, expires);
+        g_free(expires);
+    }
+    if (provider->has_subscription_renews_at) {
+        char *renews = format_timestamp(provider->subscription_renews_at_ms, "subscription renews");
+        draw_text(y++, x, width, renews);
+        g_free(renews);
+    }
+    if (provider->note) draw_text(y++, x, width, provider->note);
+    attroff(COLOR_PAIR(COLOR_MUTED));
+    return y + 1;
+}
 
-    guint metric_count = provider->quota_windows->len + provider->balances->len;
-    if (first_metric > 0 && y < bottom) {
+static int provider_content_height(const CodexBarProvider *provider) {
+    int height = provider_overview_height(provider) + (provider->error ? 1 : 0);
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        height += rate_window_height(codexbar_provider_quota_window(provider, index));
+    }
+    for (guint index = 0; index < provider->balances->len; index++) {
+        height += balance_height(codexbar_provider_balance(provider, index));
+    }
+    if (provider->provider_cost) height += provider_cost_height(provider->provider_cost);
+    if (provider->token_cost) height += token_cost_height(provider->token_cost);
+    if (provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE) {
+        height += service_status_height(provider->status);
+    }
+    return height;
+}
+
+static guint provider_metric_count(const CodexBarProvider *provider) {
+    return (provider_overview_height(provider) > 0 ? 1 : 0) + provider->quota_windows->len +
+           provider->balances->len + (provider->provider_cost ? 1 : 0) + (provider->token_cost ? 1 : 0) +
+           ((provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE) ? 1 : 0);
+}
+
+static int provider_metric_height(const CodexBarProvider *provider, guint index) {
+    int overview_height = provider_overview_height(provider);
+    if (overview_height > 0) {
+        if (index == 0) return overview_height;
+        index--;
+    }
+    if (index < provider->quota_windows->len) {
+        return rate_window_height(codexbar_provider_quota_window(provider, index));
+    }
+    index -= provider->quota_windows->len;
+    if (index < provider->balances->len) return balance_height(codexbar_provider_balance(provider, index));
+    index -= provider->balances->len;
+    if (provider->provider_cost) {
+        if (index == 0) return provider_cost_height(provider->provider_cost);
+        index--;
+    }
+    if (provider->token_cost) {
+        if (index == 0) return token_cost_height(provider->token_cost);
+        index--;
+    }
+    if (provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE && index == 0) {
+        return service_status_height(provider->status);
+    }
+    return 0;
+}
+
+static int draw_provider_metric(const CodexBarProvider *provider, guint index, int y, int x, int width) {
+    if (provider_overview_height(provider) > 0) {
+        if (index == 0) return draw_provider_overview(y, x, width, provider);
+        index--;
+    }
+    if (index < provider->quota_windows->len) {
+        return draw_rate_window(y, x, width, codexbar_provider_quota_window(provider, index));
+    }
+    index -= provider->quota_windows->len;
+    if (index < provider->balances->len) {
+        return draw_balance(y, x, width, codexbar_provider_balance(provider, index));
+    }
+    index -= provider->balances->len;
+    if (provider->provider_cost) {
+        if (index == 0) return draw_provider_cost(y, x, width, provider->provider_cost);
+        index--;
+    }
+    if (provider->token_cost) {
+        if (index == 0) return draw_token_cost(y, x, width, provider->token_cost);
+        index--;
+    }
+    if (provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE && index == 0) {
+        return draw_service_status(y, x, width, provider->status);
+    }
+    return y;
+}
+
+static void draw_provider(
+    const CodexBarProvider *provider, guint first_metric, int y, int x, int height, int width) {
+    int bottom = y + height;
+    guint metric_count = provider_metric_count(provider);
+    if (first_metric > 0 && y + 1 + provider_metric_height(provider, first_metric) <= bottom) {
         attron(COLOR_PAIR(COLOR_MUTED));
         draw_text(y++, x, width, "↑ k earlier metrics");
         attroff(COLOR_PAIR(COLOR_MUTED));
     }
     gboolean has_more = FALSE;
     for (guint index = first_metric; index < metric_count; index++) {
-        int metric_height = index < provider->quota_windows->len
-                                ? rate_window_height(codexbar_provider_quota_window(provider, index))
-                                : balance_height(codexbar_provider_balance(
-                                      provider, index - provider->quota_windows->len));
-        if (y + metric_height > bottom - 1) {
+        int metric_height = provider_metric_height(provider, index);
+        if (y + metric_height > bottom) {
             has_more = TRUE;
             break;
         }
-        if (index < provider->quota_windows->len) {
-            y = draw_rate_window(y, x, width, codexbar_provider_quota_window(provider, index));
-        } else {
-            y = draw_balance(
-                y, x, width, codexbar_provider_balance(provider, index - provider->quota_windows->len));
-        }
+        y = draw_provider_metric(provider, index, y, x, width);
     }
     if (has_more && bottom > y) {
         attron(COLOR_PAIR(COLOR_MUTED));
@@ -271,18 +549,23 @@ static void draw_screen(const CodexBarSnapshot *snapshot, guint selected, guint 
         if (available <= 0) {
             break;
         }
+        double highest = codexbar_provider_highest_used(provider);
+        char *tab = provider->error ? g_strdup_printf("%s !", provider->provider)
+                                    : g_strdup_printf("%s %.0f%%", provider->provider, highest);
         if (index == selected) {
             attron(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
         } else {
             attron(COLOR_PAIR(COLOR_MUTED));
         }
-        mvaddnstr(panel_y + 1, tab_x, provider->provider, available);
+        mvaddnstr(panel_y + 1, tab_x, tab, available);
         if (index == selected) {
             attroff(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
         } else {
             attroff(COLOR_PAIR(COLOR_MUTED));
         }
-        tab_x += (int)strlen(provider->provider) + 3;
+        int drawn_width = MIN((int)g_utf8_strlen(tab, -1), available);
+        tab_x += drawn_width + 3;
+        g_free(tab);
     }
 
     int card_y = panel_y + 3;
@@ -409,7 +692,7 @@ int codexbar_tui_run(void) {
         case 'j':
             if (snapshot->providers->len > 0) {
                 const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, selected);
-                guint metric_count = provider->quota_windows->len + provider->balances->len;
+                guint metric_count = provider_metric_count(provider);
                 if (first_metric + 1 < metric_count) first_metric++;
             }
             break;

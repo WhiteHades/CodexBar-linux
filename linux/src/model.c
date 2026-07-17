@@ -28,6 +28,32 @@ static gboolean parse_number(json_object *object, const char *key, double *resul
     return isfinite(*result);
 }
 
+static gboolean parse_integer(json_object *object, const char *key, gint64 *result) {
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(object, key, &value)) return FALSE;
+    if (json_object_is_type(value, json_type_int)) {
+        *result = json_object_get_int64(value);
+        return TRUE;
+    }
+    if (!json_object_is_type(value, json_type_double)) return FALSE;
+    double number = json_object_get_double(value);
+    if (!isfinite(number) || number < (double)G_MININT64 || number >= (double)G_MAXINT64 ||
+        trunc(number) != number) {
+        return FALSE;
+    }
+    *result = (gint64)number;
+    return TRUE;
+}
+
+static gboolean parse_boolean(json_object *object, const char *key, gboolean *result) {
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(object, key, &value) || !json_object_is_type(value, json_type_boolean)) {
+        return FALSE;
+    }
+    *result = json_object_get_boolean(value);
+    return TRUE;
+}
+
 static gboolean parse_timestamp_ms(json_object *object, const char *key, gint64 *result) {
     json_object *value = NULL;
     if (!json_object_object_get_ex(object, key, &value) || json_object_is_type(value, json_type_null)) {
@@ -68,12 +94,19 @@ CodexBarQuotaWindow *codexbar_quota_window_new(const char *id, const char *title
     return window;
 }
 
+void codexbar_pace_free(CodexBarPace *pace) {
+    if (!pace) return;
+    g_free(pace->summary);
+    g_free(pace);
+}
+
 void codexbar_quota_window_free(CodexBarQuotaWindow *window) {
     if (!window) return;
     g_free(window->id);
     g_free(window->title);
     g_free(window->detail);
     g_free(window->reset_description);
+    codexbar_pace_free(window->pace);
     g_free(window);
 }
 
@@ -252,6 +285,176 @@ static char *parse_error(json_object *payload) {
     return duplicate_json_string(error, "message");
 }
 
+static CodexBarServiceStatusIndicator parse_status_indicator(const char *indicator) {
+    if (g_strcmp0(indicator, "none") == 0) return CODEXBAR_STATUS_NONE;
+    if (g_strcmp0(indicator, "minor") == 0) return CODEXBAR_STATUS_MINOR;
+    if (g_strcmp0(indicator, "major") == 0) return CODEXBAR_STATUS_MAJOR;
+    if (g_strcmp0(indicator, "critical") == 0) return CODEXBAR_STATUS_CRITICAL;
+    if (g_strcmp0(indicator, "maintenance") == 0) return CODEXBAR_STATUS_MAINTENANCE;
+    return CODEXBAR_STATUS_UNKNOWN;
+}
+
+static CodexBarServiceStatus *parse_service_status(json_object *object) {
+    if (!object || !json_object_is_type(object, json_type_object)) return NULL;
+    char *indicator = duplicate_json_string(object, "indicator");
+    char *url = duplicate_json_string(object, "url");
+    if (!indicator || !url) {
+        g_free(indicator);
+        g_free(url);
+        return NULL;
+    }
+    CodexBarServiceStatus *status = g_new0(CodexBarServiceStatus, 1);
+    status->indicator = parse_status_indicator(indicator);
+    status->description = duplicate_json_string(object, "description");
+    status->url = url;
+    status->has_updated_at = parse_timestamp_ms(object, "updatedAt", &status->updated_at_ms);
+    g_free(indicator);
+    return status;
+}
+
+static CodexBarProviderCost *parse_provider_cost(json_object *object) {
+    if (!object || !json_object_is_type(object, json_type_object)) return NULL;
+    double used = 0.0;
+    double limit = 0.0;
+    char *currency = duplicate_json_string(object, "currencyCode");
+    if (!parse_number(object, "used", &used) || !parse_number(object, "limit", &limit) || !currency) {
+        g_free(currency);
+        return NULL;
+    }
+    CodexBarProviderCost *cost = g_new0(CodexBarProviderCost, 1);
+    cost->used = used;
+    cost->limit = limit;
+    cost->currency = currency;
+    cost->period = duplicate_json_string(object, "period");
+    cost->has_resets_at = parse_timestamp_ms(object, "resetsAt", &cost->resets_at_ms);
+    cost->has_next_regen = parse_number(object, "nextRegenAmount", &cost->next_regen);
+    cost->has_personal_used = parse_number(object, "personalUsed", &cost->personal_used);
+    cost->has_updated_at = parse_timestamp_ms(object, "updatedAt", &cost->updated_at_ms);
+    return cost;
+}
+
+static CodexBarTokenCost *parse_token_cost(json_object *object) {
+    if (!object || !json_object_is_type(object, json_type_object)) return NULL;
+    CodexBarTokenCost *cost = g_new0(CodexBarTokenCost, 1);
+    cost->has_today_tokens = parse_integer(object, "sessionTokens", &cost->today_tokens);
+    cost->has_today_cost = parse_number(object, "sessionCostUSD", &cost->today_cost);
+    cost->has_today_requests = parse_integer(object, "sessionRequests", &cost->today_requests);
+    cost->has_last_days_tokens = parse_integer(object, "last30DaysTokens", &cost->last_days_tokens);
+    cost->has_last_days_cost = parse_number(object, "last30DaysCostUSD", &cost->last_days_cost);
+    cost->has_last_days_requests = parse_integer(object, "last30DaysRequests", &cost->last_days_requests);
+    cost->currency = duplicate_json_string(object, "currencyCode");
+    cost->history_label = duplicate_json_string(object, "historyLabel");
+    cost->has_history_days = parse_integer(object, "historyDays", &cost->history_days);
+    cost->has_updated_at = parse_timestamp_ms(object, "updatedAt", &cost->updated_at_ms);
+    gboolean has_summary = cost->has_today_tokens || cost->has_today_cost || cost->has_today_requests ||
+                           cost->has_last_days_tokens || cost->has_last_days_cost ||
+                           cost->has_last_days_requests;
+    if (!has_summary) {
+        codexbar_token_cost_free(cost);
+        return NULL;
+    }
+    if (!cost->currency) cost->currency = g_strdup("USD");
+    return cost;
+}
+
+static CodexBarPaceStage parse_pace_stage(const char *stage) {
+    if (g_strcmp0(stage, "onTrack") == 0) return CODEXBAR_PACE_ON_TRACK;
+    if (g_strcmp0(stage, "slightlyAhead") == 0) return CODEXBAR_PACE_SLIGHTLY_AHEAD;
+    if (g_strcmp0(stage, "ahead") == 0) return CODEXBAR_PACE_AHEAD;
+    if (g_strcmp0(stage, "farAhead") == 0) return CODEXBAR_PACE_FAR_AHEAD;
+    if (g_strcmp0(stage, "slightlyBehind") == 0) return CODEXBAR_PACE_SLIGHTLY_BEHIND;
+    if (g_strcmp0(stage, "behind") == 0) return CODEXBAR_PACE_BEHIND;
+    if (g_strcmp0(stage, "farBehind") == 0) return CODEXBAR_PACE_FAR_BEHIND;
+    return CODEXBAR_PACE_UNKNOWN;
+}
+
+static CodexBarPace *parse_pace(json_object *object) {
+    if (!object || !json_object_is_type(object, json_type_object)) return NULL;
+    char *stage = duplicate_json_string(object, "stage");
+    double delta = 0.0;
+    double expected = 0.0;
+    gboolean will_last = FALSE;
+    if (!stage || !parse_number(object, "deltaPercent", &delta) ||
+        !parse_number(object, "expectedUsedPercent", &expected) ||
+        !parse_boolean(object, "willLastToReset", &will_last)) {
+        g_free(stage);
+        return NULL;
+    }
+    CodexBarPace *pace = g_new0(CodexBarPace, 1);
+    pace->stage = parse_pace_stage(stage);
+    pace->delta_percent = delta;
+    pace->expected_used_percent = expected;
+    pace->will_last = will_last;
+    pace->has_eta = parse_number(object, "etaSeconds", &pace->eta_seconds);
+    pace->has_runout_probability = parse_number(object, "runOutProbability", &pace->runout_probability);
+    pace->summary = duplicate_json_string(object, "summary");
+    g_free(stage);
+    return pace;
+}
+
+static void apply_pace(CodexBarProvider *provider, json_object *object, const char *quota_id) {
+    CodexBarPace *pace = parse_pace(object);
+    if (!pace) return;
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+        if (g_str_equal(window->id, quota_id)) {
+            codexbar_pace_free(window->pace);
+            window->pace = pace;
+            return;
+        }
+    }
+    codexbar_pace_free(pace);
+}
+
+static CodexBarProviderIdentity *parse_identity(json_object *object, const char *provider_id, char **account) {
+    if (!object || !json_object_is_type(object, json_type_object)) return NULL;
+    char *identity_provider = duplicate_json_string(object, "providerID");
+    if (!identity_provider || !g_str_equal(identity_provider, provider_id)) {
+        g_free(identity_provider);
+        return NULL;
+    }
+    g_free(identity_provider);
+    if (!*account) *account = duplicate_json_string(object, "accountEmail");
+    CodexBarProviderIdentity *identity = g_new0(CodexBarProviderIdentity, 1);
+    identity->organization = duplicate_json_string(object, "accountOrganization");
+    identity->account_id = duplicate_json_string(object, "accountID");
+    identity->login_method = duplicate_json_string(object, "loginMethod");
+    if (!identity->organization && !identity->account_id && !identity->login_method) {
+        codexbar_provider_identity_free(identity);
+        return NULL;
+    }
+    return identity;
+}
+
+void codexbar_service_status_free(CodexBarServiceStatus *status) {
+    if (!status) return;
+    g_free(status->description);
+    g_free(status->url);
+    g_free(status);
+}
+
+void codexbar_provider_cost_free(CodexBarProviderCost *cost) {
+    if (!cost) return;
+    g_free(cost->currency);
+    g_free(cost->period);
+    g_free(cost);
+}
+
+void codexbar_token_cost_free(CodexBarTokenCost *cost) {
+    if (!cost) return;
+    g_free(cost->currency);
+    g_free(cost->history_label);
+    g_free(cost);
+}
+
+void codexbar_provider_identity_free(CodexBarProviderIdentity *identity) {
+    if (!identity) return;
+    g_free(identity->organization);
+    g_free(identity->account_id);
+    g_free(identity->login_method);
+    g_free(identity);
+}
+
 void codexbar_provider_free(CodexBarProvider *provider) {
     if (!provider) {
         return;
@@ -262,6 +465,10 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     g_free(provider->source);
     g_free(provider->note);
     g_free(provider->error);
+    codexbar_provider_identity_free(provider->identity);
+    codexbar_service_status_free(provider->status);
+    codexbar_provider_cost_free(provider->provider_cost);
+    codexbar_token_cost_free(provider->token_cost);
     g_ptr_array_unref(provider->quota_windows);
     g_ptr_array_unref(provider->balances);
     g_free(provider);
@@ -308,6 +515,11 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         provider->note = duplicate_json_string(payload, "note");
         provider->error = parse_error(payload);
 
+        json_object *status = NULL;
+        if (json_object_object_get_ex(payload, "status", &status)) {
+            provider->status = parse_service_status(status);
+        }
+
         json_object *windows = NULL;
         gboolean has_canonical_windows = json_object_object_get_ex(payload, "quotaWindows", &windows) &&
                                          json_object_is_type(windows, json_type_array);
@@ -346,6 +558,50 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
                     if (window) codexbar_provider_add_quota_window(provider, window);
                 }
             }
+        }
+
+        if (!usage && json_object_object_get_ex(payload, "usage", &usage) &&
+            !json_object_is_type(usage, json_type_object)) {
+            usage = NULL;
+        }
+        if (usage) {
+            provider->has_updated_at = parse_timestamp_ms(usage, "updatedAt", &provider->updated_at_ms);
+            provider->has_subscription_expires_at = parse_timestamp_ms(
+                usage, "subscriptionExpiresAt", &provider->subscription_expires_at_ms);
+            provider->has_subscription_renews_at = parse_timestamp_ms(
+                usage, "subscriptionRenewsAt", &provider->subscription_renews_at_ms);
+            json_object *identity = NULL;
+            if (provider->provider && json_object_object_get_ex(usage, "identity", &identity)) {
+                provider->identity = parse_identity(identity, provider->provider, &provider->account);
+                if (!provider->plan && provider->identity && provider->identity->login_method) {
+                    provider->plan = g_strdup(provider->identity->login_method);
+                }
+            }
+            json_object *provider_cost = NULL;
+            if (json_object_object_get_ex(usage, "providerCost", &provider_cost)) {
+                provider->provider_cost = parse_provider_cost(provider_cost);
+            }
+        }
+        gint64 top_level_updated_at = 0;
+        if (parse_timestamp_ms(payload, "updatedAt", &top_level_updated_at)) {
+            provider->has_updated_at = TRUE;
+            provider->updated_at_ms = top_level_updated_at;
+        }
+
+        json_object *pace = NULL;
+        if (json_object_object_get_ex(payload, "pace", &pace) && json_object_is_type(pace, json_type_object)) {
+            const char *pace_ids[] = {"primary", "secondary"};
+            for (size_t pace_index = 0; pace_index < G_N_ELEMENTS(pace_ids); pace_index++) {
+                json_object *pace_value = NULL;
+                if (json_object_object_get_ex(pace, pace_ids[pace_index], &pace_value)) {
+                    apply_pace(provider, pace_value, pace_ids[pace_index]);
+                }
+            }
+        }
+
+        json_object *token_cost = NULL;
+        if (json_object_object_get_ex(payload, "tokenCost", &token_cost)) {
+            provider->token_cost = parse_token_cost(token_cost);
         }
 
         json_object *balances = NULL;
@@ -390,16 +646,22 @@ void codexbar_snapshot_free(CodexBarSnapshot *snapshot) {
     g_free(snapshot);
 }
 
+double codexbar_provider_highest_used(const CodexBarProvider *provider) {
+    g_return_val_if_fail(provider != NULL, 0.0);
+    double highest = 0.0;
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+        if (window->usage_known) highest = MAX(highest, window->used_percent);
+    }
+    return highest;
+}
+
 double codexbar_snapshot_highest_used(const CodexBarSnapshot *snapshot) {
     g_return_val_if_fail(snapshot != NULL, 0.0);
 
     double highest = 0.0;
     for (guint index = 0; index < snapshot->providers->len; index++) {
-        const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
-        for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
-            const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, window_index);
-            if (window->usage_known) highest = MAX(highest, window->used_percent);
-        }
+        highest = MAX(highest, codexbar_provider_highest_used(g_ptr_array_index(snapshot->providers, index)));
     }
     return highest;
 }
