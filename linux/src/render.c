@@ -28,8 +28,18 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
 
     double highest = codexbar_snapshot_highest_used(snapshot);
     int percentage = (int)(highest + 0.5);
-    const char *class_name = percentage >= 90 ? "critical" : percentage >= 70 ? "warning" : "ok";
-    char *text = g_strdup_printf("󰚩 %d%%", percentage);
+    gboolean has_error = FALSE;
+    gboolean has_usage = FALSE;
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
+        has_error = has_error || provider->error != NULL;
+        has_usage = has_usage || provider->primary.available || provider->secondary.available ||
+                    provider->tertiary.available || provider->has_credits;
+    }
+    const char *class_name = has_error ? (has_usage ? "stale" : "error")
+                                       : percentage >= 90 ? "critical"
+                                                          : percentage >= 70 ? "warning" : "ok";
+    char *text = has_error && !has_usage ? g_strdup("󰚩 !") : g_strdup_printf("󰚩 %d%%", percentage);
     GString *tooltip = g_string_new("CODEXBAR // USAGE");
 
     if (snapshot->providers->len == 0) {

@@ -36,6 +36,7 @@ static void provider_config_free(gpointer data) {
     g_free(provider->id);
     g_free(provider->source);
     g_free(provider->api_key);
+    g_free(provider->region);
     g_free(provider);
 }
 
@@ -65,6 +66,11 @@ CodexBarConfig *codexbar_config_load(GError **error) {
     config->path = resolve_path();
     config->providers = g_ptr_array_new_with_free_func(provider_config_free);
     if (!g_file_test(config->path, G_FILE_TEST_EXISTS)) {
+        CodexBarProviderConfig *codex = g_new0(CodexBarProviderConfig, 1);
+        codex->id = g_strdup("codex");
+        codex->enabled = TRUE;
+        codex->source = g_strdup("auto");
+        g_ptr_array_add(config->providers, codex);
         return config;
     }
 
@@ -110,6 +116,7 @@ CodexBarConfig *codexbar_config_load(GError **error) {
             }
             provider->source = clean_string(entry, "source");
             provider->api_key = clean_string(entry, "apiKey");
+            provider->region = clean_string(entry, "region");
             g_ptr_array_add(config->providers, provider);
         }
     }

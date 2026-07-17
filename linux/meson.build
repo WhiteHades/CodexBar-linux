@@ -15,6 +15,7 @@ core_sources = files(
   'src/model.c',
   'src/openrouter.c',
   'src/render.c',
+  'src/simple_providers.c',
 )
 
 core_deps = [glib_dep, gio_dep, json_dep, curl_dep]

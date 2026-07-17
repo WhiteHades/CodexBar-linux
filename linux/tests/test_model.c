@@ -1,5 +1,6 @@
 #include "model.h"
 #include "openrouter.h"
+#include "simple_providers.h"
 #include "render.h"
 
 #include <glib.h>
@@ -84,11 +85,33 @@ static void test_openrouter_credits(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_simple_provider_parsers(void) {
+    GError *error = NULL;
+    CodexBarProvider *deepseek = codexbar_deepseek_parse(
+        "{\"is_available\":true,\"balance_infos\":[{\"total_balance\":\"8.25\"}]}", &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(deepseek->credits_remaining, 8.25, 0.0001);
+    codexbar_provider_free(deepseek);
+
+    CodexBarProvider *moonshot = codexbar_moonshot_parse(
+        "{\"code\":0,\"status\":true,\"data\":{\"available_balance\":12.5}}", &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(moonshot->credits_remaining, 12.5, 0.0001);
+    codexbar_provider_free(moonshot);
+
+    CodexBarProvider *elevenlabs = codexbar_elevenlabs_parse(
+        "{\"character_count\":250,\"character_limit\":1000}", &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(elevenlabs->primary.used_percent, 25.0, 0.0001);
+    codexbar_provider_free(elevenlabs);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
     g_test_add_func("/model/reject-non-array", test_rejects_non_array);
     g_test_add_func("/render/waybar", test_waybar_rendering);
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
+    g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     return g_test_run();
 }

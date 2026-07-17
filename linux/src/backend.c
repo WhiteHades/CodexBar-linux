@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "openrouter.h"
+#include "simple_providers.h"
 
 #include <gio/gio.h>
 
@@ -79,6 +80,25 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
                 provider->error = g_strdup(provider_error->message);
                 g_error_free(provider_error);
             }
+            g_ptr_array_add(snapshot->providers, provider);
+        } else if (g_str_equal(provider_config->id, "deepseek") ||
+                   g_str_equal(provider_config->id, "moonshot") ||
+                   g_str_equal(provider_config->id, "elevenlabs")) {
+            GError *provider_error = NULL;
+            CodexBarProvider *provider = codexbar_simple_provider_fetch(provider_config, &provider_error);
+            if (!provider) {
+                provider = g_new0(CodexBarProvider, 1);
+                provider->provider = g_strdup(provider_config->id);
+                provider->source = g_strdup("api");
+                provider->error = g_strdup(provider_error->message);
+                g_error_free(provider_error);
+            }
+            g_ptr_array_add(snapshot->providers, provider);
+        } else {
+            CodexBarProvider *provider = g_new0(CodexBarProvider, 1);
+            provider->provider = g_strdup(provider_config->id);
+            provider->source = g_strdup(provider_config->source ? provider_config->source : "auto");
+            provider->error = g_strdup_printf("%s is not migrated to the native C engine yet", provider_config->id);
             g_ptr_array_add(snapshot->providers, provider);
         }
     }

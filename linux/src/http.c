@@ -13,7 +13,8 @@ static size_t append_body(char *data, size_t size, size_t count, void *user_data
     return bytes;
 }
 
-CodexBarHttpResponse *codexbar_http_get(const char *url, const char *bearer_token, GError **error) {
+CodexBarHttpResponse *codexbar_http_get(
+    const char *url, const char *auth_header, const char *auth_value, GError **error) {
     CURL *curl = curl_easy_init();
     if (!curl) {
         g_set_error_literal(error, http_error_quark(), 1, "Could not initialize libcurl");
@@ -21,7 +22,7 @@ CodexBarHttpResponse *codexbar_http_get(const char *url, const char *bearer_toke
     }
     GByteArray *body = g_byte_array_new();
     struct curl_slist *headers = NULL;
-    char *authorization = g_strdup_printf("Authorization: Bearer %s", bearer_token);
+    char *authorization = g_strdup_printf("%s: %s", auth_header, auth_value);
     headers = curl_slist_append(headers, authorization);
     headers = curl_slist_append(headers, "Accept: application/json");
     headers = curl_slist_append(headers, "X-Title: CodexBar");

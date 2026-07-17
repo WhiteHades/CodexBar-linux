@@ -7,6 +7,7 @@ typedef struct {
     gboolean enabled;
     char *source;
     char *api_key;
+    char *region;
 } CodexBarProviderConfig;
 
 typedef struct {

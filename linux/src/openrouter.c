@@ -71,7 +71,9 @@ CodexBarProvider *codexbar_openrouter_fetch(const CodexBarProviderConfig *config
     }
     char *url = g_strdup_printf("%s%scredits", base, g_str_has_suffix(base, "/") ? "" : "/");
     g_free(base);
-    CodexBarHttpResponse *response = codexbar_http_get(url, token, error);
+    char *bearer = g_strdup_printf("Bearer %s", token);
+    CodexBarHttpResponse *response = codexbar_http_get(url, "Authorization", bearer, error);
+    g_free(bearer);
     g_free(url);
     if (!response) {
         return NULL;
