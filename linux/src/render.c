@@ -449,6 +449,15 @@ static json_object *provider_json(const CodexBarProvider *provider) {
             json_object_object_add(identity, "loginMethod", json_object_new_string(provider->identity->login_method));
         }
         json_object_object_add(usage, "identity", identity);
+        if (provider->account) json_object_object_add(usage, "accountEmail", json_object_new_string(provider->account));
+        if (provider->identity->organization) {
+            json_object_object_add(
+                usage, "accountOrganization", json_object_new_string(provider->identity->organization));
+        }
+        if (provider->identity->login_method) {
+            json_object_object_add(
+                usage, "loginMethod", json_object_new_string(provider->identity->login_method));
+        }
     }
     if (provider->provider_cost) {
         const CodexBarProviderCost *cost = provider->provider_cost;

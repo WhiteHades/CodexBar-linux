@@ -1,4 +1,5 @@
 #include "codex.h"
+#include "codebuff.h"
 #include "config.h"
 #include "http.h"
 #include "kimi.h"
@@ -988,6 +989,59 @@ static void test_llmproxy_usage(void) {
     codexbar_snapshot_free(snapshot);
 }
 
+static void test_codebuff_usage(void) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_codebuff_parse_usage(
+        "{\"usage\":\"1250\",\"quota\":5000,\"remainingBalance\":3750,"
+        "\"autoTopupEnabled\":true,\"next_quota_reset\":\"2026-05-01T00:00:00Z\"}",
+        1000,
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->provider, ==, "codebuff");
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 25.0, 0.0001);
+    g_assert_true(window_at(provider, 0)->has_resets_at);
+    g_assert_cmpstr(provider->identity->login_method, ==, "3,750 remaining · auto top-up");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_codebuff_parse_usage(
+        "{\"used\":40,\"remaining\":60,\"autoTopupEnabled\":\"invalid\","
+        "\"auto_topup_enabled\":true}",
+        1000,
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 40.0, 0.0001);
+    g_assert_cmpstr(provider->identity->login_method, ==, "60 remaining · auto top-up");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_codebuff_parse_usage("{\"usage\":42}", 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 100.0);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_codebuff_parse_usage("{}", 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    g_assert_nonnull(provider->identity);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_codebuff_parse_usage(
+        "{\"remainingBalance\":1e100,\"next_quota_reset\":9223372036854775808}", 1000, &error);
+    g_assert_no_error(error);
+    g_assert_false(window_at(provider, 0)->has_resets_at);
+    g_assert_cmpuint(strlen(provider->identity->login_method), >, 100);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_codebuff_parse_usage("[]", 1000, &error);
+    g_assert_null(provider);
+    g_assert_error(error, g_quark_from_static_string("codexbar-codebuff-error"), 1);
+    g_clear_error(&error);
+
+    provider = codexbar_codebuff_parse_usage("{\"usage\":25} trailing", 1000, &error);
+    g_assert_null(provider);
+    g_assert_error(error, g_quark_from_static_string("codexbar-codebuff-error"), 1);
+    g_clear_error(&error);
+}
+
 static void test_simple_provider_parsers(void) {
     GError *error = NULL;
     CodexBarProvider *deepseek = codexbar_deepseek_parse(
@@ -1151,6 +1205,7 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("kimik2")->native_provider, ==, CODEXBAR_NATIVE_KIMI_K2);
     g_assert_cmpint(codexbar_provider_registry_find("clawrouter")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
     g_assert_cmpint(codexbar_provider_registry_find("llmproxy")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
+    g_assert_cmpint(codexbar_provider_registry_find("codebuff")->native_provider, ==, CODEXBAR_NATIVE_CODEBUFF);
     const CodexBarProviderDescriptor *codex = codexbar_provider_registry_find("codex");
     g_assert_true(codex->default_enabled);
     g_assert_true(codexbar_provider_supports_source(codex, "oauth"));
@@ -1184,6 +1239,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/provider/kimik2-credits", test_kimik2_credits);
     g_test_add_func("/provider/clawrouter-usage", test_clawrouter_usage);
     g_test_add_func("/provider/llmproxy-usage", test_llmproxy_usage);
+    g_test_add_func("/provider/codebuff-usage", test_codebuff_usage);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
     g_test_add_func("/provider/registry", test_provider_registry);

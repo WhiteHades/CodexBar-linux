@@ -126,3 +126,13 @@ case "$output" in
     exit 1
     ;;
 esac
+
+output=$(env -u CODEXBAR_BACKEND -u CODEBUFF_API_KEY CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider manicode --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"codebuff","source":"api","error":{"message":"Codebuff API token is not configured."'*) ;;
+  *)
+    printf 'unexpected native Codebuff missing-key output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac

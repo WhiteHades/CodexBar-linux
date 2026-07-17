@@ -13,6 +13,7 @@ core_sources = files(
   'src/backend.c',
   'src/cli_config.c',
   'src/cli_usage.c',
+  'src/codebuff.c',
   'src/config.c',
   'src/codex.c',
   'src/http.c',

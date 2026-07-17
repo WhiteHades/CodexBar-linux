@@ -1,6 +1,7 @@
 #include "backend.h"
 
 #include "config.h"
+#include "codebuff.h"
 #include "codex.h"
 #include "kimi.h"
 #include "openrouter.h"
@@ -121,6 +122,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     switch (descriptor->native_provider) {
     case CODEXBAR_NATIVE_CODEX:
         provider = codexbar_codex_fetch(&error);
+        break;
+    case CODEXBAR_NATIVE_CODEBUFF:
+        provider = codexbar_codebuff_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_KIMI:
         provider = codexbar_kimi_fetch(config, &error);

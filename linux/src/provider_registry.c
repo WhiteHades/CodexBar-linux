@@ -50,7 +50,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"abacus", "Abacus AI", "abacusai", "abacus-ai", A | W, FALSE, "https://apps.abacus.ai/chatllm/admin/compute-points-usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"mistral", "Mistral", "mistral", "mistral-ai", A | W, FALSE, "https://admin.mistral.ai/organization/usage", "https://status.mistral.ai", CODEXBAR_NATIVE_UNAVAILABLE},
     {"deepseek", "DeepSeek", "deepseek", "deep-seek,ds", A | P, FALSE, "https://platform.deepseek.com/usage", "https://status.deepseek.com", CODEXBAR_NATIVE_SIMPLE},
-    {"codebuff", "Codebuff", "codebuff", "manicode", A | P, FALSE, "https://www.codebuff.com/usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"codebuff", "Codebuff", "codebuff", "manicode", A | P, FALSE, "https://www.codebuff.com/usage", NULL, CODEXBAR_NATIVE_CODEBUFF},
     {"crof", "Crof", "crof", "crofai", A | P, FALSE, "https://crof.ai/dashboard", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"venice", "Venice", "venice", "ven", A | P, FALSE, "https://venice.ai/settings/api", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"commandcode", "Command Code", "commandcode", "command-code", A | W, FALSE, "https://commandcode.ai/studio", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
