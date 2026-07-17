@@ -49,6 +49,7 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     }
     g_free(provider->provider);
     g_free(provider->account);
+    g_free(provider->plan);
     g_free(provider->source);
     g_free(provider->error);
     g_free(provider->primary.reset_description);
@@ -96,6 +97,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         CodexBarProvider *provider = g_new0(CodexBarProvider, 1);
         provider->provider = duplicate_json_string(payload, "provider");
         provider->account = duplicate_json_string(payload, "account");
+        provider->plan = duplicate_json_string(payload, "plan");
         provider->source = duplicate_json_string(payload, "source");
         provider->error = parse_error(payload);
 

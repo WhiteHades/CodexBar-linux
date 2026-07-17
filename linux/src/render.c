@@ -6,9 +6,17 @@ static void append_window(GString *tooltip, const char *label, const CodexBarRat
     if (!window->available) {
         return;
     }
-    g_string_append_printf(tooltip, "\n  %-8s %3.0f%% used", label, window->used_percent);
+    int filled = (int)((CLAMP(window->used_percent, 0.0, 100.0) / 100.0) * 10.0 + 0.5);
+    g_string_append_printf(tooltip, "\n  %-8s ", label);
+    for (int index = 0; index < 10; index++) {
+        g_string_append(tooltip, index < filled ? "█" : "░");
+    }
+    g_string_append_printf(tooltip,
+                           "  %.0f%% used · %.0f%% left",
+                           window->used_percent,
+                           100.0 - window->used_percent);
     if (window->reset_description) {
-        g_string_append_printf(tooltip, " · %s", window->reset_description);
+        g_string_append_printf(tooltip, "\n  %-8s %s", "", window->reset_description);
     }
 }
 
@@ -40,23 +48,38 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
                                        : percentage >= 90 ? "critical"
                                                           : percentage >= 70 ? "warning" : "ok";
     char *text = has_error && !has_usage ? g_strdup("󰚩 !") : g_strdup_printf("󰚩 %d%%", percentage);
-    GString *tooltip = g_string_new("CODEXBAR // USAGE");
+    GString *tooltip = g_string_new(NULL);
 
     if (snapshot->providers->len == 0) {
-        g_string_append(tooltip, "\n\nNo enabled provider returned data.");
+        g_string_append(tooltip, "No enabled provider returned data.");
     }
 
     for (guint index = 0; index < snapshot->providers->len; index++) {
         const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
-        g_string_append_printf(tooltip, "\n\n%s", provider->provider);
+        if (index > 0) {
+            g_string_append(tooltip, "\n\n");
+        }
+        g_string_append(tooltip, provider->provider);
         if (provider->account) {
-            g_string_append_printf(tooltip, " // %s", provider->account);
+            g_string_append_printf(tooltip, " · %s", provider->account);
+        }
+        if (provider->plan || provider->source) {
+            g_string_append(tooltip, "\n  ");
+            if (provider->plan) {
+                g_string_append(tooltip, provider->plan);
+            }
+            if (provider->plan && provider->source) {
+                g_string_append(tooltip, " · ");
+            }
+            if (provider->source) {
+                g_string_append(tooltip, provider->source);
+            }
         }
         append_window(tooltip, "session", &provider->primary);
         append_window(tooltip, "weekly", &provider->secondary);
         append_window(tooltip, "extra", &provider->tertiary);
         if (provider->has_credits) {
-            g_string_append_printf(tooltip, "\n  credits  %.2f", provider->credits_remaining);
+            g_string_append_printf(tooltip, "\n  credits  %.2f left", provider->credits_remaining);
         }
         if (provider->error) {
             g_string_append_printf(tooltip, "\n  error    %s", provider->error);

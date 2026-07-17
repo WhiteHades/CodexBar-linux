@@ -12,6 +12,7 @@ typedef struct {
 typedef struct {
     char *provider;
     char *account;
+    char *plan;
     char *source;
     char *error;
     CodexBarRateWindow primary;

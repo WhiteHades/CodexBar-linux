@@ -14,6 +14,8 @@ enum {
     COLOR_ACCENT,
     COLOR_ERROR,
     COLOR_BORDER,
+    COLOR_SELECTED,
+    COLOR_TRACK,
 };
 
 static void initialize_theme(void) {
@@ -30,20 +32,26 @@ static void initialize_theme(void) {
         init_pair(COLOR_ACCENT, COLOR_GREEN, -1);
         init_pair(COLOR_ERROR, COLOR_RED, -1);
         init_pair(COLOR_BORDER, COLOR_BLUE, -1);
+        init_pair(COLOR_SELECTED, COLOR_BLACK, COLOR_GREEN);
+        init_pair(COLOR_TRACK, COLOR_BLUE, -1);
     } else if (g_str_equal(theme, "dark") || COLORS < 256) {
         init_pair(COLOR_NORMAL, COLOR_WHITE, COLOR_BLACK);
         init_pair(COLOR_MUTED, COLORS >= 16 ? 8 : COLOR_CYAN, COLOR_BLACK);
         init_pair(COLOR_ACCENT, COLOR_CYAN, COLOR_BLACK);
         init_pair(COLOR_ERROR, COLOR_RED, COLOR_BLACK);
         init_pair(COLOR_BORDER, COLOR_BLUE, COLOR_BLACK);
+        init_pair(COLOR_SELECTED, COLOR_BLACK, COLOR_CYAN);
+        init_pair(COLOR_TRACK, COLORS >= 16 ? 8 : COLOR_BLUE, COLOR_BLACK);
     } else {
-        init_pair(COLOR_NORMAL, 189, 235);
-        init_pair(COLOR_MUTED, 146, 235);
-        init_pair(COLOR_ACCENT, 111, 235);
-        init_pair(COLOR_ERROR, 203, 235);
-        init_pair(COLOR_BORDER, 60, 235);
+        init_pair(COLOR_NORMAL, 189, -1);
+        init_pair(COLOR_MUTED, 146, -1);
+        init_pair(COLOR_ACCENT, 111, -1);
+        init_pair(COLOR_ERROR, 211, -1);
+        init_pair(COLOR_BORDER, 60, -1);
+        init_pair(COLOR_SELECTED, 234, 111);
+        init_pair(COLOR_TRACK, 60, -1);
     }
-    bkgd(COLOR_PAIR(COLOR_NORMAL));
+    bkgd(' ' | COLOR_PAIR(COLOR_NORMAL));
     attrset(COLOR_PAIR(COLOR_NORMAL));
 }
 
@@ -68,11 +76,11 @@ static void draw_border(int y, int x, int height, int width) {
 
 static void draw_progress(int y, int x, int width, double used_percent) {
     int filled = (int)((used_percent / 100.0) * width + 0.5);
-    attron(COLOR_PAIR(COLOR_ACCENT));
     for (int index = 0; index < width; index++) {
+        attron(COLOR_PAIR(index < filled ? COLOR_ACCENT : COLOR_TRACK));
         mvaddch(y, x + index, index < filled ? ACS_CKBOARD : ACS_BULLET);
+        attroff(COLOR_PAIR(index < filled ? COLOR_ACCENT : COLOR_TRACK));
     }
-    attroff(COLOR_PAIR(COLOR_ACCENT));
 }
 
 static int draw_rate_window(int y,
@@ -86,7 +94,11 @@ static int draw_rate_window(int y,
 
     attron(COLOR_PAIR(COLOR_MUTED));
     mvprintw(y, x, "%s", name);
-    mvprintw(y, x + width - 11, "%3.0f%% used", rate_window->used_percent);
+    mvprintw(y,
+             x + width - 22,
+             "%3.0f%% used · %3.0f%% left",
+             rate_window->used_percent,
+             100.0 - rate_window->used_percent);
     attroff(COLOR_PAIR(COLOR_MUTED));
     y++;
     draw_progress(y++, x, width, rate_window->used_percent);
@@ -103,7 +115,7 @@ static int rate_window_height(const CodexBarRateWindow *window) {
 }
 
 static int provider_content_height(const CodexBarProvider *provider) {
-    return ((provider->source || provider->account) ? 2 : 0) +
+    return ((provider->source || provider->account || provider->plan) ? 2 : 0) +
            rate_window_height(&provider->primary) +
            rate_window_height(&provider->secondary) +
            rate_window_height(&provider->tertiary) +
@@ -113,18 +125,17 @@ static int provider_content_height(const CodexBarProvider *provider) {
 
 static void draw_provider(const CodexBarProvider *provider, int y, int x, int height, int width) {
     int bottom = y + height;
-    if (provider->source || provider->account) {
+    if (provider->source || provider->account || provider->plan) {
         attron(COLOR_PAIR(COLOR_MUTED));
-        if (provider->source) {
-            mvprintw(y, x, "source: %s", provider->source);
+        GString *metadata = g_string_new(NULL);
+        const char *values[] = {provider->account, provider->plan, provider->source};
+        for (size_t index = 0; index < G_N_ELEMENTS(values); index++) {
+            if (!values[index]) continue;
+            if (metadata->len > 0) g_string_append(metadata, " · ");
+            g_string_append(metadata, values[index]);
         }
-        if (provider->account) {
-            int account_x = provider->source ? x + (int)strlen(provider->source) + 12 : x;
-            if (provider->source) {
-                mvaddstr(y, account_x - 3, "//");
-            }
-            draw_text(y, account_x, width - (account_x - x), provider->account);
-        }
+        draw_text(y, x, width, metadata->str);
+        g_string_free(metadata, TRUE);
         attroff(COLOR_PAIR(COLOR_MUTED));
         y += 2;
     }
@@ -135,7 +146,7 @@ static void draw_provider(const CodexBarProvider *provider, int y, int x, int he
 
     if (provider->has_credits && y < bottom) {
         attron(COLOR_PAIR(COLOR_MUTED));
-        mvprintw(y++, x, "CREDITS  %.2f", provider->credits_remaining);
+        mvprintw(y++, x, "CREDITS  %.2f left", provider->credits_remaining);
         attroff(COLOR_PAIR(COLOR_MUTED));
     }
     if (provider->error && y < bottom) {
@@ -178,13 +189,13 @@ static void draw_screen(const CodexBarSnapshot *snapshot, guint selected, const 
             break;
         }
         if (index == selected) {
-            attron(COLOR_PAIR(COLOR_ACCENT) | A_REVERSE | A_BOLD);
+            attron(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
         } else {
             attron(COLOR_PAIR(COLOR_MUTED));
         }
         mvaddnstr(panel_y + 1, tab_x, provider->provider, available);
         if (index == selected) {
-            attroff(COLOR_PAIR(COLOR_ACCENT) | A_REVERSE | A_BOLD);
+            attroff(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
         } else {
             attroff(COLOR_PAIR(COLOR_MUTED));
         }

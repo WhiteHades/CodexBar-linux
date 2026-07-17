@@ -11,9 +11,10 @@ static const char *fixture =
     "[{"
     "\"provider\":\"codex\","
     "\"account\":\"dev@example.com\","
+    "\"plan\":\"Pro\","
     "\"source\":\"oauth\","
     "\"usage\":{"
-    "\"primary\":{\"usedPercent\":28,\"resetDescription\":\"Resets in 2h\"},"
+    "\"primary\":{\"usedPercent\":28,\"resetDescription\":\"resets Thu, Jul 23 at 10:16\"},"
     "\"secondary\":{\"usedPercent\":71.4,\"resetDescription\":\"Resets Friday\"},"
     "\"tertiary\":null},"
     "\"credits\":{\"remaining\":12.5}"
@@ -34,6 +35,7 @@ static void test_parse_snapshot(void) {
     CodexBarProvider *codex = g_ptr_array_index(snapshot->providers, 0);
     g_assert_cmpstr(codex->provider, ==, "codex");
     g_assert_cmpstr(codex->account, ==, "dev@example.com");
+    g_assert_cmpstr(codex->plan, ==, "Pro");
     g_assert_true(codex->primary.available);
     g_assert_cmpfloat(codex->primary.used_percent, ==, 28.0);
     g_assert_true(codex->has_credits);
@@ -67,7 +69,13 @@ static void test_waybar_rendering(void) {
     g_assert_true(json_object_object_get_ex(object, "tooltip", &tooltip));
     g_assert_cmpstr(json_object_get_string(class_name), ==, "critical");
     g_assert_cmpint(json_object_get_int(percentage), ==, 91);
-    g_assert_nonnull(strstr(json_object_get_string(tooltip), "codex // dev@example.com"));
+    const char *tooltip_text = json_object_get_string(tooltip);
+    g_assert_true(g_str_has_prefix(tooltip_text, "codex · dev@example.com"));
+    g_assert_null(strstr(tooltip_text, "CODEXBAR // USAGE"));
+    g_assert_nonnull(strstr(tooltip_text, "Pro · oauth"));
+    g_assert_nonnull(strstr(tooltip_text, "28% used · 72% left"));
+    g_assert_nonnull(strstr(tooltip_text, "███░░░░░░░"));
+    g_assert_nonnull(strstr(tooltip_text, "resets Thu, Jul 23 at 10:16"));
     g_assert_nonnull(strstr(json_object_get_string(tooltip), "claude"));
 
     json_object_put(object);
@@ -116,6 +124,15 @@ static void test_codex_rate_limits(void) {
     g_assert_cmpfloat_with_epsilon(provider->primary.used_percent, 28.0, 0.0001);
     g_assert_cmpfloat_with_epsilon(provider->secondary.used_percent, 71.0, 0.0001);
     g_assert_cmpfloat_with_epsilon(provider->credits_remaining, 12.5, 0.0001);
+    g_assert_nonnull(strstr(provider->primary.reset_description, "2026"));
+
+    g_assert_true(codexbar_codex_apply_account(
+        provider,
+        "{\"id\":3,\"result\":{\"account\":{\"type\":\"chatgpt\",\"email\":\"dev@example.com\",\"planType\":\"pro\"}}}",
+        &error));
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->account, ==, "dev@example.com");
+    g_assert_cmpstr(provider->plan, ==, "Pro");
     codexbar_provider_free(provider);
 }
 

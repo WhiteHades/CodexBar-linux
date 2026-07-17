@@ -10,6 +10,16 @@ static GQuark codex_error_quark(void) {
     return g_quark_from_static_string("codexbar-codex-error");
 }
 
+static char *normalized_plan(const char *plan) {
+    if (g_str_equal(plan, "prolite")) return g_strdup("Pro 5x");
+    if (g_str_equal(plan, "pro")) return g_strdup("Pro");
+    if (g_str_equal(plan, "plus")) return g_strdup("Plus");
+    if (g_str_equal(plan, "team")) return g_strdup("Team");
+    if (g_str_equal(plan, "business")) return g_strdup("Business");
+    if (g_str_equal(plan, "free")) return g_strdup("Free");
+    return g_strdup(plan);
+}
+
 static char *reset_description(json_object *window) {
     json_object *reset = NULL;
     if (!json_object_object_get_ex(window, "resetsAt", &reset)) {
@@ -19,7 +29,7 @@ static char *reset_description(json_object *window) {
     if (!time) {
         return NULL;
     }
-    char *description = g_date_time_format(time, "resets %a %H:%M");
+    char *description = g_date_time_format(time, "resets %a, %b %d %Y at %H:%M");
     g_date_time_unref(time);
     return description;
 }
@@ -49,6 +59,10 @@ CodexBarProvider *codexbar_codex_parse_rate_limits(const char *json, GError **er
     CodexBarProvider *provider = g_new0(CodexBarProvider, 1);
     provider->provider = g_strdup("codex");
     provider->source = g_strdup("cli");
+    json_object *plan = NULL;
+    if (json_object_object_get_ex(limits, "planType", &plan) && json_object_is_type(plan, json_type_string)) {
+        provider->plan = normalized_plan(json_object_get_string(plan));
+    }
     parse_window(limits, "primary", &provider->primary);
     parse_window(limits, "secondary", &provider->secondary);
     json_object *credits = NULL;
@@ -63,6 +77,36 @@ CodexBarProvider *codexbar_codex_parse_rate_limits(const char *json, GError **er
     }
     json_object_put(root);
     return provider;
+}
+
+gboolean codexbar_codex_apply_account(CodexBarProvider *provider, const char *json, GError **error) {
+    json_object *root = json_tokener_parse(json);
+    json_object *result = NULL;
+    json_object *account = NULL;
+    if (!root || !json_object_object_get_ex(root, "result", &result) ||
+        !json_object_object_get_ex(result, "account", &account) ||
+        !json_object_is_type(account, json_type_object)) {
+        g_set_error_literal(error, codex_error_quark(), 5, "Codex account response is malformed");
+        if (root) json_object_put(root);
+        return FALSE;
+    }
+
+    json_object *type = NULL;
+    if (json_object_object_get_ex(account, "type", &type) && json_object_is_type(type, json_type_string) &&
+        g_str_equal(json_object_get_string(type), "chatgpt")) {
+        json_object *email = NULL;
+        json_object *plan = NULL;
+        if (json_object_object_get_ex(account, "email", &email) && json_object_is_type(email, json_type_string)) {
+            g_free(provider->account);
+            provider->account = g_strdup(json_object_get_string(email));
+        }
+        if (json_object_object_get_ex(account, "planType", &plan) && json_object_is_type(plan, json_type_string)) {
+            g_free(provider->plan);
+            provider->plan = normalized_plan(json_object_get_string(plan));
+        }
+    }
+    json_object_put(root);
+    return TRUE;
 }
 
 static gboolean write_message(GOutputStream *stream, const char *message, GError **error) {
@@ -144,6 +188,17 @@ CodexBarProvider *codexbar_codex_fetch(GError **error) {
     response = sent ? read_response(output, G_POLLABLE_INPUT_STREAM(raw_output), 2, error) : NULL;
     CodexBarProvider *provider = response ? codexbar_codex_parse_rate_limits(response, error) : NULL;
     g_free(response);
+    if (provider) {
+        GError *account_error = NULL;
+        if (write_message(input, "{\"id\":3,\"method\":\"account/read\",\"params\":{}}", &account_error)) {
+            response = read_response(output, G_POLLABLE_INPUT_STREAM(raw_output), 3, &account_error);
+            if (response) {
+                codexbar_codex_apply_account(provider, response, &account_error);
+                g_free(response);
+            }
+        }
+        g_clear_error(&account_error);
+    }
     g_subprocess_force_exit(process);
     g_object_unref(output);
     g_object_unref(process);
