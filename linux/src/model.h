@@ -2,6 +2,8 @@
 
 #include <glib.h>
 
+typedef struct json_object json_object;
+
 typedef enum {
     CODEXBAR_STATUS_NONE,
     CODEXBAR_STATUS_MINOR,
@@ -121,6 +123,8 @@ typedef struct {
     char *source;
     char *note;
     char *error;
+    int error_code;
+    char *error_kind;
     CodexBarProviderIdentity *identity;
     CodexBarServiceStatus *status;
     CodexBarProviderCost *provider_cost;
@@ -131,6 +135,7 @@ typedef struct {
     gint64 subscription_renews_at_ms;
     gboolean has_updated_at;
     gint64 updated_at_ms;
+    json_object *raw;
     GPtrArray *quota_windows;
     GPtrArray *balances;
 } CodexBarProvider;

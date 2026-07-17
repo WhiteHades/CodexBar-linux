@@ -12,6 +12,7 @@ configure_file(output: 'version.h', configuration: version_config)
 core_sources = files(
   'src/backend.c',
   'src/cli_config.c',
+  'src/cli_usage.c',
   'src/config.c',
   'src/codex.c',
   'src/http.c',
@@ -51,6 +52,9 @@ test(
 
 config_cli_test = find_program('tests/test_config_cli.sh')
 test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux])
+
+usage_cli_test = find_program('tests/test_usage_cli.sh')
+test('codexbar-linux-usage-cli', usage_cli_test, args: [codexbar_linux, files('tests/fake_backend.sh')])
 
 tui_actions_test = executable(
   'codexbar-linux-tui-actions-tests',

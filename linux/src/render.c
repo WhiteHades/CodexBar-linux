@@ -308,3 +308,207 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
 char *codexbar_render_waybar_error(const char *message) {
     return serialize_waybar("󰚩 !", message ? message : "CodexBar backend failed", "error", 0);
 }
+
+static json_object *timestamp_json(gint64 timestamp_ms) {
+    GDateTime *time = g_date_time_new_from_unix_utc(timestamp_ms / 1000);
+    if (!time) return NULL;
+    char *iso = g_date_time_format_iso8601(time);
+    json_object *value = json_object_new_string(iso);
+    g_free(iso);
+    g_date_time_unref(time);
+    return value;
+}
+
+static json_object *window_json(const CodexBarQuotaWindow *window) {
+    json_object *object = json_object_new_object();
+    json_object_object_add(object, "label", json_object_new_string(window->title));
+    if (window->usage_known) json_object_object_add(object, "usedPercent", json_object_new_double(window->used_percent));
+    if (window->has_window_minutes) {
+        json_object_object_add(object, "windowMinutes", json_object_new_int64(window->window_minutes));
+    }
+    if (window->has_resets_at) json_object_object_add(object, "resetsAt", timestamp_json(window->resets_at_ms));
+    if (window->detail) json_object_object_add(object, "detail", json_object_new_string(window->detail));
+    if (window->reset_description) {
+        json_object_object_add(object, "resetDescription", json_object_new_string(window->reset_description));
+    }
+    return object;
+}
+
+static json_object *pace_json(const CodexBarPace *pace) {
+    json_object *object = json_object_new_object();
+    const char *stage = "unknown";
+    switch (pace->stage) {
+    case CODEXBAR_PACE_ON_TRACK: stage = "onTrack"; break;
+    case CODEXBAR_PACE_SLIGHTLY_AHEAD: stage = "slightlyAhead"; break;
+    case CODEXBAR_PACE_AHEAD: stage = "ahead"; break;
+    case CODEXBAR_PACE_FAR_AHEAD: stage = "farAhead"; break;
+    case CODEXBAR_PACE_SLIGHTLY_BEHIND: stage = "slightlyBehind"; break;
+    case CODEXBAR_PACE_BEHIND: stage = "behind"; break;
+    case CODEXBAR_PACE_FAR_BEHIND: stage = "farBehind"; break;
+    case CODEXBAR_PACE_UNKNOWN: break;
+    }
+    json_object_object_add(object, "stage", json_object_new_string(stage));
+    json_object_object_add(object, "deltaPercent", json_object_new_double(pace->delta_percent));
+    json_object_object_add(object, "expectedUsedPercent", json_object_new_double(pace->expected_used_percent));
+    json_object_object_add(object, "willLastToReset", json_object_new_boolean(pace->will_last));
+    if (pace->has_eta) json_object_object_add(object, "etaSeconds", json_object_new_double(pace->eta_seconds));
+    if (pace->has_runout_probability) {
+        json_object_object_add(object, "runOutProbability", json_object_new_double(pace->runout_probability));
+    }
+    if (pace->summary) json_object_object_add(object, "summary", json_object_new_string(pace->summary));
+    return object;
+}
+
+static json_object *provider_json(const CodexBarProvider *provider) {
+    if (provider->raw) {
+        return json_tokener_parse(json_object_to_json_string_ext(provider->raw, JSON_C_TO_STRING_PLAIN));
+    }
+    json_object *object = json_object_new_object();
+    json_object_object_add(object, "provider", json_object_new_string(provider->provider));
+    if (provider->account) json_object_object_add(object, "account", json_object_new_string(provider->account));
+    if (provider->plan) json_object_object_add(object, "plan", json_object_new_string(provider->plan));
+    if (provider->source) json_object_object_add(object, "source", json_object_new_string(provider->source));
+    if (provider->note) json_object_object_add(object, "note", json_object_new_string(provider->note));
+    if (provider->error) {
+        json_object *error = json_object_new_object();
+        json_object_object_add(error, "message", json_object_new_string(provider->error));
+        json_object_object_add(error, "code", json_object_new_int(provider->error_code ? provider->error_code : 1));
+        json_object_object_add(
+            error, "kind", json_object_new_string(provider->error_kind ? provider->error_kind : "runtime"));
+        json_object_object_add(object, "error", error);
+        return object;
+    }
+
+    json_object *usage = json_object_new_object();
+    const char *keys[] = {"primary", "secondary", "tertiary"};
+    for (guint index = 0; index < G_N_ELEMENTS(keys); index++) {
+        if (index < provider->quota_windows->len) {
+            json_object_object_add(
+                usage, keys[index], window_json(codexbar_provider_quota_window(provider, index)));
+        } else {
+            json_object_object_add(usage, keys[index], NULL);
+        }
+    }
+    if (provider->quota_windows->len > G_N_ELEMENTS(keys)) {
+        json_object *extra = json_object_new_array();
+        for (guint index = G_N_ELEMENTS(keys); index < provider->quota_windows->len; index++) {
+            const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+            json_object *named = json_object_new_object();
+            json_object_object_add(named, "id", json_object_new_string(window->id));
+            json_object_object_add(named, "title", json_object_new_string(window->title));
+            json_object_object_add(named, "window", window_json(window));
+            json_object_object_add(named, "usageKnown", json_object_new_boolean(window->usage_known));
+            json_object_array_add(extra, named);
+        }
+        json_object_object_add(usage, "extraRateWindows", extra);
+    }
+    gint64 rendered_at_ms = provider->has_updated_at ? provider->updated_at_ms : g_get_real_time() / 1000;
+    json_object_object_add(usage, "updatedAt", timestamp_json(rendered_at_ms));
+    if (provider->has_subscription_expires_at) {
+        json_object_object_add(usage, "subscriptionExpiresAt", timestamp_json(provider->subscription_expires_at_ms));
+    }
+    if (provider->has_subscription_renews_at) {
+        json_object_object_add(usage, "subscriptionRenewsAt", timestamp_json(provider->subscription_renews_at_ms));
+    }
+    if (provider->identity) {
+        json_object *identity = json_object_new_object();
+        json_object_object_add(identity, "providerID", json_object_new_string(provider->provider));
+        if (provider->account) json_object_object_add(identity, "accountEmail", json_object_new_string(provider->account));
+        if (provider->identity->organization) {
+            json_object_object_add(
+                identity, "accountOrganization", json_object_new_string(provider->identity->organization));
+        }
+        if (provider->identity->account_id) {
+            json_object_object_add(identity, "accountID", json_object_new_string(provider->identity->account_id));
+        }
+        if (provider->identity->login_method) {
+            json_object_object_add(identity, "loginMethod", json_object_new_string(provider->identity->login_method));
+        }
+        json_object_object_add(usage, "identity", identity);
+    }
+    if (provider->provider_cost) {
+        const CodexBarProviderCost *cost = provider->provider_cost;
+        json_object *value = json_object_new_object();
+        json_object_object_add(value, "used", json_object_new_double(cost->used));
+        json_object_object_add(value, "limit", json_object_new_double(cost->limit));
+        json_object_object_add(value, "currencyCode", json_object_new_string(cost->currency));
+        if (cost->period) json_object_object_add(value, "period", json_object_new_string(cost->period));
+        if (cost->has_resets_at) json_object_object_add(value, "resetsAt", timestamp_json(cost->resets_at_ms));
+        if (cost->has_next_regen) {
+            json_object_object_add(value, "nextRegenAmount", json_object_new_double(cost->next_regen));
+        }
+        if (cost->has_personal_used) {
+            json_object_object_add(value, "personalUsed", json_object_new_double(cost->personal_used));
+        }
+        json_object_object_add(usage, "providerCost", value);
+    }
+    json_object_object_add(object, "usage", usage);
+
+    if (provider->balances->len > 0 && g_str_equal(provider->provider, "codex")) {
+        const CodexBarBalance *balance = codexbar_provider_balance(provider, 0);
+        json_object *credits = json_object_new_object();
+        json_object_object_add(credits, "remaining", json_object_new_double(balance->remaining));
+        json_object_object_add(credits, "events", json_object_new_array());
+        json_object_object_add(credits, "updatedAt", timestamp_json(rendered_at_ms));
+        if (balance->has_used) json_object_object_add(credits, "used", json_object_new_double(balance->used));
+        if (balance->has_limit) json_object_object_add(credits, "limit", json_object_new_double(balance->limit));
+        json_object_object_add(object, "credits", credits);
+    }
+    json_object *pace = json_object_new_object();
+    gboolean has_pace = FALSE;
+    for (guint index = 0; index < MIN(provider->quota_windows->len, 2); index++) {
+        const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+        if (!window->pace) continue;
+        json_object_object_add(pace, index == 0 ? "primary" : "secondary", pace_json(window->pace));
+        has_pace = TRUE;
+    }
+    if (has_pace) {
+        json_object_object_add(object, "pace", pace);
+    } else {
+        json_object_put(pace);
+    }
+    return object;
+}
+
+char *codexbar_render_usage_json(const CodexBarSnapshot *snapshot, gboolean pretty) {
+    g_return_val_if_fail(snapshot != NULL, NULL);
+    json_object *array = json_object_new_array_ext((int)snapshot->providers->len);
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        json_object_array_add(array, provider_json(g_ptr_array_index(snapshot->providers, index)));
+    }
+    char *result = g_strdup(json_object_to_json_string_ext(
+        array, pretty ? JSON_C_TO_STRING_PRETTY : JSON_C_TO_STRING_PLAIN));
+    json_object_put(array);
+    return result;
+}
+
+char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
+    g_return_val_if_fail(snapshot != NULL, NULL);
+    GString *text = g_string_new(NULL);
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
+        if (index > 0) g_string_append_c(text, '\n');
+        g_string_append(text, provider->provider);
+        if (provider->account) g_string_append_printf(text, " · %s", provider->account);
+        if (provider->plan) g_string_append_printf(text, " · %s", provider->plan);
+        if (provider->source) g_string_append_printf(text, " [%s]", provider->source);
+        g_string_append_c(text, '\n');
+        for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
+            const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, window_index);
+            g_string_append_printf(text, "  %s: ", window->title);
+            if (window->usage_known) {
+                g_string_append_printf(text, "%.0f%% used", window->used_percent);
+            } else {
+                g_string_append(text, "usage unavailable");
+            }
+            g_string_append_c(text, '\n');
+        }
+        for (guint balance_index = 0; balance_index < provider->balances->len; balance_index++) {
+            const CodexBarBalance *balance = codexbar_provider_balance(provider, balance_index);
+            g_string_append_printf(
+                text, "  %s: %.2f %s left\n", balance->title, balance->remaining, balance->unit);
+        }
+        if (provider->error) g_string_append_printf(text, "  error: %s\n", provider->error);
+    }
+    return g_string_free(text, FALSE);
+}

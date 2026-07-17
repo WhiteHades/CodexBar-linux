@@ -7,16 +7,23 @@
 #include "simple_providers.h"
 
 #include <gio/gio.h>
+#include <string.h>
 
-static CodexBarSnapshot *fetch_oracle(const char *backend, GError **error) {
-
-    const char *argv[] = {
-        backend,
-        "usage",
-        "--format",
-        "json",
-        NULL,
-    };
+static CodexBarSnapshot *fetch_oracle(const char *backend,
+                                      const char *provider,
+                                      const char *source,
+                                      GError **error) {
+    const char *argv[10] = {backend, "usage", "--format", "json", NULL};
+    guint argument = 4;
+    if (provider) {
+        argv[argument++] = "--provider";
+        argv[argument++] = provider;
+    }
+    if (source) {
+        argv[argument++] = "--source";
+        argv[argument++] = source;
+    }
+    argv[argument] = NULL;
 
     GSubprocess *process = g_subprocess_newv(argv,
                                              G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE,
@@ -35,7 +42,8 @@ static CodexBarSnapshot *fetch_oracle(const char *backend, GError **error) {
         return NULL;
     }
 
-    if (!g_subprocess_get_successful(process)) {
+    CodexBarSnapshot *snapshot = stdout_text && stdout_text[0] != '\0' ? codexbar_snapshot_parse(stdout_text, NULL) : NULL;
+    if (!snapshot && !g_subprocess_get_successful(process)) {
         g_set_error(error,
                     G_IO_ERROR,
                     G_IO_ERROR_FAILED,
@@ -47,8 +55,7 @@ static CodexBarSnapshot *fetch_oracle(const char *backend, GError **error) {
         g_free(stderr_text);
         return NULL;
     }
-
-    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(stdout_text, error);
+    if (!snapshot) snapshot = codexbar_snapshot_parse(stdout_text, error);
     g_object_unref(process);
     g_free(stdout_text);
     g_free(stderr_text);
@@ -60,6 +67,21 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
     provider->provider = g_strdup(config->id);
     provider->source = g_strdup(source);
     provider->error = g_strdup(error ? error->message : "Provider fetch failed without a diagnostic");
+    provider->error_code = 1;
+    provider->error_kind = g_strdup("runtime");
+    if (error && error->domain == G_SPAWN_ERROR && error->code == G_SPAWN_ERROR_NOENT) {
+        provider->error_code = 2;
+        g_free(provider->error_kind);
+        provider->error_kind = g_strdup("binaryNotFound");
+    } else if (error && (strstr(error->message, "malformed") || strstr(error->message, "Invalid backend JSON"))) {
+        provider->error_code = 3;
+        g_free(provider->error_kind);
+        provider->error_kind = g_strdup("parse");
+    } else if (error && (strstr(error->message, "timed out") || strstr(error->message, "Timeout"))) {
+        provider->error_code = 4;
+        g_free(provider->error_kind);
+        provider->error_kind = g_strdup("timeout");
+    }
     g_clear_error(&error);
     return provider;
 }
@@ -115,7 +137,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
 CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
     const char *backend = g_getenv("CODEXBAR_BACKEND");
     if (backend && backend[0] != '\0') {
-        return fetch_oracle(backend, error);
+        return fetch_oracle(backend, NULL, NULL, error);
     }
 
     CodexBarConfig *config = codexbar_config_load(error);
@@ -133,4 +155,64 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
     }
     codexbar_config_free(config);
     return snapshot;
+}
+
+CodexBarSnapshot *codexbar_backend_fetch_all(GError **error) {
+    const char *backend = g_getenv("CODEXBAR_BACKEND");
+    if (backend && backend[0] != '\0') return fetch_oracle(backend, "all", NULL, error);
+    CodexBarConfig *config = codexbar_config_load(error);
+    if (!config) return NULL;
+    CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+    for (guint index = 0; index < codexbar_provider_registry_count(); index++) {
+        const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_at(index);
+        CodexBarProviderConfig *provider_config = codexbar_config_provider(config, descriptor->id);
+        g_ptr_array_add(snapshot->providers, fetch_provider(provider_config));
+    }
+    codexbar_config_free(config);
+    return snapshot;
+}
+
+CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const char *source, GError **error) {
+    const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(provider_name);
+    if (!descriptor) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Unknown provider: %s", provider_name);
+        return NULL;
+    }
+    if (source && !codexbar_provider_supports_source(descriptor, source)) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    G_IO_ERROR_NOT_SUPPORTED,
+                    "%s does not support source '%s'",
+                    descriptor->display_name,
+                    source);
+        return NULL;
+    }
+    const char *backend = g_getenv("CODEXBAR_BACKEND");
+    if (backend && backend[0] != '\0') {
+        CodexBarSnapshot *snapshot = fetch_oracle(backend, descriptor->cli_name, source, error);
+        if (!snapshot) return NULL;
+        CodexBarProvider *result = NULL;
+        for (guint index = 0; index < snapshot->providers->len; index++) {
+            CodexBarProvider *candidate = g_ptr_array_index(snapshot->providers, index);
+            if (g_str_equal(candidate->provider, descriptor->id)) {
+                result = g_ptr_array_steal_index(snapshot->providers, index);
+                break;
+            }
+        }
+        codexbar_snapshot_free(snapshot);
+        if (!result) {
+            g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Provider did not return data: %s", descriptor->id);
+        }
+        return result;
+    }
+
+    CodexBarConfig *config = codexbar_config_load(error);
+    if (!config) return NULL;
+    CodexBarProviderConfig *stored = codexbar_config_provider(config, descriptor->id);
+    CodexBarProviderConfig selected = *stored;
+    selected.source = (char *)(source ? source : stored->source);
+    CodexBarProvider *result = fetch_provider(&selected);
+    codexbar_config_free(config);
+    return result;
 }

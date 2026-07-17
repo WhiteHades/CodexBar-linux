@@ -285,6 +285,16 @@ static char *parse_error(json_object *payload) {
     return duplicate_json_string(error, "message");
 }
 
+static void parse_error_metadata(json_object *payload, CodexBarProvider *provider) {
+    json_object *error = NULL;
+    if (!json_object_object_get_ex(payload, "error", &error) || !json_object_is_type(error, json_type_object)) return;
+    json_object *code = NULL;
+    if (json_object_object_get_ex(error, "code", &code) && json_object_is_type(code, json_type_int)) {
+        provider->error_code = json_object_get_int(code);
+    }
+    provider->error_kind = duplicate_json_string(error, "kind");
+}
+
 static CodexBarServiceStatusIndicator parse_status_indicator(const char *indicator) {
     if (g_strcmp0(indicator, "none") == 0) return CODEXBAR_STATUS_NONE;
     if (g_strcmp0(indicator, "minor") == 0) return CODEXBAR_STATUS_MINOR;
@@ -465,10 +475,12 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     g_free(provider->source);
     g_free(provider->note);
     g_free(provider->error);
+    g_free(provider->error_kind);
     codexbar_provider_identity_free(provider->identity);
     codexbar_service_status_free(provider->status);
     codexbar_provider_cost_free(provider->provider_cost);
     codexbar_token_cost_free(provider->token_cost);
+    if (provider->raw) json_object_put(provider->raw);
     g_ptr_array_unref(provider->quota_windows);
     g_ptr_array_unref(provider->balances);
     g_free(provider);
@@ -508,12 +520,14 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         }
 
         CodexBarProvider *provider = codexbar_provider_new();
+        provider->raw = json_object_get(payload);
         provider->provider = duplicate_json_string(payload, "provider");
         provider->account = duplicate_json_string(payload, "account");
         provider->plan = duplicate_json_string(payload, "plan");
         provider->source = duplicate_json_string(payload, "source");
         provider->note = duplicate_json_string(payload, "note");
         provider->error = parse_error(payload);
+        parse_error_metadata(payload, provider);
 
         json_object *status = NULL;
         if (json_object_object_get_ex(payload, "status", &status)) {

@@ -18,6 +18,7 @@ the binary is at `.build/c23/linux/codexbar-linux`.
 ```bash
 codexbar-linux waybar
 codexbar-linux tui
+codexbar-linux usage --provider openrouter --format json --pretty
 codexbar-linux config validate
 codexbar-linux config providers
 codexbar-linux --version
@@ -26,6 +27,9 @@ codexbar-linux --version
 `waybar` prints one line of json for the waybar module and its hover tooltip.
 
 `tui` opens the interactive terminal interface.
+
+invoking `codexbar-linux` without a command defaults to `usage`. provider selection accepts stable IDs, CLI names, and
+aliases; `--provider both` selects Codex and Claude, while explicit `--provider all` selects the full registry.
 
 the native engine currently owns codex, openrouter, deepseek, moonshot, elevenlabs, crof, venice, and zenmux. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or

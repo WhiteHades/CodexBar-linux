@@ -705,6 +705,19 @@ static void test_claude_presentation_metadata(void) {
 
     json_object_put(object);
     g_free(rendered);
+
+    char *usage_json = codexbar_render_usage_json(snapshot, FALSE);
+    CodexBarSnapshot *round_trip = codexbar_snapshot_parse(usage_json, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(round_trip->providers->len, ==, 1);
+    const CodexBarProvider *round_trip_provider = g_ptr_array_index(round_trip->providers, 0);
+    g_assert_cmpstr(round_trip_provider->account, ==, "owner@example.com");
+    g_assert_cmpuint(round_trip_provider->quota_windows->len, ==, 3);
+    g_assert_cmpfloat(codexbar_provider_highest_used(round_trip_provider), ==, 74.0);
+    g_assert_nonnull(round_trip_provider->provider_cost);
+    g_assert_nonnull(window_at(round_trip_provider, 0)->pace);
+    codexbar_snapshot_free(round_trip);
+    g_free(usage_json);
     codexbar_snapshot_free(snapshot);
 }
 
