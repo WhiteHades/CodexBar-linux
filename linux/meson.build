@@ -16,6 +16,7 @@ core_sources = files(
   'src/http.c',
   'src/model.c',
   'src/openrouter.c',
+  'src/provider_registry.c',
   'src/render.c',
   'src/simple_providers.c',
 )

@@ -3,6 +3,7 @@
 #include "config.h"
 #include "codex.h"
 #include "openrouter.h"
+#include "provider_registry.h"
 #include "simple_providers.h"
 
 #include <gio/gio.h>
@@ -54,6 +55,63 @@ static CodexBarSnapshot *fetch_oracle(const char *backend, GError **error) {
     return snapshot;
 }
 
+static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, const char *source, GError *error) {
+    CodexBarProvider *provider = codexbar_provider_new();
+    provider->provider = g_strdup(config->id);
+    provider->source = g_strdup(source);
+    provider->error = g_strdup(error ? error->message : "Provider fetch failed without a diagnostic");
+    g_clear_error(&error);
+    return provider;
+}
+
+static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
+    const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(config->id);
+    if (!descriptor) {
+        GError *error = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Unknown provider: %s", config->id);
+        return provider_error(config, config->source ? config->source : "auto", error);
+    }
+
+    const char *configured_source = config->source ? config->source : "auto";
+    const char *native_source = descriptor->native_provider == CODEXBAR_NATIVE_CODEX
+                                    ? "cli"
+                                    : descriptor->native_provider == CODEXBAR_NATIVE_UNAVAILABLE ? NULL : "api";
+    if (!codexbar_provider_supports_source(descriptor, configured_source)) {
+        GError *error = g_error_new(G_IO_ERROR,
+                                    G_IO_ERROR_NOT_SUPPORTED,
+                                    "%s does not support source '%s'",
+                                    descriptor->display_name,
+                                    configured_source);
+        return provider_error(config, configured_source, error);
+    }
+    if (native_source && !g_str_equal(configured_source, "auto") && !g_str_equal(configured_source, native_source)) {
+        GError *error = g_error_new(G_IO_ERROR,
+                                    G_IO_ERROR_NOT_SUPPORTED,
+                                    "%s source '%s' has no native Linux implementation yet",
+                                    descriptor->display_name,
+                                    configured_source);
+        return provider_error(config, configured_source, error);
+    }
+
+    GError *error = NULL;
+    CodexBarProvider *provider = NULL;
+    switch (descriptor->native_provider) {
+    case CODEXBAR_NATIVE_CODEX:
+        provider = codexbar_codex_fetch(&error);
+        break;
+    case CODEXBAR_NATIVE_OPENROUTER:
+        provider = codexbar_openrouter_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_SIMPLE:
+        provider = codexbar_simple_provider_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_UNAVAILABLE:
+        error = g_error_new(
+            G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "%s has no native Linux source yet", descriptor->display_name);
+        break;
+    }
+    return provider ? provider : provider_error(config, native_source ? native_source : configured_source, error);
+}
+
 CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
     const char *backend = g_getenv("CODEXBAR_BACKEND");
     if (backend && backend[0] != '\0') {
@@ -71,51 +129,7 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
         if (!provider_config->enabled) {
             continue;
         }
-        if (g_str_equal(provider_config->id, "codex")) {
-            GError *provider_error = NULL;
-            CodexBarProvider *provider = codexbar_codex_fetch(&provider_error);
-            if (!provider) {
-                provider = codexbar_provider_new();
-                provider->provider = g_strdup("codex");
-                provider->source = g_strdup("cli");
-                provider->error = g_strdup(provider_error->message);
-                g_error_free(provider_error);
-            }
-            g_ptr_array_add(snapshot->providers, provider);
-        } else if (g_str_equal(provider_config->id, "openrouter")) {
-            GError *provider_error = NULL;
-            CodexBarProvider *provider = codexbar_openrouter_fetch(provider_config, &provider_error);
-            if (!provider) {
-                provider = codexbar_provider_new();
-                provider->provider = g_strdup("openrouter");
-                provider->source = g_strdup("api");
-                provider->error = g_strdup(provider_error->message);
-                g_error_free(provider_error);
-            }
-            g_ptr_array_add(snapshot->providers, provider);
-        } else if (g_str_equal(provider_config->id, "deepseek") ||
-                   g_str_equal(provider_config->id, "moonshot") ||
-                   g_str_equal(provider_config->id, "elevenlabs") ||
-                   g_str_equal(provider_config->id, "crof") ||
-                   g_str_equal(provider_config->id, "venice") ||
-                   g_str_equal(provider_config->id, "zenmux")) {
-            GError *provider_error = NULL;
-            CodexBarProvider *provider = codexbar_simple_provider_fetch(provider_config, &provider_error);
-            if (!provider) {
-                provider = codexbar_provider_new();
-                provider->provider = g_strdup(provider_config->id);
-                provider->source = g_strdup("api");
-                provider->error = g_strdup(provider_error->message);
-                g_error_free(provider_error);
-            }
-            g_ptr_array_add(snapshot->providers, provider);
-        } else {
-            CodexBarProvider *provider = codexbar_provider_new();
-            provider->provider = g_strdup(provider_config->id);
-            provider->source = g_strdup(provider_config->source ? provider_config->source : "auto");
-            provider->error = g_strdup_printf("%s is not migrated to the native C engine yet", provider_config->id);
-            g_ptr_array_add(snapshot->providers, provider);
-        }
+        g_ptr_array_add(snapshot->providers, fetch_provider(provider_config));
     }
     codexbar_config_free(config);
     return snapshot;

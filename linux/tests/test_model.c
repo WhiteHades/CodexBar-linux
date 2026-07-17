@@ -3,8 +3,9 @@
 #include "http.h"
 #include "model.h"
 #include "openrouter.h"
-#include "simple_providers.h"
+#include "provider_registry.h"
 #include "render.h"
+#include "simple_providers.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -821,6 +822,47 @@ static void test_codex_rate_limits(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_provider_registry(void) {
+    const char *expected_ids[] = {
+        "codex", "openai", "azureopenai", "claude", "cursor", "opencode", "opencodego", "alibaba",
+        "alibabatokenplan", "factory", "gemini", "antigravity", "copilot", "devin", "zai", "minimax",
+        "manus", "kimi", "kilo", "kiro", "vertexai", "augment", "jetbrains", "kimik2", "moonshot",
+        "amp", "t3chat", "ollama", "synthetic", "warp", "openrouter", "elevenlabs", "windsurf", "zed",
+        "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek", "codebuff", "crof",
+        "venice", "commandcode", "qoder", "stepfun", "bedrock", "grok", "groq", "llmproxy", "litellm",
+        "deepgram", "poe", "chutes", "crossmodel", "clawrouter", "sub2api", "wayfinder", "zenmux",
+    };
+    g_assert_cmpuint(codexbar_provider_registry_count(), ==, G_N_ELEMENTS(expected_ids));
+    for (guint index = 0; index < G_N_ELEMENTS(expected_ids); index++) {
+        const CodexBarProviderDescriptor *provider = codexbar_provider_registry_at(index);
+        g_assert_nonnull(provider);
+        g_assert_cmpstr(provider->id, ==, expected_ids[index]);
+        g_assert_true(codexbar_provider_registry_find(provider->id) == provider);
+        g_assert_true(codexbar_provider_registry_find(provider->cli_name) == provider);
+        if (provider->aliases) {
+            char **aliases = g_strsplit(provider->aliases, ",", -1);
+            for (guint alias_index = 0; aliases[alias_index]; alias_index++) {
+                g_assert_true(codexbar_provider_registry_find(aliases[alias_index]) == provider);
+            }
+            g_strfreev(aliases);
+        }
+    }
+    g_assert_null(codexbar_provider_registry_at(G_N_ELEMENTS(expected_ids)));
+    g_assert_null(codexbar_provider_registry_find("unknown"));
+    g_assert_cmpstr(codexbar_provider_registry_find("aoai")->id, ==, "azureopenai");
+    g_assert_cmpstr(codexbar_provider_registry_find("or")->id, ==, "openrouter");
+    g_assert_cmpstr(codexbar_provider_registry_find("groq")->id, ==, "groq");
+    g_assert_cmpstr(codexbar_provider_registry_find("kimiK2")->id, ==, "kimik2");
+    const CodexBarProviderDescriptor *codex = codexbar_provider_registry_find("codex");
+    g_assert_true(codex->default_enabled);
+    g_assert_true(codexbar_provider_supports_source(codex, "oauth"));
+    g_assert_false(codexbar_provider_supports_source(codex, "api"));
+    g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "api"));
+    g_assert_false(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "web"));
+    g_assert_true(codexbar_provider_status_is_pollable(codex));
+    g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
@@ -841,5 +883,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
+    g_test_add_func("/provider/registry", test_provider_registry);
     return g_test_run();
 }
