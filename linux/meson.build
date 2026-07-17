@@ -11,6 +11,7 @@ configure_file(output: 'version.h', configuration: version_config)
 core_sources = files(
   'src/backend.c',
   'src/config.c',
+  'src/codex.c',
   'src/http.c',
   'src/model.c',
   'src/openrouter.c',

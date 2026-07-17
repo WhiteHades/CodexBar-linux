@@ -1,3 +1,4 @@
+#include "codex.h"
 #include "model.h"
 #include "openrouter.h"
 #include "simple_providers.h"
@@ -106,6 +107,18 @@ static void test_simple_provider_parsers(void) {
     codexbar_provider_free(elevenlabs);
 }
 
+static void test_codex_rate_limits(void) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_codex_parse_rate_limits(
+        "{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":28,\"windowDurationMins\":300,\"resetsAt\":1776216359},\"secondary\":{\"usedPercent\":71,\"windowDurationMins\":10080,\"resetsAt\":1776395384},\"credits\":{\"balance\":\"12.5\"}}}}",
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(provider->primary.used_percent, 28.0, 0.0001);
+    g_assert_cmpfloat_with_epsilon(provider->secondary.used_percent, 71.0, 0.0001);
+    g_assert_cmpfloat_with_epsilon(provider->credits_remaining, 12.5, 0.0001);
+    codexbar_provider_free(provider);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
@@ -113,5 +126,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/render/waybar", test_waybar_rendering);
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
+    g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
     return g_test_run();
 }

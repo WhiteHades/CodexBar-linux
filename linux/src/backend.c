@@ -1,6 +1,7 @@
 #include "backend.h"
 
 #include "config.h"
+#include "codex.h"
 #include "openrouter.h"
 #include "simple_providers.h"
 
@@ -70,7 +71,18 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
         if (!provider_config->enabled) {
             continue;
         }
-        if (g_str_equal(provider_config->id, "openrouter")) {
+        if (g_str_equal(provider_config->id, "codex")) {
+            GError *provider_error = NULL;
+            CodexBarProvider *provider = codexbar_codex_fetch(&provider_error);
+            if (!provider) {
+                provider = g_new0(CodexBarProvider, 1);
+                provider->provider = g_strdup("codex");
+                provider->source = g_strdup("cli");
+                provider->error = g_strdup(provider_error->message);
+                g_error_free(provider_error);
+            }
+            g_ptr_array_add(snapshot->providers, provider);
+        } else if (g_str_equal(provider_config->id, "openrouter")) {
             GError *provider_error = NULL;
             CodexBarProvider *provider = codexbar_openrouter_fetch(provider_config, &provider_error);
             if (!provider) {
