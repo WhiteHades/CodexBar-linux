@@ -104,11 +104,14 @@ static const char *fixture =
     "\"source\":\"oauth\","
     "\"note\":\"plan expires Jul 31, 2026\","
     "\"usage\":{"
-    "\"primary\":{\"label\":\"session\",\"usedPercent\":28,"
+    "\"primary\":{\"label\":\"session\",\"usedPercent\":28,\"windowDurationMins\":300,"
     "\"resetDescription\":\"28 / 100 requests\","
     "\"resetsAt\":\"resets Thu, Jul 23 at 10:16\"},"
-    "\"secondary\":{\"usedPercent\":71.4,\"resetDescription\":\"Resets Friday\"},"
-    "\"tertiary\":null},"
+    "\"secondary\":{\"usedPercent\":71.4,\"resetDescription\":\"Resets Friday\","
+    "\"resetsAt\":1776216359},"
+    "\"tertiary\":null,"
+    "\"extraRateWindows\":[{\"id\":\"sonnet\",\"title\":\"Sonnet\","
+    "\"window\":{\"usedPercent\":0},\"usageKnown\":true}]},"
     "\"credits\":{\"label\":\"balance\",\"remaining\":12.5}"
     "},{"
     "\"provider\":\"claude\","
@@ -116,6 +119,18 @@ static const char *fixture =
     "\"usage\":{\"primary\":{\"usedPercent\":91}},"
     "\"error\":null"
     "}]";
+
+static CodexBarQuotaWindow *window_at(const CodexBarProvider *provider, guint index) {
+    CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+    g_assert_nonnull(window);
+    return window;
+}
+
+static CodexBarBalance *balance_at(const CodexBarProvider *provider, guint index) {
+    CodexBarBalance *balance = codexbar_provider_balance(provider, index);
+    g_assert_nonnull(balance);
+    return balance;
+}
 
 static void test_parse_snapshot(void) {
     GError *error = NULL;
@@ -129,13 +144,115 @@ static void test_parse_snapshot(void) {
     g_assert_cmpstr(codex->account, ==, "dev@example.com");
     g_assert_cmpstr(codex->plan, ==, "Pro");
     g_assert_cmpstr(codex->note, ==, "plan expires Jul 31, 2026");
-    g_assert_true(codex->primary.available);
-    g_assert_cmpstr(codex->primary.label, ==, "session");
-    g_assert_cmpfloat(codex->primary.used_percent, ==, 28.0);
-    g_assert_true(codex->has_credits);
-    g_assert_cmpstr(codex->credits_label, ==, "balance");
-    g_assert_cmpfloat(codex->credits_remaining, ==, 12.5);
+    g_assert_cmpuint(codex->quota_windows->len, ==, 3);
+    CodexBarQuotaWindow *window = window_at(codex, 0);
+    g_assert_cmpstr(window->id, ==, "primary");
+    g_assert_cmpstr(window->title, ==, "session");
+    g_assert_true(window->usage_known);
+    g_assert_cmpfloat(window->used_percent, ==, 28.0);
+    g_assert_true(window->has_window_minutes);
+    g_assert_cmpint(window->window_minutes, ==, 300);
+    g_assert_cmpstr(window->detail, ==, "28 / 100 requests");
+    g_assert_cmpstr(window->reset_description, ==, "resets Thu, Jul 23 at 10:16");
+    g_assert_true(window_at(codex, 1)->has_resets_at);
+    g_assert_cmpint(window_at(codex, 1)->resets_at_ms, ==, G_GINT64_CONSTANT(1776216359000));
+    g_assert_cmpstr(window_at(codex, 2)->id, ==, "sonnet");
+    g_assert_cmpstr(window_at(codex, 2)->title, ==, "Sonnet");
+    g_assert_cmpuint(codex->balances->len, ==, 1);
+    CodexBarBalance *balance = balance_at(codex, 0);
+    g_assert_cmpstr(balance->id, ==, "credits");
+    g_assert_cmpstr(balance->title, ==, "balance");
+    g_assert_cmpfloat(balance->remaining, ==, 12.5);
     g_assert_cmpfloat(codexbar_snapshot_highest_used(snapshot), ==, 91.0);
+    codexbar_snapshot_free(snapshot);
+}
+
+static void test_parse_canonical_collections(void) {
+    const char *json =
+        "[{\"provider\":\"dynamic\",\"quotaWindows\":["
+        "{\"id\":\"hourly\",\"title\":\"hourly\",\"usageKnown\":true,\"usedPercent\":12.5,"
+        "\"windowMinutes\":60,\"resetsAt\":1776216359000,\"detail\":\"25 / 200\"},"
+        "{\"id\":\"daily\",\"title\":\"daily\",\"usageKnown\":true,\"usedPercent\":42,"
+        "\"resetsAt\":\"2026-04-15T05:25:59.123Z\"},"
+        "{\"id\":\"monthly\",\"title\":\"monthly\",\"usageKnown\":false},"
+        "{\"id\":\"extra\",\"title\":\"extra\",\"usageKnown\":true,\"usedPercent\":88},"
+        "{\"id\":\"hourly\",\"title\":\"hourly updated\",\"usageKnown\":true,\"usedPercent\":50}],"
+        "\"usage\":{\"primary\":{\"usedPercent\":99}},"
+        "\"balances\":[{\"id\":\"payg\",\"title\":\"pay as you go\",\"remaining\":7.5,"
+        "\"unit\":\"USD\",\"used\":2.5,\"limit\":10,\"expiry\":1776216359}],"
+        "\"credits\":{\"remaining\":99}}]";
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
+    g_assert_no_error(error);
+    CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 4);
+    g_assert_cmpuint(provider->balances->len, ==, 1);
+    CodexBarQuotaWindow *hourly = window_at(provider, 0);
+    g_assert_cmpstr(hourly->title, ==, "hourly updated");
+    g_assert_cmpfloat(hourly->used_percent, ==, 50.0);
+    CodexBarQuotaWindow *daily = window_at(provider, 1);
+    g_assert_cmpint(daily->resets_at_ms, ==, G_GINT64_CONSTANT(1776230759123));
+    g_assert_false(window_at(provider, 2)->usage_known);
+    CodexBarBalance *balance = balance_at(provider, 0);
+    g_assert_cmpstr(balance->unit, ==, "USD");
+    g_assert_true(balance->has_used);
+    g_assert_cmpfloat(balance->used, ==, 2.5);
+    g_assert_true(balance->has_limit);
+    g_assert_cmpfloat(balance->limit, ==, 10.0);
+    g_assert_true(balance->has_expiry);
+    g_assert_cmpint(balance->expiry_ms, ==, G_GINT64_CONSTANT(1776216359000));
+    g_assert_cmpfloat(codexbar_snapshot_highest_used(snapshot), ==, 88.0);
+    char *rendered = codexbar_render_waybar(snapshot);
+    json_object *rendered_object = json_tokener_parse(rendered);
+    json_object *tooltip = NULL;
+    g_assert_true(json_object_object_get_ex(rendered_object, "tooltip", &tooltip));
+    const char *tooltip_text = json_object_get_string(tooltip);
+    g_assert_nonnull(strstr(tooltip_text, "hourly"));
+    g_assert_nonnull(strstr(tooltip_text, "daily"));
+    g_assert_nonnull(strstr(tooltip_text, "monthly"));
+    g_assert_nonnull(strstr(tooltip_text, "extra"));
+    g_assert_nonnull(strstr(tooltip_text, "2026 at"));
+    g_assert_nonnull(strstr(tooltip_text, "pay as y 7.50 USD left"));
+    json_object_put(rendered_object);
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+}
+
+static void test_empty_canonical_collections_fall_back_to_legacy(void) {
+    const char *json =
+        "[{\"provider\":\"mixed\",\"quotaWindows\":[],"
+        "\"usage\":{\"primary\":{\"usedPercent\":42}},\"balances\":[],"
+        "\"credits\":{\"remaining\":9}}]";
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
+    g_assert_no_error(error);
+    const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 42.0);
+    g_assert_cmpuint(provider->balances->len, ==, 1);
+    g_assert_cmpfloat(balance_at(provider, 0)->remaining, ==, 9.0);
+    codexbar_snapshot_free(snapshot);
+}
+
+static void test_codex_credit_limit_legacy_mapping(void) {
+    const char *json =
+        "[{\"provider\":\"codex\",\"credits\":{\"remaining\":99,\"codexCreditLimit\":{"
+        "\"title\":\"Monthly credit limit\",\"used\":40,\"limit\":100,\"remaining\":60,"
+        "\"remainingPercent\":60,\"resetsAt\":1776216359}}}]";
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
+    g_assert_no_error(error);
+    const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpuint(provider->balances->len, ==, 1);
+    const CodexBarBalance *balance = balance_at(provider, 0);
+    g_assert_cmpstr(balance->id, ==, "codex-credit-limit");
+    g_assert_cmpstr(balance->title, ==, "Monthly credit limit");
+    g_assert_cmpfloat(balance->remaining, ==, 60.0);
+    g_assert_true(balance->has_used);
+    g_assert_cmpfloat(balance->used, ==, 40.0);
+    g_assert_true(balance->has_limit);
+    g_assert_cmpfloat(balance->limit, ==, 100.0);
+    g_assert_true(balance->has_resets_at);
     codexbar_snapshot_free(snapshot);
 }
 
@@ -379,8 +496,8 @@ static void test_openrouter_credits(void) {
         "{\"data\":{\"total_credits\":100,\"total_usage\":27.5}}", &error);
     g_assert_no_error(error);
     g_assert_nonnull(provider);
-    g_assert_cmpfloat_with_epsilon(provider->credits_remaining, 72.5, 0.0001);
-    g_assert_cmpfloat_with_epsilon(provider->primary.used_percent, 27.5, 0.0001);
+    g_assert_cmpfloat_with_epsilon(balance_at(provider, 0)->remaining, 72.5, 0.0001);
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 27.5, 0.0001);
     codexbar_provider_free(provider);
 }
 
@@ -389,41 +506,41 @@ static void test_simple_provider_parsers(void) {
     CodexBarProvider *deepseek = codexbar_deepseek_parse(
         "{\"is_available\":true,\"balance_infos\":[{\"total_balance\":\"8.25\"}]}", &error);
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(deepseek->credits_remaining, 8.25, 0.0001);
+    g_assert_cmpfloat_with_epsilon(balance_at(deepseek, 0)->remaining, 8.25, 0.0001);
     codexbar_provider_free(deepseek);
 
     CodexBarProvider *moonshot = codexbar_moonshot_parse(
         "{\"code\":0,\"status\":true,\"data\":{\"available_balance\":12.5}}", &error);
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(moonshot->credits_remaining, 12.5, 0.0001);
+    g_assert_cmpfloat_with_epsilon(balance_at(moonshot, 0)->remaining, 12.5, 0.0001);
     codexbar_provider_free(moonshot);
 
     CodexBarProvider *elevenlabs = codexbar_elevenlabs_parse(
         "{\"character_count\":250,\"character_limit\":1000}", &error);
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(elevenlabs->primary.used_percent, 25.0, 0.0001);
+    g_assert_cmpfloat_with_epsilon(window_at(elevenlabs, 0)->used_percent, 25.0, 0.0001);
     codexbar_provider_free(elevenlabs);
 
     CodexBarProvider *crof = codexbar_crof_parse(
         "{\"credits\":9.9999,\"requests_plan\":1000,\"usable_requests\":998}", &error);
     g_assert_no_error(error);
-    g_assert_cmpstr(crof->primary.label, ==, "requests");
-    g_assert_cmpfloat_with_epsilon(crof->primary.used_percent, 1.0, 0.0001);
-    g_assert_cmpstr(crof->primary.reset_description, ==, "998 requests left");
-    g_assert_nonnull(strstr(crof->primary.resets_at, "resets "));
-    g_assert_cmpstr(crof->secondary.label, ==, "balance");
-    g_assert_cmpstr(crof->secondary.reset_description, ==, "$9.99");
+    g_assert_cmpstr(window_at(crof, 0)->title, ==, "requests");
+    g_assert_cmpfloat_with_epsilon(window_at(crof, 0)->used_percent, 1.0, 0.0001);
+    g_assert_cmpstr(window_at(crof, 0)->detail, ==, "998 requests left");
+    g_assert_true(window_at(crof, 0)->has_resets_at);
+    g_assert_cmpstr(window_at(crof, 1)->title, ==, "balance");
+    g_assert_cmpstr(window_at(crof, 1)->detail, ==, "$9.99");
     codexbar_provider_free(crof);
 
     crof = codexbar_crof_parse("{\"credits\":0,\"requests_plan\":0,\"usable_requests\":0}", &error);
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(crof->primary.used_percent, 100.0, 0.0001);
+    g_assert_cmpfloat_with_epsilon(window_at(crof, 0)->used_percent, 100.0, 0.0001);
     codexbar_provider_free(crof);
 
     crof = codexbar_crof_parse("{\"credits\":0,\"requests_plan\":1000,\"usable_requests\":1200}", &error);
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(crof->primary.used_percent, 0.0, 0.0001);
-    g_assert_cmpstr(crof->primary.reset_description, ==, "1200 requests left");
+    g_assert_cmpfloat_with_epsilon(window_at(crof, 0)->used_percent, 0.0, 0.0001);
+    g_assert_cmpstr(window_at(crof, 0)->detail, ==, "1200 requests left");
     codexbar_provider_free(crof);
 
     CodexBarProvider *venice = codexbar_venice_parse(
@@ -431,9 +548,9 @@ static void test_simple_provider_parsers(void) {
         "\"balances\":{\"diem\":\"50.0\",\"usd\":10.0},\"diemEpochAllocation\":\"100.0\"}",
         &error);
     g_assert_no_error(error);
-    g_assert_cmpstr(venice->primary.label, ==, "balance");
-    g_assert_cmpfloat_with_epsilon(venice->primary.used_percent, 50.0, 0.0001);
-    g_assert_cmpstr(venice->primary.reset_description, ==, "DIEM 50.00 / 100.00 epoch allocation");
+    g_assert_cmpstr(window_at(venice, 0)->title, ==, "balance");
+    g_assert_cmpfloat_with_epsilon(window_at(venice, 0)->used_percent, 50.0, 0.0001);
+    g_assert_cmpstr(window_at(venice, 0)->detail, ==, "DIEM 50.00 / 100.00 epoch allocation");
     codexbar_provider_free(venice);
 
     venice = codexbar_venice_parse(
@@ -447,7 +564,7 @@ static void test_simple_provider_parsers(void) {
         "\"balances\":{\"diem\":\"   \",\"usd\":null},\"diemEpochAllocation\":null}",
         &error);
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(venice->primary.used_percent, 100.0, 0.0001);
+    g_assert_cmpfloat_with_epsilon(window_at(venice, 0)->used_percent, 100.0, 0.0001);
     codexbar_provider_free(venice);
 
     CodexBarProvider *zenmux = codexbar_zenmux_parse_subscription(
@@ -462,20 +579,21 @@ static void test_simple_provider_parsers(void) {
     g_assert_cmpstr(zenmux->plan, ==, "Ultra plan");
     g_assert_nonnull(strstr(zenmux->note, "plan expires "));
     g_assert_nonnull(strstr(zenmux->note, "2026"));
-    g_assert_cmpstr(zenmux->primary.label, ==, "5-hour");
-    g_assert_cmpfloat_with_epsilon(zenmux->primary.used_percent, 7.15, 0.0001);
-    g_assert_cmpstr(zenmux->primary.reset_description, ==, "57.20 / 800 flows");
-    g_assert_nonnull(strstr(zenmux->primary.resets_at, "Mar"));
-    g_assert_cmpstr(zenmux->secondary.label, ==, "weekly");
+    g_assert_cmpstr(window_at(zenmux, 0)->title, ==, "5-hour");
+    g_assert_cmpfloat_with_epsilon(window_at(zenmux, 0)->used_percent, 7.15, 0.0001);
+    g_assert_cmpstr(window_at(zenmux, 0)->detail, ==, "57.20 / 800 flows");
+    g_assert_true(window_at(zenmux, 0)->has_resets_at);
+    g_assert_cmpstr(window_at(zenmux, 1)->title, ==, "weekly");
     g_assert_true(codexbar_zenmux_apply_payg(
         zenmux, "{\"success\":true,\"data\":{\"currency\":\"usd\",\"total_credits\":482.74}}", &error));
     g_assert_no_error(error);
-    g_assert_cmpstr(zenmux->credits_label, ==, "pay as you go");
-    g_assert_cmpfloat_with_epsilon(zenmux->credits_remaining, 482.74, 0.0001);
+    g_assert_cmpstr(balance_at(zenmux, 0)->title, ==, "pay as you go");
+    g_assert_cmpfloat_with_epsilon(balance_at(zenmux, 0)->remaining, 482.74, 0.0001);
     g_assert_true(codexbar_zenmux_apply_payg(
         zenmux, "{\"success\":true,\"data\":{\"currency\":\"usd\",\"total_credits\":10}}", &error));
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(zenmux->credits_remaining, 10.0, 0.0001);
+    g_assert_cmpuint(zenmux->balances->len, ==, 1);
+    g_assert_cmpfloat_with_epsilon(balance_at(zenmux, 0)->remaining, 10.0, 0.0001);
     g_assert_false(codexbar_zenmux_apply_payg(
         zenmux, "{\"success\":true,\"data\":{\"currency\":\"eur\",\"total_credits\":10}}", &error));
     g_assert_error(error, g_quark_from_static_string("codexbar-simple-provider-error"), 10);
@@ -495,10 +613,11 @@ static void test_codex_rate_limits(void) {
         "{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":28,\"windowDurationMins\":300,\"resetsAt\":1776216359},\"secondary\":{\"usedPercent\":71,\"windowDurationMins\":10080,\"resetsAt\":1776395384},\"credits\":{\"hasCredits\":true,\"balance\":\"12.5\"}}}}",
         &error);
     g_assert_no_error(error);
-    g_assert_cmpfloat_with_epsilon(provider->primary.used_percent, 28.0, 0.0001);
-    g_assert_cmpfloat_with_epsilon(provider->secondary.used_percent, 71.0, 0.0001);
-    g_assert_cmpfloat_with_epsilon(provider->credits_remaining, 12.5, 0.0001);
-    g_assert_nonnull(strstr(provider->primary.reset_description, "2026"));
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 28.0, 0.0001);
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 1)->used_percent, 71.0, 0.0001);
+    g_assert_cmpint(window_at(provider, 0)->window_minutes, ==, 300);
+    g_assert_cmpint(window_at(provider, 0)->resets_at_ms, ==, G_GINT64_CONSTANT(1776216359000));
+    g_assert_cmpfloat_with_epsilon(balance_at(provider, 0)->remaining, 12.5, 0.0001);
 
     g_assert_true(codexbar_codex_apply_account(
         provider,
@@ -513,6 +632,10 @@ static void test_codex_rate_limits(void) {
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
+    g_test_add_func("/model/parse-canonical-collections", test_parse_canonical_collections);
+    g_test_add_func(
+        "/model/empty-canonical-falls-back", test_empty_canonical_collections_fall_back_to_legacy);
+    g_test_add_func("/model/codex-credit-limit-legacy", test_codex_credit_limit_legacy_mapping);
     g_test_add_func("/model/reject-non-array", test_rejects_non_array);
     g_test_add_func("/http/endpoint-policy", test_endpoint_policy);
     g_test_add_func("/http/post-and-response-headers", test_http_post_and_response_headers);

@@ -11,10 +11,22 @@ static GQuark provider_error_quark(void) {
 }
 
 static CodexBarProvider *provider_new(const char *id) {
-    CodexBarProvider *provider = g_new0(CodexBarProvider, 1);
+    CodexBarProvider *provider = codexbar_provider_new();
     provider->provider = g_strdup(id);
     provider->source = g_strdup("api");
     return provider;
+}
+
+static CodexBarQuotaWindow *add_window(CodexBarProvider *provider, const char *id, const char *title) {
+    CodexBarQuotaWindow *window = codexbar_quota_window_new(id, title);
+    window->usage_known = TRUE;
+    codexbar_provider_add_quota_window(provider, window);
+    return window;
+}
+
+static void add_balance(CodexBarProvider *provider, const char *id, const char *title, double remaining,
+                        const char *unit) {
+    codexbar_provider_add_balance(provider, codexbar_balance_new(id, title, remaining, unit));
 }
 
 static gboolean number_member(json_object *object, const char *key, double *result) {
@@ -76,20 +88,13 @@ static const char *string_member(json_object *object, const char *key) {
                : NULL;
 }
 
-static char *formatted_reset(GDateTime *time) {
-    if (!time) return NULL;
-    GDateTime *local = g_date_time_to_local(time);
-    char *result = g_date_time_format(local, "resets %a, %b %d %Y at %H:%M");
-    g_date_time_unref(local);
-    return result;
-}
-
-static char *formatted_iso_reset(const char *raw) {
-    if (!raw) return NULL;
+static gboolean iso_timestamp_ms(const char *raw, gint64 *result) {
+    if (!raw) return FALSE;
     GDateTime *time = g_date_time_new_from_iso8601(raw, NULL);
-    char *result = formatted_reset(time);
-    if (time) g_date_time_unref(time);
-    return result;
+    if (!time) return FALSE;
+    *result = g_date_time_to_unix(time) * 1000 + g_date_time_get_microsecond(time) / 1000;
+    g_date_time_unref(time);
+    return TRUE;
 }
 
 static char *formatted_plan_expiry(const char *raw) {
@@ -103,9 +108,9 @@ static char *formatted_plan_expiry(const char *raw) {
     return result;
 }
 
-static char *next_chicago_midnight(void) {
+static gint64 next_chicago_midnight_ms(void) {
     GTimeZone *zone = g_time_zone_new_identifier("America/Chicago");
-    if (!zone) return NULL;
+    if (!zone) return 0;
     GDateTime *now = g_date_time_new_now(zone);
     GDateTime *midnight = g_date_time_new(zone,
                                           g_date_time_get_year(now),
@@ -115,7 +120,7 @@ static char *next_chicago_midnight(void) {
                                           0,
                                           0);
     GDateTime *reset = g_date_time_add_days(midnight, 1);
-    char *result = formatted_reset(reset);
+    gint64 result = g_date_time_to_unix(reset) * 1000;
     g_date_time_unref(reset);
     g_date_time_unref(midnight);
     g_date_time_unref(now);
@@ -145,11 +150,10 @@ CodexBarProvider *codexbar_deepseek_parse(const char *json, GError **error) {
         return NULL;
     }
     CodexBarProvider *provider = provider_new("deepseek");
-    provider->has_credits = TRUE;
-    provider->credits_remaining = MAX(0.0, balance);
-    provider->primary.available = TRUE;
-    provider->primary.used_percent = balance > 0.0 ? 0.0 : 100.0;
-    provider->primary.reset_description = g_strdup_printf("balance %.2f", balance);
+    add_balance(provider, "credits", "credits", MAX(0.0, balance), "credits");
+    CodexBarQuotaWindow *window = add_window(provider, "primary", "session");
+    window->used_percent = balance > 0.0 ? 0.0 : 100.0;
+    window->detail = g_strdup_printf("balance %.2f", balance);
     json_object_put(root);
     return provider;
 }
@@ -166,8 +170,7 @@ CodexBarProvider *codexbar_moonshot_parse(const char *json, GError **error) {
         return NULL;
     }
     CodexBarProvider *provider = provider_new("moonshot");
-    provider->has_credits = TRUE;
-    provider->credits_remaining = balance;
+    add_balance(provider, "credits", "credits", balance, "credits");
     json_object_put(root);
     return provider;
 }
@@ -183,9 +186,9 @@ CodexBarProvider *codexbar_elevenlabs_parse(const char *json, GError **error) {
         return NULL;
     }
     CodexBarProvider *provider = provider_new("elevenlabs");
-    provider->primary.available = TRUE;
-    provider->primary.used_percent = limit > 0.0 ? CLAMP((used / limit) * 100.0, 0.0, 100.0) : 0.0;
-    provider->primary.reset_description = g_strdup_printf("%.0f / %.0f credits", used, limit);
+    CodexBarQuotaWindow *window = add_window(provider, "primary", "session");
+    window->used_percent = limit > 0.0 ? CLAMP((used / limit) * 100.0, 0.0, 100.0) : 0.0;
+    window->detail = g_strdup_printf("%.0f / %.0f credits", used, limit);
     json_object_put(root);
     return provider;
 }
@@ -209,17 +212,16 @@ CodexBarProvider *codexbar_crof_parse(const char *json, GError **error) {
     double credit_floor = floor(MAX(0.0, credits) * 100.0) / 100.0;
     CodexBarProvider *provider = provider_new("crof");
     provider->plan = g_strdup("API key");
-    provider->primary.available = TRUE;
-    provider->primary.label = g_strdup("requests");
-    provider->primary.used_percent = 100.0 - remaining_percent;
+    CodexBarQuotaWindow *requests_window = add_window(provider, "requests", "requests");
+    requests_window->used_percent = 100.0 - remaining_percent;
     char *requests = amount(displayed);
-    provider->primary.reset_description = g_strdup_printf("%s requests left", requests);
+    requests_window->detail = g_strdup_printf("%s requests left", requests);
     g_free(requests);
-    provider->primary.resets_at = next_chicago_midnight();
-    provider->secondary.available = TRUE;
-    provider->secondary.label = g_strdup("balance");
-    provider->secondary.used_percent = credits > 0.0 ? 0.0 : 100.0;
-    provider->secondary.reset_description = g_strdup_printf("$%.2f", credit_floor);
+    requests_window->has_resets_at = TRUE;
+    requests_window->resets_at_ms = next_chicago_midnight_ms();
+    CodexBarQuotaWindow *balance_window = add_window(provider, "balance", "balance");
+    balance_window->used_percent = credits > 0.0 ? 0.0 : 100.0;
+    balance_window->detail = g_strdup_printf("$%.2f", credit_floor);
     json_object_put(root);
     return provider;
 }
@@ -265,33 +267,30 @@ CodexBarProvider *codexbar_venice_parse(const char *json, GError **error) {
     gboolean uses_usd = currency && g_ascii_strcasecmp(currency, "USD") == 0;
 
     CodexBarProvider *provider = provider_new("venice");
-    provider->primary.available = TRUE;
-    provider->primary.label = g_strdup("balance");
+    CodexBarQuotaWindow *window = add_window(provider, "balance", "balance");
     if (!can_consume) {
-        provider->primary.used_percent = 100.0;
-        provider->primary.reset_description = g_strdup("Balance unavailable for API calls");
+        window->used_percent = 100.0;
+        window->detail = g_strdup("Balance unavailable for API calls");
     } else if (uses_usd && has_usd && usd > 0.0) {
-        provider->primary.reset_description = g_strdup_printf("$%.2f USD remaining", usd);
+        window->detail = g_strdup_printf("$%.2f USD remaining", usd);
     } else if (!uses_usd && has_diem && has_allocation && allocation > 0.0) {
-        provider->primary.used_percent = CLAMP(((allocation - diem) / allocation) * 100.0, 0.0, 100.0);
-        provider->primary.reset_description =
+        window->used_percent = CLAMP(((allocation - diem) / allocation) * 100.0, 0.0, 100.0);
+        window->detail =
             g_strdup_printf("DIEM %.2f / %.2f epoch allocation", diem, allocation);
     } else if (has_diem && diem > 0.0) {
-        provider->primary.reset_description = g_strdup_printf("DIEM %.2f remaining", diem);
+        window->detail = g_strdup_printf("DIEM %.2f remaining", diem);
     } else if (has_usd && usd > 0.0) {
-        provider->primary.reset_description = g_strdup_printf("$%.2f USD remaining", usd);
+        window->detail = g_strdup_printf("$%.2f USD remaining", usd);
     } else {
-        provider->primary.used_percent = 100.0;
-        provider->primary.reset_description = g_strdup("No Venice API balance available");
+        window->used_percent = 100.0;
+        window->detail = g_strdup("No Venice API balance available");
     }
     json_object_put(root);
     return provider;
 }
 
-static gboolean parse_zenmux_window(json_object *data,
-                                    const char *key,
-                                    const char *label,
-                                    CodexBarRateWindow *window) {
+static gboolean parse_zenmux_window(json_object *data, const char *key, const char *label,
+                                    CodexBarProvider *provider) {
     json_object *quota = NULL;
     double usage = 0.0;
     double maximum = 0.0;
@@ -303,15 +302,14 @@ static gboolean parse_zenmux_window(json_object *data,
         !strict_number_member(quota, "remaining_flows", &remaining)) {
         return FALSE;
     }
-    window->available = TRUE;
-    window->label = g_strdup(label);
+    CodexBarQuotaWindow *window = add_window(provider, key, label);
     window->used_percent = CLAMP(usage * 100.0, 0.0, 100.0);
     char *used_text = amount(used);
     char *maximum_text = amount(maximum);
-    window->reset_description = g_strdup_printf("%s / %s flows", used_text, maximum_text);
+    window->detail = g_strdup_printf("%s / %s flows", used_text, maximum_text);
     g_free(used_text);
     g_free(maximum_text);
-    window->resets_at = formatted_iso_reset(string_member(quota, "resets_at"));
+    window->has_resets_at = iso_timestamp_ms(string_member(quota, "resets_at"), &window->resets_at_ms);
     return TRUE;
 }
 
@@ -356,8 +354,8 @@ CodexBarProvider *codexbar_zenmux_parse_subscription(const char *json, GError **
         }
     }
     provider->note = formatted_plan_expiry(string_member(plan, "expires_at"));
-    if (!parse_zenmux_window(data, "quota_5_hour", "5-hour", &provider->primary) ||
-        !parse_zenmux_window(data, "quota_7_day", "weekly", &provider->secondary)) {
+    if (!parse_zenmux_window(data, "quota_5_hour", "5-hour", provider) ||
+        !parse_zenmux_window(data, "quota_7_day", "weekly", provider)) {
         g_free(tier);
         g_free(status);
         codexbar_provider_free(provider);
@@ -385,10 +383,19 @@ gboolean codexbar_zenmux_apply_payg(CodexBarProvider *provider, const char *json
         if (root) json_object_put(root);
         return FALSE;
     }
-    g_free(provider->credits_label);
-    provider->has_credits = TRUE;
-    provider->credits_label = g_strdup("pay as you go");
-    provider->credits_remaining = balance;
+    CodexBarBalance *payg = NULL;
+    for (guint index = 0; index < provider->balances->len; index++) {
+        CodexBarBalance *candidate = codexbar_provider_balance(provider, index);
+        if (g_str_equal(candidate->id, "payg")) {
+            payg = candidate;
+            break;
+        }
+    }
+    if (payg) {
+        payg->remaining = balance;
+    } else {
+        add_balance(provider, "payg", "pay as you go", balance, "USD");
+    }
     json_object_put(root);
     return TRUE;
 }

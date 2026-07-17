@@ -20,30 +20,32 @@ static char *normalized_plan(const char *plan) {
     return g_strdup(plan);
 }
 
-static char *reset_description(json_object *window) {
-    json_object *reset = NULL;
-    if (!json_object_object_get_ex(window, "resetsAt", &reset)) {
-        return NULL;
-    }
-    GDateTime *time = g_date_time_new_from_unix_local(json_object_get_int64(reset));
-    if (!time) {
-        return NULL;
-    }
-    char *description = g_date_time_format(time, "resets %a, %b %d %Y at %H:%M");
-    g_date_time_unref(time);
-    return description;
-}
-
-static void parse_window(json_object *limits, const char *key, CodexBarRateWindow *window) {
+static void parse_window(json_object *limits, const char *key, const char *title, CodexBarProvider *provider) {
     json_object *object = NULL;
     json_object *used = NULL;
     if (!json_object_object_get_ex(limits, key, &object) || !json_object_is_type(object, json_type_object) ||
         !json_object_object_get_ex(object, "usedPercent", &used)) {
         return;
     }
-    window->available = TRUE;
+    CodexBarQuotaWindow *window = codexbar_quota_window_new(key, title);
+    window->usage_known = TRUE;
     window->used_percent = CLAMP(json_object_get_double(used), 0.0, 100.0);
-    window->reset_description = reset_description(object);
+    json_object *duration = NULL;
+    if (json_object_object_get_ex(object, "windowDurationMins", &duration) &&
+        (json_object_is_type(duration, json_type_int) || json_object_is_type(duration, json_type_double))) {
+        window->has_window_minutes = TRUE;
+        window->window_minutes = json_object_get_int64(duration);
+    }
+    json_object *reset = NULL;
+    if (json_object_object_get_ex(object, "resetsAt", &reset) &&
+        (json_object_is_type(reset, json_type_int) || json_object_is_type(reset, json_type_double))) {
+        gint64 resets_at = json_object_get_int64(reset);
+        if (resets_at >= 0 && resets_at <= G_MAXINT64 / 1000) {
+            window->has_resets_at = TRUE;
+            window->resets_at_ms = resets_at * 1000;
+        }
+    }
+    codexbar_provider_add_quota_window(provider, window);
 }
 
 CodexBarProvider *codexbar_codex_parse_rate_limits(const char *json, GError **error) {
@@ -56,15 +58,15 @@ CodexBarProvider *codexbar_codex_parse_rate_limits(const char *json, GError **er
         if (root) json_object_put(root);
         return NULL;
     }
-    CodexBarProvider *provider = g_new0(CodexBarProvider, 1);
+    CodexBarProvider *provider = codexbar_provider_new();
     provider->provider = g_strdup("codex");
     provider->source = g_strdup("cli");
     json_object *plan = NULL;
     if (json_object_object_get_ex(limits, "planType", &plan) && json_object_is_type(plan, json_type_string)) {
         provider->plan = normalized_plan(json_object_get_string(plan));
     }
-    parse_window(limits, "primary", &provider->primary);
-    parse_window(limits, "secondary", &provider->secondary);
+    parse_window(limits, "primary", "session", provider);
+    parse_window(limits, "secondary", "weekly", provider);
     json_object *credits = NULL;
     json_object *has_credits = NULL;
     json_object *balance = NULL;
@@ -72,8 +74,8 @@ CodexBarProvider *codexbar_codex_parse_rate_limits(const char *json, GError **er
         json_object_object_get_ex(credits, "hasCredits", &has_credits) &&
         json_object_get_boolean(has_credits) &&
         json_object_object_get_ex(credits, "balance", &balance) && !json_object_is_type(balance, json_type_null)) {
-        provider->has_credits = TRUE;
-        provider->credits_remaining = json_object_get_double(balance);
+        codexbar_provider_add_balance(
+            provider, codexbar_balance_new("credits", "credits", json_object_get_double(balance), "credits"));
     }
     json_object_put(root);
     return provider;

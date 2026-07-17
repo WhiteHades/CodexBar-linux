@@ -45,13 +45,20 @@ CodexBarProvider *codexbar_openrouter_parse_credits(const char *json, GError **e
     }
     double credits = json_object_get_double(total_credits);
     double usage = json_object_get_double(total_usage);
-    CodexBarProvider *provider = g_new0(CodexBarProvider, 1);
+    CodexBarProvider *provider = codexbar_provider_new();
     provider->provider = g_strdup("openrouter");
     provider->source = g_strdup("api");
-    provider->has_credits = TRUE;
-    provider->credits_remaining = MAX(0.0, credits - usage);
-    provider->primary.available = TRUE;
-    provider->primary.used_percent = credits > 0.0 ? CLAMP((usage / credits) * 100.0, 0.0, 100.0) : 0.0;
+    CodexBarBalance *balance = codexbar_balance_new(
+        "credits", "credits", MAX(0.0, credits - usage), "credits");
+    balance->has_used = TRUE;
+    balance->used = usage;
+    balance->has_limit = TRUE;
+    balance->limit = credits;
+    codexbar_provider_add_balance(provider, balance);
+    CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "session");
+    window->usage_known = TRUE;
+    window->used_percent = credits > 0.0 ? CLAMP((usage / credits) * 100.0, 0.0, 100.0) : 0.0;
+    codexbar_provider_add_quota_window(provider, window);
     json_object_put(root);
     return provider;
 }

@@ -127,16 +127,18 @@ without a swift toolchain or swift binary.
 ## what must work before the old code is removed
 
 1. waybar needs icon and text modes, highest usage selection, state classes, the tooltip, and signal refresh.
-2. the terminal interface needs provider switching, all quota windows, resets, credits, status, errors, refresh,
-   settings, and quit.
-3. settings need provider enablement, order, source, credentials, accounts, refresh, display, notifications, and privacy.
-4. the cli needs usage, cards, cost, sessions, serve, config, cache, diagnose, compatible json, and compatible exit codes.
-5. all 60 provider ids need working linux behavior or a clear unavailable state when the provider itself has no linux
+2. the terminal interface needs provider tabs with mini usage state, freshness, plan, arbitrary quota windows, resets,
+   pace, credits, extra usage, status, errors, and refresh.
+3. the compact provider view needs daily and 30-day cost and token summaries plus account, usage dashboard, status page,
+   settings, about, and quit actions.
+4. settings need provider enablement, order, source, credentials, accounts, refresh, display, notifications, and privacy.
+5. the cli needs usage, cards, cost, sessions, serve, config, cache, diagnose, compatible json, and compatible exit codes.
+6. all 60 provider ids need working linux behavior or a clear unavailable state when the provider itself has no linux
    source.
-6. account support needs token accounts, managed codex accounts, switching, ownership checks, and credential refresh.
-7. desktop support needs waybar, notifications, startup, terminal themes, scaling, and multiple monitors.
-8. saved data needs config, history, caches, snapshots, migrations, and restrictive permissions.
-9. quality needs fixture comparisons, integration tests, address sanitizer, undefined behavior sanitizer, no saved secrets,
+7. account support needs token accounts, managed codex accounts, switching, ownership checks, and credential refresh.
+8. desktop support needs waybar, notifications, startup, terminal themes, scaling, and multiple monitors.
+9. saved data needs config, history, caches, snapshots, migrations, and restrictive permissions.
+10. quality needs fixture comparisons, integration tests, address sanitizer, undefined behavior sanitizer, no saved secrets,
    and offscreen visual checks.
 
 ## removal rule

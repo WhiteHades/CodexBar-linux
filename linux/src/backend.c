@@ -75,7 +75,7 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
             GError *provider_error = NULL;
             CodexBarProvider *provider = codexbar_codex_fetch(&provider_error);
             if (!provider) {
-                provider = g_new0(CodexBarProvider, 1);
+                provider = codexbar_provider_new();
                 provider->provider = g_strdup("codex");
                 provider->source = g_strdup("cli");
                 provider->error = g_strdup(provider_error->message);
@@ -86,7 +86,7 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
             GError *provider_error = NULL;
             CodexBarProvider *provider = codexbar_openrouter_fetch(provider_config, &provider_error);
             if (!provider) {
-                provider = g_new0(CodexBarProvider, 1);
+                provider = codexbar_provider_new();
                 provider->provider = g_strdup("openrouter");
                 provider->source = g_strdup("api");
                 provider->error = g_strdup(provider_error->message);
@@ -102,7 +102,7 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
             GError *provider_error = NULL;
             CodexBarProvider *provider = codexbar_simple_provider_fetch(provider_config, &provider_error);
             if (!provider) {
-                provider = g_new0(CodexBarProvider, 1);
+                provider = codexbar_provider_new();
                 provider->provider = g_strdup(provider_config->id);
                 provider->source = g_strdup("api");
                 provider->error = g_strdup(provider_error->message);
@@ -110,7 +110,7 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
             }
             g_ptr_array_add(snapshot->providers, provider);
         } else {
-            CodexBarProvider *provider = g_new0(CodexBarProvider, 1);
+            CodexBarProvider *provider = codexbar_provider_new();
             provider->provider = g_strdup(provider_config->id);
             provider->source = g_strdup(provider_config->source ? provider_config->source : "auto");
             provider->error = g_strdup_printf("%s is not migrated to the native C engine yet", provider_config->id);
