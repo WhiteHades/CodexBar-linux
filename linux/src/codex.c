@@ -74,8 +74,17 @@ static gboolean write_message(GOutputStream *stream, const char *message, GError
     return success;
 }
 
-static char *read_response(GDataInputStream *stream, int wanted_id, GError **error) {
+static char *read_response(
+    GDataInputStream *stream, GPollableInputStream *pollable, int wanted_id, GError **error) {
+    gint64 deadline = g_get_monotonic_time() + (8 * G_TIME_SPAN_SECOND);
     for (int lines = 0; lines < 64; lines++) {
+        while (!g_pollable_input_stream_is_readable(pollable)) {
+            if (g_get_monotonic_time() >= deadline) {
+                g_set_error(error, codex_error_quark(), 4, "Codex RPC timed out waiting for response %d", wanted_id);
+                return NULL;
+            }
+            g_usleep(10 * 1000);
+        }
         gsize length = 0;
         char *line = g_data_input_stream_read_line(stream, &length, NULL, error);
         if (!line) {
@@ -115,13 +124,14 @@ CodexBarProvider *codexbar_codex_fetch(GError **error) {
         argv, G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE, error);
     if (!process) return NULL;
     GOutputStream *input = g_subprocess_get_stdin_pipe(process);
-    GDataInputStream *output = g_data_input_stream_new(g_subprocess_get_stdout_pipe(process));
+    GInputStream *raw_output = g_subprocess_get_stdout_pipe(process);
+    GDataInputStream *output = g_data_input_stream_new(raw_output);
     char *initialize = g_strdup_printf(
         "{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codexbar-linux\",\"version\":\"%s\"}}}",
         CODEXBAR_LINUX_VERSION);
     gboolean sent = write_message(input, initialize, error);
     g_free(initialize);
-    char *response = sent ? read_response(output, 1, error) : NULL;
+    char *response = sent ? read_response(output, G_POLLABLE_INPUT_STREAM(raw_output), 1, error) : NULL;
     g_free(response);
     if (!response && error && *error) {
         g_subprocess_force_exit(process);
@@ -131,7 +141,7 @@ CodexBarProvider *codexbar_codex_fetch(GError **error) {
     }
     sent = write_message(input, "{\"method\":\"initialized\",\"params\":{}}", error) &&
            write_message(input, "{\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}", error);
-    response = sent ? read_response(output, 2, error) : NULL;
+    response = sent ? read_response(output, G_POLLABLE_INPUT_STREAM(raw_output), 2, error) : NULL;
     CodexBarProvider *provider = response ? codexbar_codex_parse_rate_limits(response, error) : NULL;
     g_free(response);
     g_subprocess_force_exit(process);
