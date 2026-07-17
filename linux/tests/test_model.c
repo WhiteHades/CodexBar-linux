@@ -1,11 +1,100 @@
 #include "codex.h"
+#include "config.h"
+#include "http.h"
 #include "model.h"
 #include "openrouter.h"
 #include "simple_providers.h"
 #include "render.h"
 
 #include <glib.h>
+#include <glib/gstdio.h>
+#include <gio/gio.h>
 #include <json-c/json.h>
+
+typedef struct {
+    GSocketListener *listener;
+    char *request;
+} HttpTestServer;
+
+typedef struct {
+    GSocketListener *listener;
+    guint16 port;
+    gboolean invalid_target;
+} RedirectTestServer;
+
+static GSocketConnection *accept_http_connection(GSocketListener *listener) {
+    GError *error = NULL;
+    GSocketConnection *connection = g_socket_listener_accept(listener, NULL, NULL, &error);
+    g_assert_no_error(error);
+    char buffer[512];
+    GInputStream *input = g_io_stream_get_input_stream(G_IO_STREAM(connection));
+    gssize bytes = g_input_stream_read(input, buffer, sizeof(buffer), NULL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(bytes, >, 0);
+    return connection;
+}
+
+static void write_http_response(GSocketConnection *connection, const char *response) {
+    GError *error = NULL;
+    GOutputStream *output = g_io_stream_get_output_stream(G_IO_STREAM(connection));
+    gsize written = 0;
+    g_assert_true(g_output_stream_write_all(output, response, strlen(response), &written, NULL, &error));
+    g_assert_no_error(error);
+    g_io_stream_close(G_IO_STREAM(connection), NULL, NULL);
+    g_object_unref(connection);
+}
+
+static gpointer serve_redirect_test(gpointer data) {
+    RedirectTestServer *server = data;
+    GSocketConnection *connection = accept_http_connection(server->listener);
+    char *response = server->invalid_target
+                         ? g_strdup_printf("HTTP/1.1 302 Found\r\nLocation: http://user:secret@127.0.0.1:%u/final\r\n"
+                                           "Content-Length: 0\r\nConnection: close\r\n\r\n",
+                                           server->port)
+                         : g_strdup("HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n"
+                                    "Connection: close\r\n\r\n");
+    write_http_response(connection, response);
+    g_free(response);
+    if (!server->invalid_target) {
+        connection = accept_http_connection(server->listener);
+        write_http_response(connection,
+                            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK");
+    }
+    return NULL;
+}
+
+static gpointer serve_http_test(gpointer data) {
+    HttpTestServer *server = data;
+    GError *error = NULL;
+    GSocketConnection *connection = g_socket_listener_accept(server->listener, NULL, NULL, &error);
+    g_assert_no_error(error);
+    GInputStream *input = g_io_stream_get_input_stream(G_IO_STREAM(connection));
+    GOutputStream *output = g_io_stream_get_output_stream(G_IO_STREAM(connection));
+    GByteArray *request = g_byte_array_new();
+    char buffer[512];
+    while (request->len < 4096) {
+        gssize read = g_input_stream_read(input, buffer, sizeof(buffer), NULL, &error);
+        g_assert_no_error(error);
+        if (read <= 0) break;
+        g_byte_array_append(request, (const guint8 *)buffer, (guint)read);
+        g_byte_array_append(request, (const guint8 *)"", 1);
+        gboolean complete = strstr((const char *)request->data, "\r\n\r\n") &&
+                            strstr((const char *)request->data, "{\"ping\":1}");
+        request->len--;
+        if (complete) break;
+    }
+    g_byte_array_append(request, (const guint8 *)"", 1);
+    server->request = (char *)g_byte_array_free(request, FALSE);
+    const char response[] = "HTTP/1.1 100 Continue\r\nX-Test: stale\r\n\r\n"
+                            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nX-Test: captured\r\n"
+                            "Connection: close\r\n\r\n{\"ok\":true}";
+    gsize written = 0;
+    g_assert_true(g_output_stream_write_all(output, response, sizeof(response) - 1, &written, NULL, &error));
+    g_assert_no_error(error);
+    g_io_stream_close(G_IO_STREAM(connection), NULL, NULL);
+    g_object_unref(connection);
+    return NULL;
+}
 
 static const char *fixture =
     "[{"
@@ -56,6 +145,199 @@ static void test_rejects_non_array(void) {
     g_assert_null(snapshot);
     g_assert_error(error, g_quark_from_static_string("codexbar-model-error"), 2);
     g_clear_error(&error);
+}
+
+static void test_endpoint_policy(void) {
+    GError *error = NULL;
+    char *url = codexbar_http_normalize_endpoint(
+        "api.example.com/v1", CODEXBAR_HTTP_HTTPS_ONLY, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(url, ==, "https://api.example.com/v1");
+    g_free(url);
+
+    url = codexbar_http_normalize_endpoint(
+        "http://127.0.0.1:8080/v1", CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(url, ==, "http://127.0.0.1:8080/v1");
+    g_free(url);
+
+    url = codexbar_http_normalize_endpoint(
+        "http://api.example.com/v1", CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP, &error);
+    g_assert_null(url);
+    g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 1);
+    g_clear_error(&error);
+
+    url = codexbar_http_normalize_endpoint(
+        "https://user:secret@api.example.com/v1", CODEXBAR_HTTP_HTTPS_ONLY, &error);
+    g_assert_null(url);
+    g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 1);
+    g_clear_error(&error);
+
+    url = codexbar_http_normalize_endpoint(
+        "https://api.example.com%2f.attacker.test/v1", CODEXBAR_HTTP_HTTPS_ONLY, &error);
+    g_assert_null(url);
+    g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 1);
+    g_clear_error(&error);
+}
+
+static void test_http_post_and_response_headers(void) {
+    GError *error = NULL;
+    HttpTestServer server = {.listener = g_socket_listener_new()};
+    guint16 port = g_socket_listener_add_any_inet_port(server.listener, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(port, >, 0);
+    GThread *thread = g_thread_new("http-test-server", serve_http_test, &server);
+
+    char *url = g_strdup_printf("http://127.0.0.1:%u/usage", port);
+    const char body[] = "{\"ping\":1}";
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Authorization", "Bearer test"},
+        {"Content-Type", "application/json"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "POST",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .body = body,
+        .body_length = sizeof(body) - 1,
+        .timeout_seconds = 2,
+        .protocol_policy = CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+    };
+    CodexBarHttpResponse *response = codexbar_http_send(&request, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(response);
+    g_assert_cmpint(response->status, ==, 200);
+    g_assert_cmpuint(response->body_length, ==, 11);
+    g_assert_cmpstr(response->body, ==, "{\"ok\":true}");
+    g_assert_cmpstr(codexbar_http_response_header_first(response, "x-test"), ==, "captured");
+    codexbar_http_response_free(response);
+    g_thread_join(thread);
+    g_assert_nonnull(strstr(server.request, "POST /usage HTTP/1.1"));
+    g_assert_nonnull(strstr(server.request, "Authorization: Bearer test"));
+    g_assert_nonnull(strstr(server.request, body));
+    g_free(server.request);
+    g_free(url);
+    g_object_unref(server.listener);
+}
+
+static void test_http_rejects_malformed_requests(void) {
+    GError *error = NULL;
+    const CodexBarHttpRequest missing_body = {
+        .url = "https://example.com",
+        .method = "POST",
+        .body_length = 5,
+    };
+    g_assert_null(codexbar_http_send(&missing_body, &error));
+    g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 3);
+    g_clear_error(&error);
+
+    const CodexBarHttpRequest missing_headers = {
+        .url = "https://example.com",
+        .method = "GET",
+        .header_count = 1,
+    };
+    g_assert_null(codexbar_http_send(&missing_headers, &error));
+    g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 3);
+    g_clear_error(&error);
+
+    const CodexBarHttpRequest injected_method = {
+        .url = "https://example.com",
+        .method = "GET\r\nX-Injected: yes",
+    };
+    g_assert_null(codexbar_http_send(&injected_method, &error));
+    g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 3);
+    g_clear_error(&error);
+
+    const CodexBarHttpRequestHeader invalid_headers[] = {{"Bad Header", "value"}};
+    const CodexBarHttpRequest injected_header = {
+        .url = "https://example.com",
+        .method = "GET",
+        .headers = invalid_headers,
+        .header_count = G_N_ELEMENTS(invalid_headers),
+    };
+    g_assert_null(codexbar_http_send(&injected_header, &error));
+    g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 3);
+    g_clear_error(&error);
+}
+
+static void test_http_redirect_policy(void) {
+    for (int invalid = 0; invalid < 2; invalid++) {
+        GError *error = NULL;
+        RedirectTestServer server = {
+            .listener = g_socket_listener_new(),
+            .invalid_target = invalid == 1,
+        };
+        server.port = g_socket_listener_add_any_inet_port(server.listener, NULL, &error);
+        g_assert_no_error(error);
+        GThread *thread = g_thread_new("redirect-test-server", serve_redirect_test, &server);
+        char *url = g_strdup_printf("http://127.0.0.1:%u/start", server.port);
+        const CodexBarHttpRequest request = {
+            .url = url,
+            .method = "GET",
+            .timeout_seconds = 2,
+            .protocol_policy = CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP,
+            .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        };
+        CodexBarHttpResponse *response = codexbar_http_send(&request, &error);
+        if (server.invalid_target) {
+            g_assert_null(response);
+            g_assert_nonnull(error);
+            g_clear_error(&error);
+        } else {
+            g_assert_no_error(error);
+            g_assert_nonnull(response);
+            g_assert_cmpint(response->status, ==, 200);
+            g_assert_cmpstr(response->body, ==, "OK");
+            codexbar_http_response_free(response);
+        }
+        g_thread_join(thread);
+        g_free(url);
+        g_object_unref(server.listener);
+    }
+}
+
+static void test_extended_provider_config(void) {
+    GError *error = NULL;
+    char *cwd = g_get_current_dir();
+    char *path = g_build_filename(cwd, "codexbar-config-test.json", NULL);
+    g_free(cwd);
+    const char json[] =
+        "{\"providers\":[{\"id\":\"bedrock\",\"enabled\":true,\"source\":\"api\","
+        "\"extrasEnabled\":false,\"apiKey\":\" access \",\"secretKey\":\" secret \","
+        "\"region\":\"us-east-1\",\"workspaceID\":\"project-1\","
+        "\"enterpriseHost\":\"api.example.com\",\"awsProfile\":\"prod\","
+        "\"awsAuthMode\":\"profile\"},{\"id\":\"poe\",\"enabled\":true}]}";
+    g_assert_true(g_file_set_contents(path, json, -1, &error));
+    g_assert_no_error(error);
+    const char *previous = g_getenv("CODEXBAR_CONFIG");
+    char *saved = previous ? g_strdup(previous) : NULL;
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+    CodexBarConfig *config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    g_assert_nonnull(config);
+    g_assert_cmpuint(config->providers->len, ==, 2);
+    const CodexBarProviderConfig *provider = g_ptr_array_index(config->providers, 0);
+    g_assert_true(provider->has_extras_enabled);
+    g_assert_false(provider->extras_enabled);
+    g_assert_cmpstr(provider->api_key, ==, "access");
+    g_assert_cmpstr(provider->secret_key, ==, "secret");
+    g_assert_cmpstr(provider->workspace_id, ==, "project-1");
+    g_assert_cmpstr(provider->enterprise_host, ==, "api.example.com");
+    g_assert_cmpstr(provider->aws_profile, ==, "prod");
+    g_assert_cmpstr(provider->aws_auth_mode, ==, "profile");
+    provider = g_ptr_array_index(config->providers, 1);
+    g_assert_false(provider->has_extras_enabled);
+    codexbar_config_free(config);
+    if (saved) {
+        g_setenv("CODEXBAR_CONFIG", saved, TRUE);
+    } else {
+        g_unsetenv("CODEXBAR_CONFIG");
+    }
+    g_free(saved);
+    g_assert_cmpint(g_remove(path), ==, 0);
+    g_free(path);
 }
 
 static void test_waybar_rendering(void) {
@@ -232,6 +514,11 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
     g_test_add_func("/model/reject-non-array", test_rejects_non_array);
+    g_test_add_func("/http/endpoint-policy", test_endpoint_policy);
+    g_test_add_func("/http/post-and-response-headers", test_http_post_and_response_headers);
+    g_test_add_func("/http/rejects-malformed-requests", test_http_rejects_malformed_requests);
+    g_test_add_func("/http/redirect-policy", test_http_redirect_policy);
+    g_test_add_func("/config/extended-provider-fields", test_extended_provider_config);
     g_test_add_func("/render/waybar", test_waybar_rendering);
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);

@@ -36,7 +36,12 @@ static void provider_config_free(gpointer data) {
     g_free(provider->id);
     g_free(provider->source);
     g_free(provider->api_key);
+    g_free(provider->secret_key);
     g_free(provider->region);
+    g_free(provider->workspace_id);
+    g_free(provider->enterprise_host);
+    g_free(provider->aws_profile);
+    g_free(provider->aws_auth_mode);
     g_free(provider);
 }
 
@@ -115,8 +120,19 @@ CodexBarConfig *codexbar_config_load(GError **error) {
                 provider->enabled = json_object_get_boolean(enabled);
             }
             provider->source = clean_string(entry, "source");
+            json_object *extras_enabled = NULL;
+            if (json_object_object_get_ex(entry, "extrasEnabled", &extras_enabled) &&
+                json_object_is_type(extras_enabled, json_type_boolean)) {
+                provider->has_extras_enabled = TRUE;
+                provider->extras_enabled = json_object_get_boolean(extras_enabled);
+            }
             provider->api_key = clean_string(entry, "apiKey");
+            provider->secret_key = clean_string(entry, "secretKey");
             provider->region = clean_string(entry, "region");
+            provider->workspace_id = clean_string(entry, "workspaceID");
+            provider->enterprise_host = clean_string(entry, "enterpriseHost");
+            provider->aws_profile = clean_string(entry, "awsProfile");
+            provider->aws_auth_mode = clean_string(entry, "awsAuthMode");
             g_ptr_array_add(config->providers, provider);
         }
     }
