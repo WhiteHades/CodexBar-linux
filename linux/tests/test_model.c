@@ -110,7 +110,7 @@ static void test_simple_provider_parsers(void) {
 static void test_codex_rate_limits(void) {
     GError *error = NULL;
     CodexBarProvider *provider = codexbar_codex_parse_rate_limits(
-        "{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":28,\"windowDurationMins\":300,\"resetsAt\":1776216359},\"secondary\":{\"usedPercent\":71,\"windowDurationMins\":10080,\"resetsAt\":1776395384},\"credits\":{\"balance\":\"12.5\"}}}}",
+        "{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":28,\"windowDurationMins\":300,\"resetsAt\":1776216359},\"secondary\":{\"usedPercent\":71,\"windowDurationMins\":10080,\"resetsAt\":1776395384},\"credits\":{\"hasCredits\":true,\"balance\":\"12.5\"}}}}",
         &error);
     g_assert_no_error(error);
     g_assert_cmpfloat_with_epsilon(provider->primary.used_percent, 28.0, 0.0001);

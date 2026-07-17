@@ -52,8 +52,11 @@ CodexBarProvider *codexbar_codex_parse_rate_limits(const char *json, GError **er
     parse_window(limits, "primary", &provider->primary);
     parse_window(limits, "secondary", &provider->secondary);
     json_object *credits = NULL;
+    json_object *has_credits = NULL;
     json_object *balance = NULL;
     if (json_object_object_get_ex(limits, "credits", &credits) &&
+        json_object_object_get_ex(credits, "hasCredits", &has_credits) &&
+        json_object_get_boolean(has_credits) &&
         json_object_object_get_ex(credits, "balance", &balance) && !json_object_is_type(balance, json_type_null)) {
         provider->has_credits = TRUE;
         provider->credits_remaining = json_object_get_double(balance);
