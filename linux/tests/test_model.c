@@ -477,7 +477,7 @@ static void test_config_normalization_and_secure_persistence(void) {
     char *saved = previous ? g_strdup(previous) : NULL;
     g_setenv("CODEXBAR_CONFIG", path, TRUE);
 
-    CodexBarConfig *config = codexbar_config_load(&error);
+    CodexBarConfig *config = codexbar_config_load_for_update(&error);
     g_assert_no_error(error);
     g_assert_nonnull(config);
     g_assert_cmpint(config->version, ==, 99);
@@ -518,7 +518,7 @@ static void test_config_normalization_and_secure_persistence(void) {
     g_assert_cmpstr(json_object_get_string(api_key), ==, "test-secret");
     json_object_put(root);
 
-    config = codexbar_config_load(&error);
+    config = codexbar_config_load_for_update(&error);
     g_assert_no_error(error);
     g_assert_cmpint(config->version, ==, 1);
     g_assert_false(codexbar_config_set_api_key(config, "bedrock", "not-valid-for-bedrock", TRUE, &error));

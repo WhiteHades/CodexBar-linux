@@ -147,6 +147,7 @@ static CodexBarConfig *config_new(const char *path) {
 
 static gboolean acquire_config_lock(CodexBarConfig *config, GError **error) {
     const char *runtime = g_get_user_runtime_dir();
+    if (!runtime) runtime = g_get_user_cache_dir();
     char *directory = g_build_filename(runtime, "codexbar", NULL);
     gboolean existed = g_file_test(directory, G_FILE_TEST_IS_DIR);
     if (g_mkdir_with_parents(directory, 0700) != 0 || (!existed && g_chmod(directory, 0700) != 0)) {
@@ -181,11 +182,11 @@ static void append_missing_providers(CodexBarConfig *config, GHashTable *seen, g
     }
 }
 
-CodexBarConfig *codexbar_config_load(GError **error) {
+static CodexBarConfig *config_load(gboolean for_update, GError **error) {
     char *path = codexbar_config_resolve_path();
     CodexBarConfig *config = config_new(path);
     g_free(path);
-    if (!acquire_config_lock(config, error)) {
+    if (for_update && !acquire_config_lock(config, error)) {
         codexbar_config_free(config);
         return NULL;
     }
@@ -248,6 +249,14 @@ CodexBarConfig *codexbar_config_load(GError **error) {
     return config;
 }
 
+CodexBarConfig *codexbar_config_load(GError **error) {
+    return config_load(FALSE, error);
+}
+
+CodexBarConfig *codexbar_config_load_for_update(GError **error) {
+    return config_load(TRUE, error);
+}
+
 static json_object *clone_object(json_object *object) {
     if (!object) return json_object_new_object();
     return json_tokener_parse(json_object_to_json_string_ext(object, JSON_C_TO_STRING_PLAIN));
@@ -297,6 +306,10 @@ char *codexbar_config_render_json(const CodexBarConfig *config, gboolean pretty)
 
 gboolean codexbar_config_save(CodexBarConfig *config, GError **error) {
     g_return_val_if_fail(config != NULL, FALSE);
+    if (config->lock_fd < 0) {
+        g_set_error_literal(error, config_error_quark(), 7, "Config must be loaded for update before saving");
+        return FALSE;
+    }
     json_object *root = serialize_config(config);
     const char *json = json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY);
     char *contents = g_strconcat(json, "\n", NULL);

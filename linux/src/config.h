@@ -41,6 +41,7 @@ typedef struct {
 
 char *codexbar_config_resolve_path(void);
 CodexBarConfig *codexbar_config_load(GError **error);
+CodexBarConfig *codexbar_config_load_for_update(GError **error);
 gboolean codexbar_config_save(CodexBarConfig *config, GError **error);
 char *codexbar_config_render_json(const CodexBarConfig *config, gboolean pretty);
 GPtrArray *codexbar_config_validate(const CodexBarConfig *config);

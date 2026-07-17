@@ -66,6 +66,8 @@ CODEXBAR_THEME=system codexbar-linux tui
 2. use `l`, `Right`, `]`, or `Tab` for the next provider.
 3. use `g` and `G` for the first and last provider.
 4. use `1` through `9` to select a provider by its position.
-5. use `r` or `Ctrl R` to refresh.
-6. use `?` to show the key help.
-7. use `q`, `Esc`, or `ZZ` to close.
+5. use `Enter` to open provider actions for the usage dashboard, status page, config, About, and Quit.
+6. use `j`, `k`, and `Enter` to choose and run an action; use `Esc` to return without losing your position.
+7. use `r` or `Ctrl R` to refresh.
+8. use `?` to show the key help.
+9. use `q`, `Esc`, or `ZZ` to close from the usage view.

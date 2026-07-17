@@ -82,6 +82,10 @@ static CodexBarConfig *load_config(GError **error) {
     return codexbar_config_load(error);
 }
 
+static CodexBarConfig *load_config_for_update(GError **error) {
+    return codexbar_config_load_for_update(error);
+}
+
 static int run_validate(int argc, char **argv) {
     const char *values[] = {"--format"};
     const char *flags[] = {"--json", "--json-only", "--pretty"};
@@ -218,7 +222,7 @@ static int run_toggle(int argc, char **argv, gboolean enabled) {
     const CodexBarProviderDescriptor *provider = selected_provider(argc, argv);
     if (!provider) return print_message_error(argc, argv, "Unknown or missing provider. Use --provider <name>.");
     GError *error = NULL;
-    CodexBarConfig *config = load_config(&error);
+    CodexBarConfig *config = load_config_for_update(&error);
     if (!config) return print_error(argc, argv, error);
     if (!codexbar_config_set_enabled(config, provider->id, enabled, &error) ||
         !codexbar_config_save(config, &error)) {
@@ -268,7 +272,7 @@ static int run_set_api_key(int argc, char **argv) {
     char *stdin_key = from_stdin ? read_stdin() : NULL;
     const char *api_key = stdin_key ? stdin_key : argument;
     GError *error = NULL;
-    CodexBarConfig *config = load_config(&error);
+    CodexBarConfig *config = load_config_for_update(&error);
     if (!config) {
         g_free(stdin_key);
         return print_error(argc, argv, error);

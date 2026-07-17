@@ -20,6 +20,7 @@ core_sources = files(
   'src/provider_registry.c',
   'src/render.c',
   'src/simple_providers.c',
+  'src/tui_actions.c',
 )
 
 core_deps = [glib_dep, gio_dep, json_dep, curl_dep, math_dep]
@@ -50,3 +51,11 @@ test(
 
 config_cli_test = find_program('tests/test_config_cli.sh')
 test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux])
+
+tui_actions_test = executable(
+  'codexbar-linux-tui-actions-tests',
+  files('src/provider_registry.c', 'src/tui_actions.c', 'tests/test_tui_actions.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep],
+)
+test('codexbar-linux-tui-actions', tui_actions_test)

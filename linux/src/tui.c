@@ -1,6 +1,8 @@
 #include "tui.h"
 
 #include "backend.h"
+#include "config.h"
+#include "tui_actions.h"
 #include "version.h"
 
 #include <locale.h>
@@ -17,6 +19,12 @@ enum {
     COLOR_SELECTED,
     COLOR_TRACK,
 };
+
+typedef enum {
+    CODEXBAR_TUI_MODE_USAGE,
+    CODEXBAR_TUI_MODE_ACTIONS,
+    CODEXBAR_TUI_MODE_ABOUT,
+} CodexBarTuiMode;
 
 static void initialize_theme(void) {
     const char *theme = g_getenv("CODEXBAR_THEME");
@@ -517,7 +525,56 @@ static void draw_provider(
     }
 }
 
-static void draw_screen(const CodexBarSnapshot *snapshot, guint selected, guint first_metric, const char *status) {
+static void draw_actions(const GPtrArray *actions, guint selected, int y, int x, int height, int width) {
+    attron(COLOR_PAIR(COLOR_ACCENT) | A_BOLD);
+    draw_text(y++, x, width, "Actions");
+    attroff(COLOR_PAIR(COLOR_ACCENT) | A_BOLD);
+    y++;
+    for (guint index = 0; actions && index < actions->len && y < height; index++, y++) {
+        const CodexBarTuiAction *action = g_ptr_array_index((GPtrArray *)actions, index);
+        if (index == selected) {
+            attron(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
+        } else {
+            attron(COLOR_PAIR(COLOR_NORMAL));
+        }
+        char *label = g_strdup_printf("%s %s", index == selected ? ">" : " ", action->label);
+        draw_text(y, x, width, label);
+        g_free(label);
+        if (index == selected) {
+            attroff(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
+        } else {
+            attroff(COLOR_PAIR(COLOR_NORMAL));
+        }
+    }
+}
+
+static void draw_about(int y, int x, int height, int width) {
+    attron(COLOR_PAIR(COLOR_ACCENT) | A_BOLD);
+    draw_text(y++, x, width, "CodexBar");
+    attroff(COLOR_PAIR(COLOR_ACCENT) | A_BOLD);
+    attron(COLOR_PAIR(COLOR_MUTED));
+    char *version = g_strdup_printf("Version %s", CODEXBAR_LINUX_VERSION);
+    draw_text(y++, x, width, version);
+    g_free(version);
+    draw_text(y++, x, width, "Native C23 terminal usage monitor for Linux");
+    if (y < height) {
+        char *path = codexbar_config_resolve_path();
+        char *config = g_strdup_printf("Config: %s", path);
+        draw_text(y++, x, width, config);
+        g_free(config);
+        g_free(path);
+    }
+    if (y + 1 < height) draw_text(y + 1, x, width, "Enter, Space, or Esc to return");
+    attroff(COLOR_PAIR(COLOR_MUTED));
+}
+
+static void draw_screen(const CodexBarSnapshot *snapshot,
+                        guint selected,
+                        guint first_metric,
+                        const char *status,
+                        CodexBarTuiMode mode,
+                        const GPtrArray *actions,
+                        guint selected_action) {
     erase();
     int rows = 0;
     int columns = 0;
@@ -573,7 +630,11 @@ static void draw_screen(const CodexBarSnapshot *snapshot, guint selected, guint 
     int card_height = panel_height - 5;
     int card_width = panel_width - 4;
     draw_border(card_y, card_x, card_height, card_width);
-    if (snapshot->providers->len > 0) {
+    if (mode == CODEXBAR_TUI_MODE_ACTIONS) {
+        draw_actions(actions, selected_action, card_y + 1, card_x + 3, card_y + card_height - 1, card_width - 6);
+    } else if (mode == CODEXBAR_TUI_MODE_ABOUT) {
+        draw_about(card_y + 1, card_x + 3, card_y + card_height - 1, card_width - 6);
+    } else if (snapshot->providers->len > 0) {
         const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, selected);
         draw_provider(provider, first_metric, card_y + 1, card_x + 3, card_height - 2, card_width - 6);
     } else {
@@ -585,8 +646,11 @@ static void draw_screen(const CodexBarSnapshot *snapshot, guint selected, guint 
     attron(COLOR_PAIR(COLOR_MUTED));
     draw_text(panel_y + panel_height - 2,
               panel_x + 3,
-              panel_width - 31,
-               status ? status : "h/l tabs  j/k metrics  r refresh  q quit");
+               panel_width - 31,
+               status ? status
+                      : mode == CODEXBAR_TUI_MODE_ACTIONS ? "j/k choose  Enter run  Esc back  q quit"
+                      : mode == CODEXBAR_TUI_MODE_ABOUT   ? "Enter/Esc back  q quit"
+                                                         : "Enter actions  h/l tabs  j/k metrics  r refresh  q quit");
     char *version = g_strdup_printf("codexbar-linux %s", CODEXBAR_LINUX_VERSION);
     draw_text(panel_y + panel_height - 2,
               panel_x + panel_width - (int)strlen(version) - 3,
@@ -609,6 +673,55 @@ static CodexBarSnapshot *fetch_snapshot(char **status) {
     return snapshot;
 }
 
+static gboolean ensure_config_file(GError **error) {
+    char *path = codexbar_config_resolve_path();
+    gboolean exists = g_file_test(path, G_FILE_TEST_EXISTS);
+    g_free(path);
+    if (exists) return TRUE;
+    CodexBarConfig *config = codexbar_config_load_for_update(error);
+    if (!config) return FALSE;
+    gboolean result = g_file_test(config->path, G_FILE_TEST_EXISTS) || codexbar_config_save(config, error);
+    codexbar_config_free(config);
+    return result;
+}
+
+static void execute_action(const GPtrArray *actions,
+                           guint selected,
+                           CodexBarTuiMode *mode,
+                           gboolean *running,
+                           char **status) {
+    if (!actions || selected >= actions->len) return;
+    const CodexBarTuiAction *action = g_ptr_array_index((GPtrArray *)actions, selected);
+    GError *error = NULL;
+    if (action->kind == CODEXBAR_TUI_ACTION_SETTINGS && !ensure_config_file(&error)) {
+        g_free(*status);
+        *status = g_strdup_printf("could not create config: %s", error ? error->message : "unknown error");
+        g_clear_error(&error);
+        return;
+    }
+    CodexBarTuiEffect effect = CODEXBAR_TUI_EFFECT_OPENED;
+    if (!codexbar_tui_action_execute_default(action, &effect, &error)) {
+        g_free(*status);
+        *status = g_strdup_printf(
+            "could not open %s: %s", action->label, error ? error->message : "unknown error");
+        g_clear_error(&error);
+        return;
+    }
+    switch (effect) {
+    case CODEXBAR_TUI_EFFECT_OPENED:
+        g_free(*status);
+        *status = g_strdup_printf("opened %s", action->label);
+        *mode = CODEXBAR_TUI_MODE_USAGE;
+        break;
+    case CODEXBAR_TUI_EFFECT_SHOW_ABOUT:
+        *mode = CODEXBAR_TUI_MODE_ABOUT;
+        break;
+    case CODEXBAR_TUI_EFFECT_QUIT:
+        *running = FALSE;
+        break;
+    }
+}
+
 int codexbar_tui_run(void) {
     setlocale(LC_ALL, "");
     initscr();
@@ -623,7 +736,7 @@ int codexbar_tui_run(void) {
     char *status = g_strdup("loading provider telemetry...");
     CodexBarSnapshot *empty = g_new0(CodexBarSnapshot, 1);
     empty->providers = g_ptr_array_new();
-    draw_screen(empty, 0, 0, status);
+    draw_screen(empty, 0, 0, status, CODEXBAR_TUI_MODE_USAGE, NULL, 0);
     codexbar_snapshot_free(empty);
     g_free(status);
     status = NULL;
@@ -631,6 +744,9 @@ int codexbar_tui_run(void) {
     CodexBarSnapshot *snapshot = fetch_snapshot(&status);
     guint selected = 0;
     guint first_metric = 0;
+    CodexBarTuiMode mode = CODEXBAR_TUI_MODE_USAGE;
+    GPtrArray *actions = NULL;
+    guint selected_action = 0;
     gboolean help_visible = FALSE;
     gboolean pending_z = FALSE;
     gboolean running = TRUE;
@@ -639,10 +755,10 @@ int codexbar_tui_run(void) {
             selected = snapshot->providers->len - 1;
         }
         const char *visible_status = status;
-        if (help_visible) {
+        if (help_visible && mode == CODEXBAR_TUI_MODE_USAGE) {
             visible_status = "h/l provider  j/k metrics  1-9 select  r refresh  q/Esc/ZZ quit";
         }
-        draw_screen(snapshot, selected, first_metric, visible_status);
+        draw_screen(snapshot, selected, first_metric, visible_status, mode, actions, selected_action);
         int key = getch();
         if (pending_z) {
             pending_z = FALSE;
@@ -650,6 +766,28 @@ int codexbar_tui_run(void) {
                 running = FALSE;
                 continue;
             }
+        }
+        if (mode == CODEXBAR_TUI_MODE_ABOUT) {
+            if (key == 'q') {
+                running = FALSE;
+            } else if (key == 27 || key == '\n' || key == KEY_ENTER || key == ' ') {
+                mode = CODEXBAR_TUI_MODE_USAGE;
+            }
+            continue;
+        }
+        if (mode == CODEXBAR_TUI_MODE_ACTIONS) {
+            if (key == 'q') {
+                running = FALSE;
+            } else if (key == 27) {
+                mode = CODEXBAR_TUI_MODE_USAGE;
+            } else if (key == KEY_DOWN || key == 'j') {
+                if (actions && selected_action + 1 < actions->len) selected_action++;
+            } else if (key == KEY_UP || key == 'k') {
+                if (selected_action > 0) selected_action--;
+            } else if (key == '\n' || key == KEY_ENTER) {
+                execute_action(actions, selected_action, &mode, &running, &status);
+            }
+            continue;
         }
         switch (key) {
         case 'q':
@@ -699,6 +837,24 @@ int codexbar_tui_run(void) {
         case '?':
             help_visible = !help_visible;
             break;
+        case '\n':
+        case KEY_ENTER:
+            g_clear_pointer(&actions, g_ptr_array_unref);
+            if (snapshot->providers->len > 0) {
+                const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, selected);
+                char *path = codexbar_config_resolve_path();
+                actions = codexbar_tui_actions_new(provider->provider, path);
+                g_free(path);
+            } else {
+                char *path = codexbar_config_resolve_path();
+                actions = codexbar_tui_actions_new(NULL, path);
+                g_free(path);
+            }
+            selected_action = 0;
+            mode = CODEXBAR_TUI_MODE_ACTIONS;
+            help_visible = FALSE;
+            g_clear_pointer(&status, g_free);
+            break;
         case 'Z':
             pending_z = TRUE;
             break;
@@ -706,7 +862,7 @@ int codexbar_tui_run(void) {
         case 18: {
             g_free(status);
             status = g_strdup("refreshing provider telemetry...");
-            draw_screen(snapshot, selected, first_metric, status);
+            draw_screen(snapshot, selected, first_metric, status, mode, actions, selected_action);
             codexbar_snapshot_free(snapshot);
             g_free(status);
             status = NULL;
@@ -729,6 +885,7 @@ int codexbar_tui_run(void) {
     }
 
     codexbar_snapshot_free(snapshot);
+    g_clear_pointer(&actions, g_ptr_array_unref);
     g_free(status);
     endwin();
     return 0;
