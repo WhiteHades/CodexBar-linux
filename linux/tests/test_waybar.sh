@@ -15,7 +15,8 @@ case "$output" in
     ;;
 esac
 
-native_output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" "$binary" waybar)
+native_output=$(env -u CODEXBAR_BACKEND -u OPENROUTER_API_KEY -u OPENROUTER_API_URL \
+  CODEXBAR_CONFIG="$config" "$binary" waybar)
 case "$native_output" in
   *'OpenRouter API token is not configured'*) ;;
   *)

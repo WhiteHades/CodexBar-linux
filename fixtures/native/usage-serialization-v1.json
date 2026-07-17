@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "full-success",
+      "payloads": [
+        {
+          "provider": "codex",
+          "account": "owner@example.test",
+          "source": "api",
+          "status": {
+            "indicator": "minor",
+            "description": "Elevated errors",
+            "url": "https://status.example.test",
+            "updatedAt": "2020-07-17T09:50:00Z"
+          },
+          "usage": {
+            "primary": {
+              "usedPercent": 25.0,
+              "windowMinutes": 300,
+              "resetsAt": "2020-07-17T15:00:00Z",
+              "resetDescription": "25 / 100 requests"
+            },
+            "secondary": {
+              "usedPercent": 50.0,
+              "windowMinutes": 10080,
+              "resetsAt": "2020-07-21T10:00:00Z"
+            },
+            "tertiary": null,
+            "extraRateWindows": [
+              {
+                "id": "model-x",
+                "title": "Model X",
+                "window": {
+                  "usedPercent": 12.0,
+                  "resetDescription": "12% used"
+                }
+              },
+              {
+                "id": "model-y",
+                "title": "Model Y",
+                "window": {
+                  "usedPercent": 0.0,
+                  "resetDescription": "usage unavailable"
+                },
+                "usageKnown": false
+              }
+            ],
+            "updatedAt": "2020-07-17T09:55:00Z",
+            "subscriptionExpiresAt": "2020-08-01T00:00:00Z",
+            "subscriptionRenewsAt": "2020-07-24T00:00:00Z",
+            "identity": {
+              "providerID": "codex",
+              "accountEmail": "owner@example.test",
+              "accountOrganization": "Example Labs",
+              "accountID": "acct_test_123",
+              "loginMethod": "API key"
+            },
+            "accountEmail": "owner@example.test",
+            "accountOrganization": "Example Labs",
+            "loginMethod": "API key",
+            "providerCost": {
+              "used": 12.5,
+              "limit": 50.0,
+              "currencyCode": "USD",
+              "period": "Monthly",
+              "resetsAt": "2020-08-01T00:00:00Z",
+              "updatedAt": "2020-07-17T09:54:00Z",
+              "nextRegenAmount": 5.0,
+              "personalUsed": 7.25
+            }
+          },
+          "credits": {
+            "remaining": 60.0,
+            "events": [
+              {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "date": "2020-07-16T12:00:00Z",
+                "service": "api",
+                "creditsUsed": 5.0
+              }
+            ],
+            "updatedAt": "2020-07-17T09:56:00Z",
+            "codexCreditLimit": {
+              "title": "Monthly credit limit",
+              "used": 25.0,
+              "limit": 100.0,
+              "remaining": 75.0,
+              "remainingPercent": 75.0,
+              "resetsAt": "2020-08-01T00:00:00Z",
+              "updatedAt": "2020-07-17T09:57:00Z"
+            }
+          },
+          "pace": {
+            "primary": {
+              "stage": "slightlyBehind",
+              "deltaPercent": -4.0,
+              "expectedUsedPercent": 29.0,
+              "willLastToReset": true,
+              "runOutProbability": 0.12,
+              "summary": "4% in reserve"
+            },
+            "secondary": {
+              "stage": "ahead",
+              "deltaPercent": 9.0,
+              "expectedUsedPercent": 41.0,
+              "willLastToReset": false,
+              "etaSeconds": 172800.0,
+              "summary": "9% in deficit"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "sparse-success",
+      "payloads": [
+        {
+          "provider": "codebuff",
+          "source": "api",
+          "usage": {
+            "primary": null,
+            "secondary": null,
+            "tertiary": null,
+            "updatedAt": "2020-07-17T10:00:00Z"
+          }
+        }
+      ]
+    },
+    {
+      "name": "error-defaults",
+      "payloads": [
+        {
+          "provider": "kimi",
+          "source": "api",
+          "status": {
+            "indicator": "maintenance",
+            "url": "https://status.example.test"
+          },
+          "error": {
+            "message": "fixture failure",
+            "code": 1,
+            "kind": "runtime"
+          }
+        }
+      ]
+    }
+  ]
+}

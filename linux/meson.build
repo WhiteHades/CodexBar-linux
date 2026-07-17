@@ -44,20 +44,41 @@ test_executable = executable(
   dependencies: core_deps,
 )
 
-test('codexbar-linux', test_executable)
+normalized_test_env = environment()
+normalized_test_env.set('LC_ALL', 'C')
+normalized_test_env.set('TZ', 'UTC')
+test('codexbar-linux', test_executable, env: normalized_test_env)
+
+serialization_test = executable(
+  'codexbar-linux-usage-serialization-tests',
+  files('src/model.c', 'src/render.c', 'tests/test_usage_serialization.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, json_dep, math_dep],
+)
+serialization_fixture = files('../fixtures/native/usage-serialization-v1.json')
+test(
+  'codexbar-linux-usage-serialization',
+  serialization_test,
+  args: serialization_fixture,
+  env: normalized_test_env,
+)
 
 waybar_test = find_program('tests/test_waybar.sh')
 test(
   'codexbar-linux-waybar',
   waybar_test,
-  args: [codexbar_linux, files('tests/fake_backend.sh'), files('tests/config-openrouter-missing.json')],
+  args: [codexbar_linux, files('tests/fake_backend.sh'), files('../fixtures/native/config-openrouter-missing.json')],
 )
 
 config_cli_test = find_program('tests/test_config_cli.sh')
 test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux])
 
 usage_cli_test = find_program('tests/test_usage_cli.sh')
-test('codexbar-linux-usage-cli', usage_cli_test, args: [codexbar_linux, files('tests/fake_backend.sh')])
+test(
+  'codexbar-linux-usage-cli',
+  usage_cli_test,
+  args: [codexbar_linux, files('tests/fake_backend.sh'), meson.project_version()],
+)
 
 tui_actions_test = executable(
   'codexbar-linux-tui-actions-tests',

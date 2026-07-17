@@ -1,0 +1,47 @@
+[
+  {
+    "provider": "codex",
+    "account": "dev@example.test",
+    "plan": "Pro",
+    "source": "oauth",
+    "note": "plan expires Jul 31, 2026",
+    "usage": {
+      "primary": {
+        "label": "session",
+        "usedPercent": 28,
+        "windowDurationMins": 300,
+        "resetDescription": "28 / 100 requests",
+        "resetsAt": "2020-07-23T10:16:00Z"
+      },
+      "secondary": {
+        "label": "weekly",
+        "usedPercent": 71.4,
+        "resetDescription": "Resets Friday",
+        "resetsAt": "2020-07-24T08:00:00Z"
+      },
+      "tertiary": null,
+      "extraRateWindows": [
+        {
+          "id": "sonnet",
+          "title": "Sonnet",
+          "window": { "usedPercent": 0 },
+          "usageKnown": true
+        }
+      ],
+      "updatedAt": "2020-07-17T10:00:00Z"
+    },
+    "credits": {
+      "label": "balance",
+      "remaining": 12.5
+    }
+  },
+  {
+    "provider": "claude",
+    "source": "cli",
+    "usage": {
+      "primary": { "usedPercent": 91 },
+      "updatedAt": "2020-07-17T10:00:00Z"
+    },
+    "error": null
+  }
+]

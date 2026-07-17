@@ -249,8 +249,10 @@ static void test_codex_credit_limit_legacy_mapping(void) {
     CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
     g_assert_no_error(error);
     const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
-    g_assert_cmpuint(provider->balances->len, ==, 1);
-    const CodexBarBalance *balance = balance_at(provider, 0);
+    g_assert_cmpuint(provider->balances->len, ==, 2);
+    g_assert_cmpstr(balance_at(provider, 0)->id, ==, "credits");
+    g_assert_cmpfloat(balance_at(provider, 0)->remaining, ==, 99.0);
+    const CodexBarBalance *balance = balance_at(provider, 1);
     g_assert_cmpstr(balance->id, ==, "codex-credit-limit");
     g_assert_cmpstr(balance->title, ==, "Monthly credit limit");
     g_assert_cmpfloat(balance->remaining, ==, 60.0);
@@ -259,6 +261,8 @@ static void test_codex_credit_limit_legacy_mapping(void) {
     g_assert_true(balance->has_limit);
     g_assert_cmpfloat(balance->limit, ==, 100.0);
     g_assert_true(balance->has_resets_at);
+    g_assert_true(balance->has_remaining_percent);
+    g_assert_cmpfloat(balance->remaining_percent, ==, 60.0);
     codexbar_snapshot_free(snapshot);
 }
 
@@ -603,14 +607,14 @@ static void test_claude_presentation_metadata(void) {
         "[{\"provider\":\"claude\",\"account\":\"owner@example.com\",\"plan\":\"Max\","
         "\"source\":\"oauth\",\"status\":{\"indicator\":\"minor\","
         "\"description\":\"Elevated API errors\",\"url\":\"https://status.anthropic.com\","
-        "\"updatedAt\":\"2026-07-17T10:00:00Z\"},\"usage\":{"
+        "\"updatedAt\":\"2020-07-17T10:00:00Z\"},\"usage\":{"
         "\"primary\":{\"label\":\"Session\",\"usedPercent\":42,\"windowMinutes\":300,"
         "\"resetsAt\":\"2026-07-17T15:00:00Z\"},"
         "\"secondary\":{\"label\":\"Weekly\",\"usedPercent\":74,\"windowMinutes\":10080,"
         "\"resetsAt\":\"2026-07-21T10:00:00Z\"},"
         "\"extraRateWindows\":[{\"id\":\"sonnet\",\"title\":\"Sonnet\","
         "\"window\":{\"usedPercent\":18},\"usageKnown\":true}],"
-        "\"updatedAt\":\"2026-07-17T09:55:00Z\","
+        "\"updatedAt\":\"2020-07-17T09:55:00Z\","
         "\"identity\":{\"providerID\":\"claude\",\"accountEmail\":\"fallback@example.com\","
         "\"accountOrganization\":\"Example Labs\",\"loginMethod\":\"OAuth\","
         "\"accountID\":\"acct_claude_123\"},"
@@ -619,7 +623,7 @@ static void test_claude_presentation_metadata(void) {
         "\"providerCost\":{\"used\":12.5,\"limit\":50,\"currencyCode\":\"USD\","
         "\"period\":\"Monthly\",\"resetsAt\":\"2026-08-01T00:00:00Z\","
         "\"nextRegenAmount\":5,\"personalUsed\":7.25,"
-        "\"updatedAt\":\"2026-07-17T09:54:00Z\"}},"
+        "\"updatedAt\":\"2020-07-17T09:54:00Z\"}},"
         "\"pace\":{\"primary\":{\"stage\":\"slightlyBehind\",\"deltaPercent\":-4,"
         "\"expectedUsedPercent\":46,\"willLastToReset\":true,\"etaSeconds\":null,"
         "\"runOutProbability\":0.12,"
@@ -631,7 +635,7 @@ static void test_claude_presentation_metadata(void) {
         "\"tokenCost\":{\"sessionTokens\":123456,\"sessionCostUSD\":1.25,"
         "\"sessionRequests\":14,\"last30DaysTokens\":9876543,\"last30DaysCostUSD\":98.75,"
         "\"last30DaysRequests\":321,\"currencyCode\":\"USD\",\"historyDays\":30,"
-        "\"historyLabel\":\"Last 30 days\",\"updatedAt\":\"2026-07-17T09:53:00Z\"}}]";
+        "\"historyLabel\":\"Last 30 days\",\"updatedAt\":\"2020-07-17T09:53:00Z\"}}]";
     GError *error = NULL;
     CodexBarSnapshot *snapshot = codexbar_snapshot_parse(json, &error);
     g_assert_no_error(error);
@@ -694,7 +698,7 @@ static void test_claude_presentation_metadata(void) {
     g_assert_nonnull(strstr(text, "Max · oauth"));
     g_assert_nonnull(strstr(text, "Example Labs"));
     g_assert_nonnull(strstr(text, "acct_claude_123"));
-    g_assert_nonnull(strstr(text, "updated Fri, Jul 17 2026"));
+    g_assert_nonnull(strstr(text, "updated Fri, Jul 17 2020"));
     g_assert_nonnull(strstr(text, "subscription expires"));
     g_assert_nonnull(strstr(text, "Pace: 4% in reserve"));
     g_assert_nonnull(strstr(text, "Pace: 9% in deficit"));
@@ -983,8 +987,8 @@ static void test_llmproxy_usage(void) {
     g_ptr_array_add(snapshot->providers, provider);
     rendered = codexbar_render_usage_json(snapshot, FALSE);
     g_assert_nonnull(strstr(rendered, "\"primary\":null"));
-    g_assert_nonnull(strstr(rendered, "\"secondary\":{\"label\":\"requests\",\"usedPercent\":0.0"));
-    g_assert_nonnull(strstr(rendered, "\"tertiary\":{\"label\":\"tokens\",\"usedPercent\":0.0"));
+    g_assert_nonnull(strstr(rendered, "\"secondary\":{\"usedPercent\":0.0,\"resetDescription\":\"0 requests\""));
+    g_assert_nonnull(strstr(rendered, "\"tertiary\":{\"usedPercent\":0.0,\"resetDescription\":\"0 tokens\""));
     g_free(rendered);
     codexbar_snapshot_free(snapshot);
 }
@@ -1167,7 +1171,13 @@ static void test_codex_rate_limits(void) {
     g_assert_no_error(error);
     g_assert_cmpstr(provider->account, ==, "dev@example.com");
     g_assert_cmpstr(provider->plan, ==, "Pro");
-    codexbar_provider_free(provider);
+    CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+    g_ptr_array_add(snapshot->providers, provider);
+    char *rendered = codexbar_render_usage_json(snapshot, FALSE);
+    g_assert_nonnull(strstr(rendered, "\"loginMethod\":\"Pro\""));
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
 }
 
 static void test_provider_registry(void) {

@@ -4,13 +4,14 @@ set -eu
 
 binary=$1
 backend=$2
+expected_version=$3
 work=$(mktemp -d "$PWD/codexbar-usage-cli.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 config=$work/config.json
 
 output=$(CODEXBAR_BACKEND="$backend" "$binary")
 case "$output" in
-  *'codex · dev@example.com · Pro [oauth]'*'session: 28% used'*'claude [cli]'*) ;;
+  *'codex · dev@example.test · Pro [oauth]'*'session: 28% used'*'claude [cli]'*) ;;
   *)
     printf 'unexpected default usage output: %s\n' "$output" >&2
     exit 1
@@ -19,7 +20,7 @@ esac
 
 output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider codex --format json)
 case "$output" in
-  '[{"provider":"codex"'*'"primary":{"usedPercent":28'*'"credits":{"remaining":12.5}'*) ;;
+  '[{"provider":"codex"'*'"primary":{'*'"usedPercent":28'*'"credits":{'*'"remaining":12.5'*) ;;
   *)
     printf 'unexpected codex JSON output: %s\n' "$output" >&2
     exit 1
@@ -68,14 +69,14 @@ esac
 
 output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider codex --json --format text)
 case "$output" in
-  'codex · dev@example.com · Pro [oauth]'*) ;;
+  'codex · dev@example.test · Pro [oauth]'*) ;;
   *)
     printf 'explicit text format did not override JSON shortcut\n' >&2
     exit 1
     ;;
 esac
 
-[ "$("$binary" --version)" = 'CodexBar 0.1.0' ]
+[ "$("$binary" --version)" = "CodexBar $expected_version" ]
 
 output=$(env -u CODEXBAR_BACKEND -u KIMI_CODE_API_KEY CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider kimi --json 2>/dev/null || true)

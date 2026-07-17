@@ -64,6 +64,10 @@ typedef struct {
     gint64 expiry_ms;
     gboolean has_resets_at;
     gint64 resets_at_ms;
+    gboolean has_updated_at;
+    gint64 updated_at_ms;
+    gboolean has_remaining_percent;
+    double remaining_percent;
 } CodexBarBalance;
 
 typedef struct {
@@ -137,6 +141,9 @@ typedef struct {
     gboolean has_updated_at;
     gint64 updated_at_ms;
     gboolean explicit_quota_slots;
+    gboolean has_credits_updated_at;
+    gint64 credits_updated_at_ms;
+    json_object *credit_events;
     json_object *usage_extensions;
     json_object *raw;
     GPtrArray *quota_windows;

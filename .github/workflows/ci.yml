@@ -10,6 +10,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   SWIFT_VERSION: 6.3.3
   SWIFTLY_VERSION: 1.1.3
@@ -28,6 +31,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Detect macOS test impact
         id: macos-tests
@@ -82,12 +86,107 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install lint tools
         run: ./Scripts/install_lint_tools.sh swiftlint
 
       - name: Lint
         run: ./Scripts/lint.sh lint-linux
+
+  native-c-tests:
+    name: Native C (${{ matrix.name }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-x64
+            runs-on: ubuntu-24.04
+            cc: gcc-14
+            compiler-package: gcc-14
+            sanitizers: none
+          - name: clang-x64
+            runs-on: ubuntu-24.04
+            cc: clang-18
+            compiler-package: clang-18
+            sanitizers: none
+          - name: gcc-arm64
+            runs-on: ubuntu-24.04-arm
+            cc: gcc-14
+            compiler-package: gcc-14
+            sanitizers: none
+          - name: clang-arm64
+            runs-on: ubuntu-24.04-arm
+            cc: clang-18
+            compiler-package: clang-18
+            sanitizers: none
+          - name: clang-asan-ubsan
+            runs-on: ubuntu-24.04
+            cc: clang-18
+            compiler-package: clang-18
+            sanitizers: address,undefined
+    env:
+      CC: ${{ matrix.cc }}
+      BUILD_DIR: build/native-${{ matrix.name }}
+      SANITIZERS: ${{ matrix.sanitizers }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install native dependencies
+        env:
+          COMPILER_PACKAGE: ${{ matrix.compiler-package }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            "$COMPILER_PACKAGE" \
+            libcurl4-openssl-dev \
+            libglib2.0-dev \
+            libjson-c-dev \
+            libncurses-dev \
+            ninja-build \
+            pkg-config \
+            python3-venv
+
+      - name: Install Meson
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/meson"
+          "$RUNNER_TEMP/meson/bin/pip" install --disable-pip-version-check "meson==1.4.2"
+          echo "$RUNNER_TEMP/meson/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          "$CC" --version
+          args=(setup "$BUILD_DIR" --buildtype=debug --wrap-mode=nodownload)
+          if [[ "$SANITIZERS" != none ]]; then
+            args+=("-Db_sanitize=$SANITIZERS" "-Db_lundef=false")
+          fi
+          meson "${args[@]}"
+
+      - name: Compile
+        run: meson compile -C "$BUILD_DIR"
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: meson test -C "$BUILD_DIR" --no-rebuild --print-errorlogs
+
+      - name: Verify native version
+        run: |
+          set -euo pipefail
+          project_version="$(
+            meson introspect --projectinfo "$BUILD_DIR" |
+              python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
+          )"
+          test "$("$BUILD_DIR/linux/codexbar-linux" --version)" = "CodexBar $project_version"
 
   swift-test-macos:
     needs: changes
@@ -103,6 +202,8 @@ jobs:
         shard-count: [2]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Select Xcode 26.3 or 26.2
         run: |
@@ -166,13 +267,17 @@ jobs:
     needs:
       - changes
       - lint
+      - native-c-tests
       - swift-test-macos
     if: ${{ always() && !cancelled() }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Verify lint and macOS test jobs
         run: |
+          test "${{ needs.native-c-tests.result }}" = "success"
           ./Scripts/ci_verify_test_jobs.sh \
             "${{ needs.lint.result }}" \
             "${{ needs.changes.result }}" \
@@ -190,6 +295,7 @@ jobs:
           MACOS_TESTS_DEFERRED: ${{ needs.changes.outputs.macos-tests-deferred }}
           MACOS_TESTS_REASON: ${{ needs.changes.outputs.macos-tests-reason }}
           MACOS_RESULT: ${{ needs.swift-test-macos.result }}
+          NATIVE_C_RESULT: ${{ needs.native-c-tests.result }}
         run: |
           set -euo pipefail
           reason="${MACOS_TESTS_REASON:-<unset>}"
@@ -199,6 +305,7 @@ jobs:
             printf '| Field | Value |\n'
             printf '| --- | --- |\n'
             printf '| lint result | `%s` |\n' "$LINT_RESULT"
+            printf '| native C result | `%s` |\n' "$NATIVE_C_RESULT"
             printf '| changes result | `%s` |\n' "$CHANGES_RESULT"
             printf '| macOS Swift tests required | `%s` |\n' "${MACOS_TESTS:-<unset>}"
             printf '| macOS Swift tests deferred | `%s` |\n' "${MACOS_TESTS_DEFERRED:-<unset>}"
@@ -219,6 +326,8 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Runner info
         run: |

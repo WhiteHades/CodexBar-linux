@@ -321,15 +321,14 @@ static json_object *timestamp_json(gint64 timestamp_ms) {
 
 static json_object *window_json(const CodexBarQuotaWindow *window) {
     json_object *object = json_object_new_object();
-    json_object_object_add(object, "label", json_object_new_string(window->title));
-    if (window->usage_known) json_object_object_add(object, "usedPercent", json_object_new_double(window->used_percent));
+    json_object_object_add(object, "usedPercent", json_object_new_double(window->used_percent));
     if (window->has_window_minutes) {
         json_object_object_add(object, "windowMinutes", json_object_new_int64(window->window_minutes));
     }
     if (window->has_resets_at) json_object_object_add(object, "resetsAt", timestamp_json(window->resets_at_ms));
-    if (window->detail) json_object_object_add(object, "detail", json_object_new_string(window->detail));
-    if (window->reset_description) {
-        json_object_object_add(object, "resetDescription", json_object_new_string(window->reset_description));
+    const char *description = window->detail ? window->detail : window->reset_description;
+    if (description) {
+        json_object_object_add(object, "resetDescription", json_object_new_string(description));
     }
     return object;
 }
@@ -359,6 +358,18 @@ static json_object *pace_json(const CodexBarPace *pace) {
     return object;
 }
 
+static const char *status_indicator_id(CodexBarServiceStatusIndicator indicator) {
+    switch (indicator) {
+    case CODEXBAR_STATUS_NONE: return "none";
+    case CODEXBAR_STATUS_MINOR: return "minor";
+    case CODEXBAR_STATUS_MAJOR: return "major";
+    case CODEXBAR_STATUS_CRITICAL: return "critical";
+    case CODEXBAR_STATUS_MAINTENANCE: return "maintenance";
+    case CODEXBAR_STATUS_UNKNOWN: return "unknown";
+    }
+    return "unknown";
+}
+
 static json_object *provider_json(const CodexBarProvider *provider) {
     if (provider->raw) {
         return json_tokener_parse(json_object_to_json_string_ext(provider->raw, JSON_C_TO_STRING_PLAIN));
@@ -366,9 +377,23 @@ static json_object *provider_json(const CodexBarProvider *provider) {
     json_object *object = json_object_new_object();
     json_object_object_add(object, "provider", json_object_new_string(provider->provider));
     if (provider->account) json_object_object_add(object, "account", json_object_new_string(provider->account));
-    if (provider->plan) json_object_object_add(object, "plan", json_object_new_string(provider->plan));
     if (provider->source) json_object_object_add(object, "source", json_object_new_string(provider->source));
-    if (provider->note) json_object_object_add(object, "note", json_object_new_string(provider->note));
+    if (provider->status) {
+        json_object *status = json_object_new_object();
+        json_object_object_add(
+            status, "indicator", json_object_new_string(status_indicator_id(provider->status->indicator)));
+        if (provider->status->description) {
+            json_object_object_add(
+                status, "description", json_object_new_string(provider->status->description));
+        }
+        if (provider->status->url) {
+            json_object_object_add(status, "url", json_object_new_string(provider->status->url));
+        }
+        if (provider->status->has_updated_at) {
+            json_object_object_add(status, "updatedAt", timestamp_json(provider->status->updated_at_ms));
+        }
+        json_object_object_add(object, "status", status);
+    }
     if (provider->error) {
         json_object *error = json_object_new_object();
         json_object_object_add(error, "message", json_object_new_string(provider->error));
@@ -421,7 +446,7 @@ static json_object *provider_json(const CodexBarProvider *provider) {
                 named, "id", json_object_new_string(window->output_id ? window->output_id : window->id));
             json_object_object_add(named, "title", json_object_new_string(window->title));
             json_object_object_add(named, "window", window_json(window));
-            json_object_object_add(named, "usageKnown", json_object_new_boolean(window->usage_known));
+            if (!window->usage_known) json_object_object_add(named, "usageKnown", json_object_new_boolean(FALSE));
             json_object_array_add(extra, named);
         }
         json_object_object_add(usage, "extraRateWindows", extra);
@@ -434,29 +459,31 @@ static json_object *provider_json(const CodexBarProvider *provider) {
     if (provider->has_subscription_renews_at) {
         json_object_object_add(usage, "subscriptionRenewsAt", timestamp_json(provider->subscription_renews_at_ms));
     }
-    if (provider->identity) {
+    if (provider->identity || provider->plan) {
         json_object *identity = json_object_new_object();
         json_object_object_add(identity, "providerID", json_object_new_string(provider->provider));
         if (provider->account) json_object_object_add(identity, "accountEmail", json_object_new_string(provider->account));
-        if (provider->identity->organization) {
+        if (provider->identity && provider->identity->organization) {
             json_object_object_add(
                 identity, "accountOrganization", json_object_new_string(provider->identity->organization));
         }
-        if (provider->identity->account_id) {
+        if (provider->identity && provider->identity->account_id) {
             json_object_object_add(identity, "accountID", json_object_new_string(provider->identity->account_id));
         }
-        if (provider->identity->login_method) {
-            json_object_object_add(identity, "loginMethod", json_object_new_string(provider->identity->login_method));
+        const char *login_method = provider->identity && provider->identity->login_method
+                                       ? provider->identity->login_method
+                                       : provider->plan;
+        if (login_method) {
+            json_object_object_add(identity, "loginMethod", json_object_new_string(login_method));
         }
         json_object_object_add(usage, "identity", identity);
         if (provider->account) json_object_object_add(usage, "accountEmail", json_object_new_string(provider->account));
-        if (provider->identity->organization) {
+        if (provider->identity && provider->identity->organization) {
             json_object_object_add(
                 usage, "accountOrganization", json_object_new_string(provider->identity->organization));
         }
-        if (provider->identity->login_method) {
-            json_object_object_add(
-                usage, "loginMethod", json_object_new_string(provider->identity->login_method));
+        if (login_method) {
+            json_object_object_add(usage, "loginMethod", json_object_new_string(login_method));
         }
     }
     if (provider->provider_cost) {
@@ -484,13 +511,55 @@ static json_object *provider_json(const CodexBarProvider *provider) {
     json_object_object_add(object, "usage", usage);
 
     if (provider->balances->len > 0 && g_str_equal(provider->provider, "codex")) {
-        const CodexBarBalance *balance = codexbar_provider_balance(provider, 0);
+        const CodexBarBalance *credits_balance = NULL;
+        const CodexBarBalance *limit_balance = NULL;
+        for (guint index = 0; index < provider->balances->len; index++) {
+            const CodexBarBalance *balance = codexbar_provider_balance(provider, index);
+            if (g_str_equal(balance->id, "codex-credit-limit")) {
+                limit_balance = balance;
+            } else if (g_str_equal(balance->id, "credits")) {
+                credits_balance = balance;
+            }
+        }
+        if (!credits_balance) credits_balance = codexbar_provider_balance(provider, 0);
+        if (!limit_balance && credits_balance->has_used && credits_balance->has_limit) {
+            limit_balance = credits_balance;
+        }
+        gint64 credits_updated_at_ms = provider->has_credits_updated_at
+                                          ? provider->credits_updated_at_ms
+                                          : rendered_at_ms;
         json_object *credits = json_object_new_object();
-        json_object_object_add(credits, "remaining", json_object_new_double(balance->remaining));
-        json_object_object_add(credits, "events", json_object_new_array());
-        json_object_object_add(credits, "updatedAt", timestamp_json(rendered_at_ms));
-        if (balance->has_used) json_object_object_add(credits, "used", json_object_new_double(balance->used));
-        if (balance->has_limit) json_object_object_add(credits, "limit", json_object_new_double(balance->limit));
+        json_object_object_add(credits, "remaining", json_object_new_double(credits_balance->remaining));
+        json_object_object_add(
+            credits,
+            "events",
+            provider->credit_events ? json_object_get(provider->credit_events) : json_object_new_array());
+        json_object_object_add(credits, "updatedAt", timestamp_json(credits_updated_at_ms));
+        if (limit_balance && limit_balance->has_used && limit_balance->has_limit) {
+            json_object *limit = json_object_new_object();
+            json_object_object_add(limit, "title", json_object_new_string(limit_balance->title));
+            json_object_object_add(limit, "used", json_object_new_double(limit_balance->used));
+            json_object_object_add(limit, "limit", json_object_new_double(limit_balance->limit));
+            json_object_object_add(limit, "remaining", json_object_new_double(limit_balance->remaining));
+            json_object_object_add(
+                limit,
+                "remainingPercent",
+                json_object_new_double(
+                    limit_balance->has_remaining_percent
+                        ? limit_balance->remaining_percent
+                        : (limit_balance->limit > 0.0
+                               ? limit_balance->remaining / limit_balance->limit * 100.0
+                               : 0.0)));
+            if (limit_balance->has_resets_at) {
+                json_object_object_add(limit, "resetsAt", timestamp_json(limit_balance->resets_at_ms));
+            }
+            json_object_object_add(
+                limit,
+                "updatedAt",
+                timestamp_json(
+                    limit_balance->has_updated_at ? limit_balance->updated_at_ms : credits_updated_at_ms));
+            json_object_object_add(credits, "codexCreditLimit", limit);
+        }
         json_object_object_add(object, "credits", credits);
     }
     json_object *pace = json_object_new_object();

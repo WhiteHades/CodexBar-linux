@@ -275,6 +275,8 @@ static CodexBarBalance *parse_balance(json_object *object, const char *fallback_
     balance->has_expiry = parse_timestamp_ms(object, "expiry", &balance->expiry_ms) ||
                            parse_timestamp_ms(object, "expiresAt", &balance->expiry_ms);
     balance->has_resets_at = parse_timestamp_ms(object, "resetsAt", &balance->resets_at_ms);
+    balance->has_updated_at = parse_timestamp_ms(object, "updatedAt", &balance->updated_at_ms);
+    balance->has_remaining_percent = parse_number(object, "remainingPercent", &balance->remaining_percent);
     return balance;
 }
 
@@ -481,6 +483,7 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     codexbar_service_status_free(provider->status);
     codexbar_provider_cost_free(provider->provider_cost);
     codexbar_token_cost_free(provider->token_cost);
+    if (provider->credit_events) json_object_put(provider->credit_events);
     if (provider->usage_extensions) json_object_put(provider->usage_extensions);
     if (provider->raw) json_object_put(provider->raw);
     g_ptr_array_unref(provider->quota_windows);
@@ -633,14 +636,24 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         }
 
         json_object *credits = NULL;
-        if (provider->balances->len == 0 && json_object_object_get_ex(payload, "credits", &credits)) {
-            json_object *credit_limit = NULL;
-            CodexBarBalance *balance =
-                json_object_is_type(credits, json_type_object) &&
-                        json_object_object_get_ex(credits, "codexCreditLimit", &credit_limit)
-                    ? parse_balance(credit_limit, "codex-credit-limit", "monthly credit limit")
-                    : parse_balance(credits, "credits", "credits");
-            if (balance) codexbar_provider_add_balance(provider, balance);
+        if (json_object_object_get_ex(payload, "credits", &credits) &&
+            json_object_is_type(credits, json_type_object)) {
+            provider->has_credits_updated_at = parse_timestamp_ms(
+                credits, "updatedAt", &provider->credits_updated_at_ms);
+            json_object *events = NULL;
+            if (json_object_object_get_ex(credits, "events", &events) &&
+                json_object_is_type(events, json_type_array)) {
+                provider->credit_events = json_object_get(events);
+            }
+            if (provider->balances->len == 0) {
+                CodexBarBalance *balance = parse_balance(credits, "credits", "credits");
+                if (balance) codexbar_provider_add_balance(provider, balance);
+                json_object *credit_limit = NULL;
+                if (json_object_object_get_ex(credits, "codexCreditLimit", &credit_limit)) {
+                    balance = parse_balance(credit_limit, "codex-credit-limit", "monthly credit limit");
+                    if (balance) codexbar_provider_add_balance(provider, balance);
+                }
+            }
         }
 
         if (!provider->provider) {
