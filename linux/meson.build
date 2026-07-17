@@ -11,6 +11,7 @@ configure_file(output: 'version.h', configuration: version_config)
 
 core_sources = files(
   'src/backend.c',
+  'src/cli_config.c',
   'src/config.c',
   'src/codex.c',
   'src/http.c',
@@ -46,3 +47,6 @@ test(
   waybar_test,
   args: [codexbar_linux, files('tests/fake_backend.sh'), files('tests/config-openrouter-missing.json')],
 )
+
+config_cli_test = find_program('tests/test_config_cli.sh')
+test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux])

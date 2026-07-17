@@ -18,6 +18,8 @@ the binary is at `.build/c23/linux/codexbar-linux`.
 ```bash
 codexbar-linux waybar
 codexbar-linux tui
+codexbar-linux config validate
+codexbar-linux config providers
 codexbar-linux --version
 ```
 
@@ -28,6 +30,16 @@ codexbar-linux --version
 the native engine currently owns codex, openrouter, deepseek, moonshot, elevenlabs, crof, venice, and zenmux. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.
+
+the native config commands normalize all 60 stable providers while preserving provider-specific fields that are not
+native yet. writes are atomic, reject concurrent changes, and keep the config file at mode `0600`.
+
+```bash
+codexbar-linux config dump --pretty
+codexbar-linux config enable --provider openrouter
+codexbar-linux config disable --provider codex
+printf '%s\n' "$OPENROUTER_API_KEY" | codexbar-linux config set-api-key --provider openrouter --stdin
+```
 
 `CODEXBAR_BACKEND` remains available for deterministic fixtures and migration comparisons. normal use does not need a
 swift cli.

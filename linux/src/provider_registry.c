@@ -130,3 +130,19 @@ gboolean codexbar_provider_status_is_pollable(const CodexBarProviderDescriptor *
     }
     return FALSE;
 }
+
+gboolean codexbar_provider_supports_config_api_key(const CodexBarProviderDescriptor *provider) {
+    if (!provider) return FALSE;
+    const char *supported[] = {
+        "amp",       "openai",    "azureopenai", "claude",     "zai",       "minimax",
+        "alibaba",   "kilo",      "synthetic",   "openrouter", "elevenlabs", "moonshot",
+        "kimi",      "ollama",    "venice",      "deepgram",   "groq",      "llmproxy",
+        "chutes",    "poe",       "litellm",     "crossmodel", "clawrouter", "factory",
+        "sub2api",   "zenmux",    "copilot",     "kimik2",    "warp",      "codebuff",
+        "crof",      "doubao",
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(supported); index++) {
+        if (g_str_equal(provider->id, supported[index])) return TRUE;
+    }
+    return FALSE;
+}

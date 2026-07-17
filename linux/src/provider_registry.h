@@ -34,3 +34,4 @@ const CodexBarProviderDescriptor *codexbar_provider_registry_at(guint index);
 const CodexBarProviderDescriptor *codexbar_provider_registry_find(const char *name);
 gboolean codexbar_provider_supports_source(const CodexBarProviderDescriptor *provider, const char *source);
 gboolean codexbar_provider_status_is_pollable(const CodexBarProviderDescriptor *provider);
+gboolean codexbar_provider_supports_config_api_key(const CodexBarProviderDescriptor *provider);

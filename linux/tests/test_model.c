@@ -11,6 +11,7 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <json-c/json.h>
+#include <sys/stat.h>
 
 typedef struct {
     GSocketListener *listener;
@@ -436,7 +437,7 @@ static void test_extended_provider_config(void) {
     CodexBarConfig *config = codexbar_config_load(&error);
     g_assert_no_error(error);
     g_assert_nonnull(config);
-    g_assert_cmpuint(config->providers->len, ==, 2);
+    g_assert_cmpuint(config->providers->len, ==, codexbar_provider_registry_count());
     const CodexBarProviderConfig *provider = g_ptr_array_index(config->providers, 0);
     g_assert_true(provider->has_extras_enabled);
     g_assert_false(provider->extras_enabled);
@@ -457,6 +458,107 @@ static void test_extended_provider_config(void) {
     g_free(saved);
     g_assert_cmpint(g_remove(path), ==, 0);
     g_free(path);
+}
+
+static void test_config_normalization_and_secure_persistence(void) {
+    GError *error = NULL;
+    char *cwd = g_get_current_dir();
+    char *directory = g_build_filename(cwd, "codexbar-config-store-test", NULL);
+    char *path = g_build_filename(directory, "config.json", NULL);
+    g_free(cwd);
+    g_assert_cmpint(g_mkdir(directory, 0755), ==, 0);
+    const char json[] =
+        "{\"version\":99,\"custom\":{\"keep\":true},\"providers\":["
+        "{\"id\":\"openrouter\",\"enabled\":false,\"tokenAccounts\":{\"keep\":true}},"
+        "{\"id\":\"openrouter\",\"enabled\":true}]}";
+    g_assert_true(g_file_set_contents(path, json, -1, &error));
+    g_assert_no_error(error);
+    const char *previous = g_getenv("CODEXBAR_CONFIG");
+    char *saved = previous ? g_strdup(previous) : NULL;
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+
+    CodexBarConfig *config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    g_assert_nonnull(config);
+    g_assert_cmpint(config->version, ==, 99);
+    g_assert_cmpuint(config->providers->len, ==, codexbar_provider_registry_count());
+    CodexBarProviderConfig *openrouter = codexbar_config_provider(config, "or");
+    g_assert_nonnull(openrouter);
+    g_assert_false(openrouter->enabled);
+    g_assert_true(codexbar_config_set_api_key(config, "or", "  test-secret  ", TRUE, &error));
+    g_assert_no_error(error);
+    g_assert_cmpstr(openrouter->api_key, ==, "test-secret");
+    g_assert_true(openrouter->enabled);
+    g_assert_true(codexbar_config_save(config, &error));
+    g_assert_no_error(error);
+    codexbar_config_free(config);
+
+    struct stat file_stat = {0};
+    struct stat directory_stat = {0};
+    g_assert_cmpint(g_stat(path, &file_stat), ==, 0);
+    g_assert_cmpint(g_stat(directory, &directory_stat), ==, 0);
+    g_assert_cmpint(file_stat.st_mode & 0777, ==, 0600);
+    g_assert_cmpint(directory_stat.st_mode & 0777, ==, 0755);
+
+    char *contents = NULL;
+    g_assert_true(g_file_get_contents(path, &contents, NULL, &error));
+    g_assert_no_error(error);
+    json_object *root = json_tokener_parse(contents);
+    g_free(contents);
+    json_object *custom = NULL;
+    json_object *providers = NULL;
+    g_assert_true(json_object_object_get_ex(root, "custom", &custom));
+    g_assert_true(json_object_object_get_ex(root, "providers", &providers));
+    g_assert_cmpuint(json_object_array_length(providers), ==, codexbar_provider_registry_count());
+    json_object *first = json_object_array_get_idx(providers, 0);
+    json_object *token_accounts = NULL;
+    json_object *api_key = NULL;
+    g_assert_true(json_object_object_get_ex(first, "tokenAccounts", &token_accounts));
+    g_assert_true(json_object_object_get_ex(first, "apiKey", &api_key));
+    g_assert_cmpstr(json_object_get_string(api_key), ==, "test-secret");
+    json_object_put(root);
+
+    config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    g_assert_cmpint(config->version, ==, 1);
+    g_assert_false(codexbar_config_set_api_key(config, "bedrock", "not-valid-for-bedrock", TRUE, &error));
+    g_assert_error(error, g_quark_from_static_string("codexbar-config-error"), 4);
+    g_clear_error(&error);
+    g_assert_true(codexbar_config_set_enabled(config, "deepseek", TRUE, &error));
+    g_assert_no_error(error);
+    g_assert_true(g_file_set_contents(path, "{\"version\":1,\"providers\":[]}", -1, &error));
+    g_assert_no_error(error);
+    g_assert_false(codexbar_config_save(config, &error));
+    g_assert_error(error, g_quark_from_static_string("codexbar-config-error"), 6);
+    g_clear_error(&error);
+    char *nested_directory = g_build_filename(directory, "owned", NULL);
+    char *nested_path = g_build_filename(nested_directory, "config.json", NULL);
+    g_free(config->path);
+    config->path = g_strdup(nested_path);
+    config->loaded_from_disk = FALSE;
+    g_clear_pointer(&config->loaded_digest, g_free);
+    g_assert_true(codexbar_config_save(config, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(g_stat(nested_path, &file_stat), ==, 0);
+    g_assert_cmpint(g_stat(nested_directory, &directory_stat), ==, 0);
+    g_assert_cmpint(file_stat.st_mode & 0777, ==, 0600);
+    g_assert_cmpint(directory_stat.st_mode & 0777, ==, 0700);
+    codexbar_config_free(config);
+
+    if (saved) {
+        g_setenv("CODEXBAR_CONFIG", saved, TRUE);
+    } else {
+        g_unsetenv("CODEXBAR_CONFIG");
+    }
+    g_free(saved);
+    g_assert_cmpint(g_remove(path), ==, 0);
+    g_assert_cmpint(g_remove(nested_path), ==, 0);
+    g_assert_cmpint(g_rmdir(nested_directory), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+    g_free(nested_path);
+    g_free(nested_directory);
+    g_free(path);
+    g_free(directory);
 }
 
 static void test_waybar_rendering(void) {
@@ -876,6 +978,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/http/rejects-malformed-requests", test_http_rejects_malformed_requests);
     g_test_add_func("/http/redirect-policy", test_http_redirect_policy);
     g_test_add_func("/config/extended-provider-fields", test_extended_provider_config);
+    g_test_add_func("/config/normalization-secure-persistence", test_config_normalization_and_secure_persistence);
     g_test_add_func("/render/waybar", test_waybar_rendering);
     g_test_add_func("/render/claude-presentation-metadata", test_claude_presentation_metadata);
     g_test_add_func("/render/freshness-login-fallback", test_freshness_and_login_method_fallback);

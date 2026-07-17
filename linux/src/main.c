@@ -1,4 +1,5 @@
 #include "backend.h"
+#include "cli_config.h"
 #include "render.h"
 #include "tui.h"
 #include "version.h"
@@ -22,6 +23,9 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc != 2) {
+        if (argc >= 3 && strcmp(argv[1], "config") == 0) {
+            return codexbar_cli_config_run(argc - 2, argv + 2);
+        }
         return print_usage(argv[0]);
     }
 
