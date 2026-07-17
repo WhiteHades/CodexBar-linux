@@ -31,8 +31,8 @@ codexbar-linux --version
 invoking `codexbar-linux` without a command defaults to `usage`. provider selection accepts stable IDs, CLI names, and
 aliases; `--provider both` selects Codex and Claude, while explicit `--provider all` selects the full registry.
 
-the native engine currently owns codex, kimi API-key usage, Kimi K2, openrouter, deepseek, moonshot, elevenlabs, crof,
-venice, and zenmux. configure
+the native engine currently owns codex, kimi API-key usage, Kimi K2, OpenRouter, ClawRouter, LLM Proxy, DeepSeek,
+Moonshot, ElevenLabs, Crof, Venice, and ZenMux. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.
 

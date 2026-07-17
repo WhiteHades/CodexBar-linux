@@ -103,6 +103,7 @@ void codexbar_pace_free(CodexBarPace *pace) {
 void codexbar_quota_window_free(CodexBarQuotaWindow *window) {
     if (!window) return;
     g_free(window->id);
+    g_free(window->output_id);
     g_free(window->title);
     g_free(window->detail);
     g_free(window->reset_description);
@@ -480,6 +481,7 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     codexbar_service_status_free(provider->status);
     codexbar_provider_cost_free(provider->provider_cost);
     codexbar_token_cost_free(provider->token_cost);
+    if (provider->usage_extensions) json_object_put(provider->usage_extensions);
     if (provider->raw) json_object_put(provider->raw);
     g_ptr_array_unref(provider->quota_windows);
     g_ptr_array_unref(provider->balances);

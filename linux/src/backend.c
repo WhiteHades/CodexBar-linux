@@ -5,6 +5,7 @@
 #include "kimi.h"
 #include "openrouter.h"
 #include "provider_registry.h"
+#include "proxy_providers.h"
 #include "simple_providers.h"
 
 #include <gio/gio.h>
@@ -129,6 +130,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_OPENROUTER:
         provider = codexbar_openrouter_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_PROXY:
+        provider = codexbar_proxy_provider_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_SIMPLE:
         provider = codexbar_simple_provider_fetch(config, &error);

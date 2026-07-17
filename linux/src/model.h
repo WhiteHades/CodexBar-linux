@@ -38,6 +38,7 @@ typedef struct {
 
 typedef struct {
     char *id;
+    char *output_id;
     char *title;
     gboolean usage_known;
     double used_percent;
@@ -135,6 +136,8 @@ typedef struct {
     gint64 subscription_renews_at_ms;
     gboolean has_updated_at;
     gint64 updated_at_ms;
+    gboolean explicit_quota_slots;
+    json_object *usage_extensions;
     json_object *raw;
     GPtrArray *quota_windows;
     GPtrArray *balances;

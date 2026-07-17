@@ -381,20 +381,44 @@ static json_object *provider_json(const CodexBarProvider *provider) {
 
     json_object *usage = json_object_new_object();
     const char *keys[] = {"primary", "secondary", "tertiary"};
-    for (guint index = 0; index < G_N_ELEMENTS(keys); index++) {
-        if (index < provider->quota_windows->len) {
-            json_object_object_add(
-                usage, keys[index], window_json(codexbar_provider_quota_window(provider, index)));
-        } else {
-            json_object_object_add(usage, keys[index], NULL);
-        }
+    gboolean explicit_slots = provider->explicit_quota_slots;
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+        explicit_slots = explicit_slots || g_str_equal(window->id, "primary") ||
+                         g_str_equal(window->id, "secondary") || g_str_equal(window->id, "tertiary");
     }
-    if (provider->quota_windows->len > G_N_ELEMENTS(keys)) {
+    for (guint index = 0; index < G_N_ELEMENTS(keys); index++) {
+        const CodexBarQuotaWindow *slot = NULL;
+        if (explicit_slots) {
+            for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
+                const CodexBarQuotaWindow *candidate = codexbar_provider_quota_window(provider, window_index);
+                if (g_str_equal(candidate->id, keys[index])) {
+                    slot = candidate;
+                    break;
+                }
+            }
+        } else if (index < provider->quota_windows->len) {
+            slot = codexbar_provider_quota_window(provider, index);
+        }
+        json_object_object_add(usage, keys[index], slot ? window_json(slot) : NULL);
+    }
+    guint extra_count = 0;
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+        gboolean canonical = g_str_equal(window->id, "primary") || g_str_equal(window->id, "secondary") ||
+                             g_str_equal(window->id, "tertiary");
+        if ((explicit_slots && !canonical) || (!explicit_slots && index >= G_N_ELEMENTS(keys))) extra_count++;
+    }
+    if (extra_count > 0) {
         json_object *extra = json_object_new_array();
-        for (guint index = G_N_ELEMENTS(keys); index < provider->quota_windows->len; index++) {
+        for (guint index = 0; index < provider->quota_windows->len; index++) {
             const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+            gboolean canonical = g_str_equal(window->id, "primary") || g_str_equal(window->id, "secondary") ||
+                                 g_str_equal(window->id, "tertiary");
+            if ((explicit_slots && canonical) || (!explicit_slots && index < G_N_ELEMENTS(keys))) continue;
             json_object *named = json_object_new_object();
-            json_object_object_add(named, "id", json_object_new_string(window->id));
+            json_object_object_add(
+                named, "id", json_object_new_string(window->output_id ? window->output_id : window->id));
             json_object_object_add(named, "title", json_object_new_string(window->title));
             json_object_object_add(named, "window", window_json(window));
             json_object_object_add(named, "usageKnown", json_object_new_boolean(window->usage_known));
@@ -434,6 +458,7 @@ static json_object *provider_json(const CodexBarProvider *provider) {
         json_object_object_add(value, "currencyCode", json_object_new_string(cost->currency));
         if (cost->period) json_object_object_add(value, "period", json_object_new_string(cost->period));
         if (cost->has_resets_at) json_object_object_add(value, "resetsAt", timestamp_json(cost->resets_at_ms));
+        if (cost->has_updated_at) json_object_object_add(value, "updatedAt", timestamp_json(cost->updated_at_ms));
         if (cost->has_next_regen) {
             json_object_object_add(value, "nextRegenAmount", json_object_new_double(cost->next_regen));
         }
@@ -441,6 +466,11 @@ static json_object *provider_json(const CodexBarProvider *provider) {
             json_object_object_add(value, "personalUsed", json_object_new_double(cost->personal_used));
         }
         json_object_object_add(usage, "providerCost", value);
+    }
+    if (provider->usage_extensions) {
+        json_object_object_foreach(provider->usage_extensions, key, value) {
+            json_object_object_add(usage, key, json_object_get(value));
+        }
     }
     json_object_object_add(object, "usage", usage);
 

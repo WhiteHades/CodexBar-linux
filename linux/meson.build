@@ -20,6 +20,7 @@ core_sources = files(
   'src/model.c',
   'src/openrouter.c',
   'src/provider_registry.c',
+  'src/proxy_providers.c',
   'src/render.c',
   'src/simple_providers.c',
   'src/tui_actions.c',

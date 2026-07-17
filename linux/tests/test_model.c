@@ -5,6 +5,7 @@
 #include "model.h"
 #include "openrouter.h"
 #include "provider_registry.h"
+#include "proxy_providers.h"
 #include "render.h"
 #include "simple_providers.h"
 
@@ -907,6 +908,86 @@ static void test_kimik2_credits(void) {
     g_clear_error(&error);
 }
 
+static void test_clawrouter_usage(void) {
+    GError *error = NULL;
+    const char *json =
+        "{\"budget\":{\"configured\":true,\"ledger\":\"durable_object\","
+        "\"windowKey\":\"openclaw/policy/2026-07\",\"limitMicros\":25000000,"
+        "\"spentMicros\":6000,\"remainingMicros\":24994000},\"usage\":{\"summary\":{"
+        "\"requestCount\":6,\"successCount\":5,\"errorCount\":1,\"inputTokens\":50000,"
+        "\"outputTokens\":4191,\"totalTokens\":54191,\"actualCostMicros\":6000},\"providers\":["
+        "{\"provider\":\"openai\",\"requestCount\":4,\"successCount\":3,\"errorCount\":1,"
+        "\"totalTokens\":42000,\"actualCostMicros\":4000},"
+        "{\"provider\":\"anthropic\",\"requestCount\":2,\"successCount\":2,\"errorCount\":0,"
+        "\"totalTokens\":12191,\"actualCostMicros\":2000}]}}";
+    CodexBarProvider *provider = codexbar_clawrouter_parse(json, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->identity->organization, ==, "2 routed providers");
+    g_assert_cmpstr(provider->identity->login_method, ==, "Managed monthly budget");
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 0.024, 0.0001);
+    g_assert_cmpint(window_at(provider, 0)->resets_at_ms, ==, G_GINT64_CONSTANT(1785542400000));
+    g_assert_cmpfloat_with_epsilon(provider->provider_cost->used, 0.006, 0.0001);
+    g_assert_cmpfloat_with_epsilon(provider->provider_cost->limit, 25.0, 0.0001);
+    CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+    g_ptr_array_add(snapshot->providers, provider);
+    char *rendered = codexbar_render_usage_json(snapshot, FALSE);
+    g_assert_nonnull(strstr(rendered, "\"updatedAt\":\"1970-01-01T00:00:01"));
+    g_assert_nonnull(strstr(rendered, "\"clawRouterUsage\":{\"budgetConfigured\":true"));
+    g_assert_nonnull(strstr(rendered, "\"dataConfidence\":\"exact\""));
+    g_assert_nonnull(strstr(rendered, "\"providers\":[{\"provider\":\"openai\""));
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+
+    char *url = codexbar_proxy_provider_url("https://router.example.com/v1", "usage", &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(url, ==, "https://router.example.com/v1/usage");
+    g_free(url);
+}
+
+static void test_llmproxy_usage(void) {
+    GError *error = NULL;
+    const char *json =
+        "{\"providers\":{\"openai\":{\"credential_count\":3,\"active_count\":2,"
+        "\"exhausted_count\":1,\"total_requests\":120,\"tokens\":{\"input_cached\":1000,"
+        "\"input_uncached\":2000,\"output\":3000},\"approx_cost\":12.5,\"quota_groups\":{"
+        "\"default\":{\"remaining_percent\":42,\"reset_time\":\"2026-05-18T12:00:00.123Z\"}}},"
+        "\"anthropic\":{\"credential_count\":1,\"active_count\":1,\"exhausted_count\":0,"
+        "\"total_requests\":40,\"tokens\":{\"input_cached\":0,\"input_uncached\":500,"
+        "\"output\":500},\"approx_cost\":3,\"quota_groups\":[{\"remaining_percent\":80}]}},"
+        "\"summary\":{\"total_requests\":160,\"total_tokens\":7000,\"approx_cost\":15.5}}";
+    CodexBarProvider *provider = codexbar_llmproxy_parse(json, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->identity->organization, ==, "3/4 active keys");
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 58.0, 0.0001);
+    g_assert_cmpstr(window_at(provider, 1)->reset_description, ==, "160 requests");
+    g_assert_cmpstr(window_at(provider, 2)->reset_description, ==, "7,000 tokens");
+    g_assert_cmpstr(window_at(provider, 3)->title, ==, "openai");
+    g_assert_cmpstr(window_at(provider, 3)->reset_description, ==, "120 req · 6,000 tok · $12.50");
+    g_assert_cmpfloat_with_epsilon(provider->provider_cost->used, 15.5, 0.0001);
+    CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+    g_ptr_array_add(snapshot->providers, provider);
+    char *rendered = codexbar_render_usage_json(snapshot, FALSE);
+    g_assert_nonnull(strstr(rendered, "\"resetDescription\":\"160 requests\""));
+    g_assert_nonnull(strstr(rendered, "\"id\":\"openai\""));
+    g_assert_null(strstr(rendered, "llmproxy-openai"));
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+
+    provider = codexbar_llmproxy_parse("{\"providers\":{}}", 1000, &error);
+    g_assert_no_error(error);
+    snapshot = g_new0(CodexBarSnapshot, 1);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+    g_ptr_array_add(snapshot->providers, provider);
+    rendered = codexbar_render_usage_json(snapshot, FALSE);
+    g_assert_nonnull(strstr(rendered, "\"primary\":null"));
+    g_assert_nonnull(strstr(rendered, "\"secondary\":{\"label\":\"requests\",\"usedPercent\":0.0"));
+    g_assert_nonnull(strstr(rendered, "\"tertiary\":{\"label\":\"tokens\",\"usedPercent\":0.0"));
+    g_free(rendered);
+    codexbar_snapshot_free(snapshot);
+}
+
 static void test_simple_provider_parsers(void) {
     GError *error = NULL;
     CodexBarProvider *deepseek = codexbar_deepseek_parse(
@@ -1068,6 +1149,8 @@ static void test_provider_registry(void) {
     g_assert_cmpstr(codexbar_provider_registry_find("kimiK2")->id, ==, "kimik2");
     g_assert_cmpint(codexbar_provider_registry_find("kimi")->native_provider, ==, CODEXBAR_NATIVE_KIMI);
     g_assert_cmpint(codexbar_provider_registry_find("kimik2")->native_provider, ==, CODEXBAR_NATIVE_KIMI_K2);
+    g_assert_cmpint(codexbar_provider_registry_find("clawrouter")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
+    g_assert_cmpint(codexbar_provider_registry_find("llmproxy")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
     const CodexBarProviderDescriptor *codex = codexbar_provider_registry_find("codex");
     g_assert_true(codex->default_enabled);
     g_assert_true(codexbar_provider_supports_source(codex, "oauth"));
@@ -1099,6 +1182,8 @@ int main(int argc, char **argv) {
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     g_test_add_func("/provider/kimi-usage", test_kimi_usage);
     g_test_add_func("/provider/kimik2-credits", test_kimik2_credits);
+    g_test_add_func("/provider/clawrouter-usage", test_clawrouter_usage);
+    g_test_add_func("/provider/llmproxy-usage", test_llmproxy_usage);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
     g_test_add_func("/provider/registry", test_provider_registry);

@@ -106,3 +106,23 @@ case "$output" in
     exit 1
     ;;
 esac
+
+output=$(env -u CODEXBAR_BACKEND -u CLAWROUTER_API_KEY CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider claw-router --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"clawrouter","source":"api","error":{"message":"Missing ClawRouter API key."'*) ;;
+  *)
+    printf 'unexpected native ClawRouter missing-key output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+output=$(env -u CODEXBAR_BACKEND -u LLM_PROXY_API_KEY -u LLM_PROXY_BASE_URL CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider llm-proxy --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"llmproxy","source":"api","error":{"message":"Missing LLM Proxy API key."'*) ;;
+  *)
+    printf 'unexpected native LLM Proxy missing-key output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
