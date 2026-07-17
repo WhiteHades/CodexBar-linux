@@ -1,6 +1,7 @@
 #include "codex.h"
 #include "config.h"
 #include "http.h"
+#include "kimi.h"
 #include "model.h"
 #include "openrouter.h"
 #include "provider_registry.h"
@@ -809,6 +810,103 @@ static void test_openrouter_credits(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_kimi_usage(void) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_kimi_parse_usage(
+        "{\"usage\":{\"limit\":\"2048\",\"remaining\":\"1834\","
+        "\"resetTime\":\"2026-01-09T15:23:13.716839300Z\"},\"limits\":[{\"detail\":{"
+        "\"limit\":200,\"used\":139,\"remaining\":61,\"reset_at\":\"2026-01-06T13:33:02Z\"}}]}",
+        G_GINT64_CONSTANT(1800000000000),
+        &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->provider, ==, "kimi");
+    g_assert_cmpstr(provider->source, ==, "api");
+    g_assert_cmpint(provider->updated_at_ms, ==, G_GINT64_CONSTANT(1800000000000));
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 10.44921875, 0.0001);
+    g_assert_cmpstr(window_at(provider, 0)->detail, ==, "214/2048 requests");
+    g_assert_true(window_at(provider, 0)->has_resets_at);
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 1)->used_percent, 69.5, 0.0001);
+    g_assert_cmpint(window_at(provider, 1)->window_minutes, ==, 300);
+    g_assert_cmpstr(window_at(provider, 1)->detail, ==, "Rate: 139/200 per 5 hours");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_kimi_parse_usage(
+        "{\"usage\":{\"limit\":0,\"used\":100},\"limits\":[{\"detail\":{\"limit\":0}}]}",
+        1,
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 0.0);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_kimi_parse_usage("{\"usage\":{\"limit\":\"1.5\"}}", 1, &error);
+    g_assert_null(provider);
+    g_assert_error(error, g_quark_from_static_string("codexbar-kimi-error"), 1);
+    g_clear_error(&error);
+
+    char *url = codexbar_kimi_usage_url("https://proxy.example.com/kimi/coding/v1/", &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(url, ==, "https://proxy.example.com/kimi/coding/v1/usages");
+    g_free(url);
+    url = codexbar_kimi_usage_url("http://api.kimi.com", &error);
+    g_assert_null(url);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    url = codexbar_kimi_usage_url("https://api.kimi.com?tenant=one", &error);
+    g_assert_null(url);
+    g_assert_error(error, g_quark_from_static_string("codexbar-kimi-error"), 2);
+    g_clear_error(&error);
+
+    provider = codexbar_kimi_parse_usage(
+        "{\"usage\":{\"limit\":9223372036854775807,\"remaining\":-9223372036854775808}}",
+        1,
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 100.0);
+    codexbar_provider_free(provider);
+}
+
+static void test_kimik2_credits(void) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_kimik2_parse_credits(
+        "{\"data\":{\"usage\":{\"totalCreditsConsumed\":12.5,\"creditsRemaining\":\"1234.5\","
+        "\"updatedAt\":1800000000}}}",
+        "999",
+        G_GINT64_CONSTANT(1700000000000),
+        &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->provider, ==, "kimik2");
+    g_assert_cmpstr(provider->source, ==, "api");
+    g_assert_cmpint(provider->updated_at_ms, ==, G_GINT64_CONSTANT(1800000000000));
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    g_assert_cmpuint(provider->balances->len, ==, 0);
+    g_assert_nonnull(provider->identity);
+    g_assert_cmpstr(provider->identity->login_method, ==, "Credits: 1,234.5 left");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_kimik2_parse_credits(
+        "{\"timestamp\":1000000000000}", "42.25", G_GINT64_CONSTANT(1700000000000), &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(provider->updated_at_ms, ==, G_GINT64_CONSTANT(1000000000000));
+    g_assert_cmpstr(provider->identity->login_method, ==, "Credits: 42.25 left");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_kimik2_parse_credits(
+        "{\"credits_remaining\":-10,\"timestamp\":1e20}", NULL, G_GINT64_CONSTANT(1700000000000), &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(provider->updated_at_ms, ==, G_GINT64_CONSTANT(1700000000000));
+    g_assert_cmpstr(provider->identity->login_method, ==, "Credits: 0 left");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_kimik2_parse_credits("[]", NULL, 1, &error);
+    g_assert_null(provider);
+    g_assert_error(error, g_quark_from_static_string("codexbar-kimi-error"), 4);
+    g_clear_error(&error);
+}
+
 static void test_simple_provider_parsers(void) {
     GError *error = NULL;
     CodexBarProvider *deepseek = codexbar_deepseek_parse(
@@ -968,6 +1066,8 @@ static void test_provider_registry(void) {
     g_assert_cmpstr(codexbar_provider_registry_find("or")->id, ==, "openrouter");
     g_assert_cmpstr(codexbar_provider_registry_find("groq")->id, ==, "groq");
     g_assert_cmpstr(codexbar_provider_registry_find("kimiK2")->id, ==, "kimik2");
+    g_assert_cmpint(codexbar_provider_registry_find("kimi")->native_provider, ==, CODEXBAR_NATIVE_KIMI);
+    g_assert_cmpint(codexbar_provider_registry_find("kimik2")->native_provider, ==, CODEXBAR_NATIVE_KIMI_K2);
     const CodexBarProviderDescriptor *codex = codexbar_provider_registry_find("codex");
     g_assert_true(codex->default_enabled);
     g_assert_true(codexbar_provider_supports_source(codex, "oauth"));
@@ -997,6 +1097,8 @@ int main(int argc, char **argv) {
     g_test_add_func("/render/freshness-login-fallback", test_freshness_and_login_method_fallback);
     g_test_add_func("/render/provider-siloing-operational-status", test_identity_provider_siloing_and_operational_status);
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
+    g_test_add_func("/provider/kimi-usage", test_kimi_usage);
+    g_test_add_func("/provider/kimik2-credits", test_kimik2_credits);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
     g_test_add_func("/provider/registry", test_provider_registry);

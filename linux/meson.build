@@ -16,6 +16,7 @@ core_sources = files(
   'src/config.c',
   'src/codex.c',
   'src/http.c',
+  'src/kimi.c',
   'src/model.c',
   'src/openrouter.c',
   'src/provider_registry.c',

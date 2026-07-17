@@ -4,6 +4,9 @@ set -eu
 
 binary=$1
 backend=$2
+work=$(mktemp -d "$PWD/codexbar-usage-cli.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+config=$work/config.json
 
 output=$(CODEXBAR_BACKEND="$backend" "$binary")
 case "$output" in
@@ -73,3 +76,33 @@ case "$output" in
 esac
 
 [ "$("$binary" --version)" = 'CodexBar 0.1.0' ]
+
+output=$(env -u CODEXBAR_BACKEND -u KIMI_CODE_API_KEY CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider kimi --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"kimi","source":"api","error":{"message":"Kimi Code API key is missing.'*) ;;
+  *)
+    printf 'unexpected native Kimi missing-key output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider kimi --source web --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"kimi","source":"web","error":{"message":"Kimi source '\''web'\'' has no native Linux implementation yet"'*) ;;
+  *)
+    printf 'unexpected native Kimi web-source output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+output=$(env -u CODEXBAR_BACKEND -u KIMI_K2_API_KEY -u KIMI_API_KEY -u KIMI_KEY \
+  CODEXBAR_CONFIG="$config" "$binary" usage --provider kimi-k2 --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"kimik2","source":"api","error":{"message":"Missing Kimi K2 API key."'*) ;;
+  *)
+    printf 'unexpected native Kimi K2 missing-key output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
