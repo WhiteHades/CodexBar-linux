@@ -95,16 +95,15 @@ static int draw_rate_window(int y,
         draw_text(y++, x, width, rate_window->reset_description);
         attroff(COLOR_PAIR(COLOR_MUTED));
     }
-    return y;
+    return y + 1;
 }
 
 static int rate_window_height(const CodexBarRateWindow *window) {
-    return window->available ? 2 + (window->reset_description ? 1 : 0) : 0;
+    return window->available ? 3 + (window->reset_description ? 1 : 0) : 0;
 }
 
 static int provider_content_height(const CodexBarProvider *provider) {
-    return 2 +
-           (provider->source ? 2 : 0) +
+    return ((provider->source || provider->account) ? 2 : 0) +
            rate_window_height(&provider->primary) +
            rate_window_height(&provider->secondary) +
            rate_window_height(&provider->tertiary) +
@@ -114,23 +113,20 @@ static int provider_content_height(const CodexBarProvider *provider) {
 
 static void draw_provider(const CodexBarProvider *provider, int y, int x, int height, int width) {
     int bottom = y + height;
-    attron(A_BOLD | COLOR_PAIR(COLOR_NORMAL));
-    draw_text(y, x, width, provider->provider);
-    attroff(A_BOLD | COLOR_PAIR(COLOR_NORMAL));
-    if (provider->account) {
-        int divider_x = x + (int)strlen(provider->provider) + 1;
+    if (provider->source || provider->account) {
         attron(COLOR_PAIR(COLOR_MUTED));
-        mvaddstr(y, divider_x, "//");
-        draw_text(y, divider_x + 3, width - (divider_x - x) - 3, provider->account);
+        if (provider->source) {
+            mvprintw(y, x, "source: %s", provider->source);
+        }
+        if (provider->account) {
+            int account_x = provider->source ? x + (int)strlen(provider->source) + 12 : x;
+            if (provider->source) {
+                mvaddstr(y, account_x - 3, "//");
+            }
+            draw_text(y, account_x, width - (account_x - x), provider->account);
+        }
         attroff(COLOR_PAIR(COLOR_MUTED));
-    }
-    y += 2;
-
-    if (provider->source) {
-        attron(COLOR_PAIR(COLOR_MUTED));
-        mvprintw(y++, x, "source: %s", provider->source);
-        attroff(COLOR_PAIR(COLOR_MUTED));
-        y++;
+        y += 2;
     }
 
     y = draw_rate_window(y, x, width, "SESSION", &provider->primary);
