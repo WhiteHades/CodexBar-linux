@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "openrouter",
+      "enabled": true,
+      "source": "api"
+    }
+  ]
+}

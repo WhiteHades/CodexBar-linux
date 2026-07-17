@@ -1,7 +1,7 @@
 #include "tui.h"
 
 #include "backend.h"
-#include "config.h"
+#include "version.h"
 
 #include <locale.h>
 #include <ncurses.h>

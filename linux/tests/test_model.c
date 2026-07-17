@@ -1,4 +1,5 @@
 #include "model.h"
+#include "openrouter.h"
 #include "render.h"
 
 #include <glib.h>
@@ -72,10 +73,22 @@ static void test_waybar_rendering(void) {
     codexbar_snapshot_free(snapshot);
 }
 
+static void test_openrouter_credits(void) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_openrouter_parse_credits(
+        "{\"data\":{\"total_credits\":100,\"total_usage\":27.5}}", &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpfloat_with_epsilon(provider->credits_remaining, 72.5, 0.0001);
+    g_assert_cmpfloat_with_epsilon(provider->primary.used_percent, 27.5, 0.0001);
+    codexbar_provider_free(provider);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
     g_test_add_func("/model/reject-non-array", test_rejects_non_array);
     g_test_add_func("/render/waybar", test_waybar_rendering);
+    g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     return g_test_run();
 }

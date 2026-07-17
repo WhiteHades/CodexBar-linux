@@ -26,5 +26,6 @@ typedef struct {
 } CodexBarSnapshot;
 
 CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error);
+void codexbar_provider_free(CodexBarProvider *provider);
 void codexbar_snapshot_free(CodexBarSnapshot *snapshot);
 double codexbar_snapshot_highest_used(const CodexBarSnapshot *snapshot);

@@ -1,12 +1,11 @@
 #include "backend.h"
 
+#include "config.h"
+#include "openrouter.h"
+
 #include <gio/gio.h>
 
-CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
-    const char *backend = g_getenv("CODEXBAR_BACKEND");
-    if (!backend || backend[0] == '\0') {
-        backend = "codexbar";
-    }
+static CodexBarSnapshot *fetch_oracle(const char *backend, GError **error) {
 
     const char *argv[] = {
         backend,
@@ -50,5 +49,39 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
     g_object_unref(process);
     g_free(stdout_text);
     g_free(stderr_text);
+    return snapshot;
+}
+
+CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
+    const char *backend = g_getenv("CODEXBAR_BACKEND");
+    if (backend && backend[0] != '\0') {
+        return fetch_oracle(backend, error);
+    }
+
+    CodexBarConfig *config = codexbar_config_load(error);
+    if (!config) {
+        return NULL;
+    }
+    CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+    for (guint index = 0; index < config->providers->len; index++) {
+        CodexBarProviderConfig *provider_config = g_ptr_array_index(config->providers, index);
+        if (!provider_config->enabled) {
+            continue;
+        }
+        if (g_str_equal(provider_config->id, "openrouter")) {
+            GError *provider_error = NULL;
+            CodexBarProvider *provider = codexbar_openrouter_fetch(provider_config, &provider_error);
+            if (!provider) {
+                provider = g_new0(CodexBarProvider, 1);
+                provider->provider = g_strdup("openrouter");
+                provider->source = g_strdup("api");
+                provider->error = g_strdup(provider_error->message);
+                g_error_free(provider_error);
+            }
+            g_ptr_array_add(snapshot->providers, provider);
+        }
+    }
+    codexbar_config_free(config);
     return snapshot;
 }

@@ -43,8 +43,7 @@ static char *parse_error(json_object *payload) {
     return duplicate_json_string(error, "message");
 }
 
-static void provider_free(gpointer data) {
-    CodexBarProvider *provider = data;
+void codexbar_provider_free(CodexBarProvider *provider) {
     if (!provider) {
         return;
     }
@@ -85,7 +84,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
     }
 
     CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
-    snapshot->providers = g_ptr_array_new_with_free_func(provider_free);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
 
     size_t count = json_object_array_length(root);
     for (size_t index = 0; index < count; index++) {
@@ -118,7 +117,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         }
 
         if (!provider->provider) {
-            provider_free(provider);
+            codexbar_provider_free(provider);
             continue;
         }
         g_ptr_array_add(snapshot->providers, provider);

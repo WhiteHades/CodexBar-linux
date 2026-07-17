@@ -18,6 +18,7 @@ the binary is at `.build/c23/linux/codexbar-linux`.
 ```bash
 codexbar-linux waybar
 codexbar-linux tui
+codexbar-linux --version
 ```
 
 `waybar` prints one line of json for the waybar module and its hover tooltip.
