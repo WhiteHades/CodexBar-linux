@@ -25,8 +25,12 @@ codexbar-linux --version
 
 `tui` opens the interactive terminal interface.
 
-the current migration stage reads json from the existing `codexbar` cli. set `CODEXBAR_BACKEND` when that binary is
-in a different location. this temporary backend goes away as each provider moves into the c engine.
+the native engine currently owns codex, openrouter, deepseek, moonshot, elevenlabs, crof, venice, and zenmux. configure
+providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
+the provider `apiKey` field.
+
+`CODEXBAR_BACKEND` remains available for deterministic fixtures and migration comparisons. normal use does not need a
+swift cli.
 
 ## themes
 

@@ -92,8 +92,9 @@ static int draw_rate_window(int y,
         return y;
     }
 
+    const char *display_name = rate_window->label ? rate_window->label : name;
     attron(COLOR_PAIR(COLOR_MUTED));
-    mvprintw(y, x, "%s", name);
+    draw_text(y, x, MAX(1, width - 23), display_name);
     mvprintw(y,
              x + width - 22,
              "%3.0f%% used · %3.0f%% left",
@@ -107,15 +108,21 @@ static int draw_rate_window(int y,
         draw_text(y++, x, width, rate_window->reset_description);
         attroff(COLOR_PAIR(COLOR_MUTED));
     }
+    if (rate_window->resets_at) {
+        attron(COLOR_PAIR(COLOR_MUTED));
+        draw_text(y++, x, width, rate_window->resets_at);
+        attroff(COLOR_PAIR(COLOR_MUTED));
+    }
     return y + 1;
 }
 
 static int rate_window_height(const CodexBarRateWindow *window) {
-    return window->available ? 3 + (window->reset_description ? 1 : 0) : 0;
+    return window->available ? 3 + (window->reset_description ? 1 : 0) + (window->resets_at ? 1 : 0) : 0;
 }
 
 static int provider_content_height(const CodexBarProvider *provider) {
     return ((provider->source || provider->account || provider->plan) ? 2 : 0) +
+           (provider->note ? 1 : 0) +
            rate_window_height(&provider->primary) +
            rate_window_height(&provider->secondary) +
            rate_window_height(&provider->tertiary) +
@@ -139,6 +146,11 @@ static void draw_provider(const CodexBarProvider *provider, int y, int x, int he
         attroff(COLOR_PAIR(COLOR_MUTED));
         y += 2;
     }
+    if (provider->note) {
+        attron(COLOR_PAIR(COLOR_MUTED));
+        draw_text(y++, x, width, provider->note);
+        attroff(COLOR_PAIR(COLOR_MUTED));
+    }
 
     y = draw_rate_window(y, x, width, "SESSION", &provider->primary);
     y = draw_rate_window(y, x, width, "WEEKLY", &provider->secondary);
@@ -146,7 +158,11 @@ static void draw_provider(const CodexBarProvider *provider, int y, int x, int he
 
     if (provider->has_credits && y < bottom) {
         attron(COLOR_PAIR(COLOR_MUTED));
-        mvprintw(y++, x, "CREDITS  %.2f left", provider->credits_remaining);
+        mvprintw(y++,
+                 x,
+                 "%s  %.2f left",
+                 provider->credits_label ? provider->credits_label : "CREDITS",
+                 provider->credits_remaining);
         attroff(COLOR_PAIR(COLOR_MUTED));
     }
     if (provider->error && y < bottom) {

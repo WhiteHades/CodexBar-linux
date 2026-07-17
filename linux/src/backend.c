@@ -95,7 +95,10 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
             g_ptr_array_add(snapshot->providers, provider);
         } else if (g_str_equal(provider_config->id, "deepseek") ||
                    g_str_equal(provider_config->id, "moonshot") ||
-                   g_str_equal(provider_config->id, "elevenlabs")) {
+                   g_str_equal(provider_config->id, "elevenlabs") ||
+                   g_str_equal(provider_config->id, "crof") ||
+                   g_str_equal(provider_config->id, "venice") ||
+                   g_str_equal(provider_config->id, "zenmux")) {
             GError *provider_error = NULL;
             CodexBarProvider *provider = codexbar_simple_provider_fetch(provider_config, &provider_error);
             if (!provider) {

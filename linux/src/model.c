@@ -30,6 +30,7 @@ static void parse_rate_window(json_object *usage, const char *key, CodexBarRateW
     }
 
     window->available = TRUE;
+    window->label = duplicate_json_string(object, "label");
     window->used_percent = CLAMP(json_object_get_double(used_percent), 0.0, 100.0);
     window->reset_description = duplicate_json_string(object, "resetDescription");
     window->resets_at = duplicate_json_string(object, "resetsAt");
@@ -51,13 +52,18 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     g_free(provider->account);
     g_free(provider->plan);
     g_free(provider->source);
+    g_free(provider->note);
     g_free(provider->error);
+    g_free(provider->primary.label);
     g_free(provider->primary.reset_description);
     g_free(provider->primary.resets_at);
+    g_free(provider->secondary.label);
     g_free(provider->secondary.reset_description);
     g_free(provider->secondary.resets_at);
+    g_free(provider->tertiary.label);
     g_free(provider->tertiary.reset_description);
     g_free(provider->tertiary.resets_at);
+    g_free(provider->credits_label);
     g_free(provider);
 }
 
@@ -99,6 +105,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         provider->account = duplicate_json_string(payload, "account");
         provider->plan = duplicate_json_string(payload, "plan");
         provider->source = duplicate_json_string(payload, "source");
+        provider->note = duplicate_json_string(payload, "note");
         provider->error = parse_error(payload);
 
         json_object *usage = NULL;
@@ -115,6 +122,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
             json_object_object_get_ex(credits, "remaining", &remaining) &&
             (json_object_is_type(remaining, json_type_double) || json_object_is_type(remaining, json_type_int))) {
             provider->has_credits = TRUE;
+            provider->credits_label = duplicate_json_string(credits, "label");
             provider->credits_remaining = json_object_get_double(remaining);
         }
 

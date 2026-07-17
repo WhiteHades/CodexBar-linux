@@ -4,6 +4,7 @@
 
 typedef struct {
     gboolean available;
+    char *label;
     double used_percent;
     char *reset_description;
     char *resets_at;
@@ -14,11 +15,13 @@ typedef struct {
     char *account;
     char *plan;
     char *source;
+    char *note;
     char *error;
     CodexBarRateWindow primary;
     CodexBarRateWindow secondary;
     CodexBarRateWindow tertiary;
     gboolean has_credits;
+    char *credits_label;
     double credits_remaining;
 } CodexBarProvider;
 

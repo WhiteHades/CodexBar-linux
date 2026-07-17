@@ -3,6 +3,7 @@ gio_dep = dependency('gio-2.0', version: '>=2.78')
 json_dep = dependency('json-c', version: '>=0.17')
 ncurses_dep = dependency('ncursesw', version: '>=6.4')
 curl_dep = dependency('libcurl', version: '>=8.0')
+math_dep = meson.get_compiler('c').find_library('m')
 source_includes = include_directories('src')
 version_config = configuration_data()
 version_config.set_quoted('CODEXBAR_LINUX_VERSION', meson.project_version())
@@ -19,7 +20,7 @@ core_sources = files(
   'src/simple_providers.c',
 )
 
-core_deps = [glib_dep, gio_dep, json_dep, curl_dep]
+core_deps = [glib_dep, gio_dep, json_dep, curl_dep, math_dep]
 
 codexbar_linux = executable(
   'codexbar-linux',

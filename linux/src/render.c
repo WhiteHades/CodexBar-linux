@@ -6,8 +6,11 @@ static void append_window(GString *tooltip, const char *label, const CodexBarRat
     if (!window->available) {
         return;
     }
+    const char *display_label = window->label ? window->label : label;
+    char *clipped_label = g_utf8_substring(display_label, 0, MIN(8, g_utf8_strlen(display_label, -1)));
     int filled = (int)((CLAMP(window->used_percent, 0.0, 100.0) / 100.0) * 10.0 + 0.5);
-    g_string_append_printf(tooltip, "\n  %-8s ", label);
+    g_string_append_printf(tooltip, "\n  %-8s ", clipped_label);
+    g_free(clipped_label);
     for (int index = 0; index < 10; index++) {
         g_string_append(tooltip, index < filled ? "█" : "░");
     }
@@ -17,6 +20,9 @@ static void append_window(GString *tooltip, const char *label, const CodexBarRat
                            100.0 - window->used_percent);
     if (window->reset_description) {
         g_string_append_printf(tooltip, "\n  %-8s %s", "", window->reset_description);
+    }
+    if (window->resets_at) {
+        g_string_append_printf(tooltip, "\n  %-8s %s", "", window->resets_at);
     }
 }
 
@@ -75,11 +81,17 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
                 g_string_append(tooltip, provider->source);
             }
         }
+        if (provider->note) {
+            g_string_append_printf(tooltip, "\n  %s", provider->note);
+        }
         append_window(tooltip, "session", &provider->primary);
         append_window(tooltip, "weekly", &provider->secondary);
         append_window(tooltip, "extra", &provider->tertiary);
         if (provider->has_credits) {
-            g_string_append_printf(tooltip, "\n  credits  %.2f left", provider->credits_remaining);
+            g_string_append_printf(tooltip,
+                                   "\n  %-8s %.2f left",
+                                   provider->credits_label ? provider->credits_label : "credits",
+                                   provider->credits_remaining);
         }
         if (provider->error) {
             g_string_append_printf(tooltip, "\n  error    %s", provider->error);

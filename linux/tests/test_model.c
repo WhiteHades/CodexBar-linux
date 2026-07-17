@@ -13,11 +13,14 @@ static const char *fixture =
     "\"account\":\"dev@example.com\","
     "\"plan\":\"Pro\","
     "\"source\":\"oauth\","
+    "\"note\":\"plan expires Jul 31, 2026\","
     "\"usage\":{"
-    "\"primary\":{\"usedPercent\":28,\"resetDescription\":\"resets Thu, Jul 23 at 10:16\"},"
+    "\"primary\":{\"label\":\"session\",\"usedPercent\":28,"
+    "\"resetDescription\":\"28 / 100 requests\","
+    "\"resetsAt\":\"resets Thu, Jul 23 at 10:16\"},"
     "\"secondary\":{\"usedPercent\":71.4,\"resetDescription\":\"Resets Friday\"},"
     "\"tertiary\":null},"
-    "\"credits\":{\"remaining\":12.5}"
+    "\"credits\":{\"label\":\"balance\",\"remaining\":12.5}"
     "},{"
     "\"provider\":\"claude\","
     "\"source\":\"cli\","
@@ -36,9 +39,12 @@ static void test_parse_snapshot(void) {
     g_assert_cmpstr(codex->provider, ==, "codex");
     g_assert_cmpstr(codex->account, ==, "dev@example.com");
     g_assert_cmpstr(codex->plan, ==, "Pro");
+    g_assert_cmpstr(codex->note, ==, "plan expires Jul 31, 2026");
     g_assert_true(codex->primary.available);
+    g_assert_cmpstr(codex->primary.label, ==, "session");
     g_assert_cmpfloat(codex->primary.used_percent, ==, 28.0);
     g_assert_true(codex->has_credits);
+    g_assert_cmpstr(codex->credits_label, ==, "balance");
     g_assert_cmpfloat(codex->credits_remaining, ==, 12.5);
     g_assert_cmpfloat(codexbar_snapshot_highest_used(snapshot), ==, 91.0);
     codexbar_snapshot_free(snapshot);
@@ -73,8 +79,10 @@ static void test_waybar_rendering(void) {
     g_assert_true(g_str_has_prefix(tooltip_text, "codex · dev@example.com"));
     g_assert_null(strstr(tooltip_text, "CODEXBAR // USAGE"));
     g_assert_nonnull(strstr(tooltip_text, "Pro · oauth"));
+    g_assert_nonnull(strstr(tooltip_text, "plan expires Jul 31, 2026"));
     g_assert_nonnull(strstr(tooltip_text, "28% used · 72% left"));
     g_assert_nonnull(strstr(tooltip_text, "███░░░░░░░"));
+    g_assert_nonnull(strstr(tooltip_text, "28 / 100 requests"));
     g_assert_nonnull(strstr(tooltip_text, "resets Thu, Jul 23 at 10:16"));
     g_assert_nonnull(strstr(json_object_get_string(tooltip), "claude"));
 
@@ -113,6 +121,90 @@ static void test_simple_provider_parsers(void) {
     g_assert_no_error(error);
     g_assert_cmpfloat_with_epsilon(elevenlabs->primary.used_percent, 25.0, 0.0001);
     codexbar_provider_free(elevenlabs);
+
+    CodexBarProvider *crof = codexbar_crof_parse(
+        "{\"credits\":9.9999,\"requests_plan\":1000,\"usable_requests\":998}", &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(crof->primary.label, ==, "requests");
+    g_assert_cmpfloat_with_epsilon(crof->primary.used_percent, 1.0, 0.0001);
+    g_assert_cmpstr(crof->primary.reset_description, ==, "998 requests left");
+    g_assert_nonnull(strstr(crof->primary.resets_at, "resets "));
+    g_assert_cmpstr(crof->secondary.label, ==, "balance");
+    g_assert_cmpstr(crof->secondary.reset_description, ==, "$9.99");
+    codexbar_provider_free(crof);
+
+    crof = codexbar_crof_parse("{\"credits\":0,\"requests_plan\":0,\"usable_requests\":0}", &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(crof->primary.used_percent, 100.0, 0.0001);
+    codexbar_provider_free(crof);
+
+    crof = codexbar_crof_parse("{\"credits\":0,\"requests_plan\":1000,\"usable_requests\":1200}", &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(crof->primary.used_percent, 0.0, 0.0001);
+    g_assert_cmpstr(crof->primary.reset_description, ==, "1200 requests left");
+    codexbar_provider_free(crof);
+
+    CodexBarProvider *venice = codexbar_venice_parse(
+        "{\"canConsume\":true,\"consumptionCurrency\":\"BUNDLED_CREDITS\","
+        "\"balances\":{\"diem\":\"50.0\",\"usd\":10.0},\"diemEpochAllocation\":\"100.0\"}",
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(venice->primary.label, ==, "balance");
+    g_assert_cmpfloat_with_epsilon(venice->primary.used_percent, 50.0, 0.0001);
+    g_assert_cmpstr(venice->primary.reset_description, ==, "DIEM 50.00 / 100.00 epoch allocation");
+    codexbar_provider_free(venice);
+
+    venice = codexbar_venice_parse(
+        "{\"canConsume\":true,\"balances\":{\"diem\":\"not-a-number\",\"usd\":null}}", &error);
+    g_assert_null(venice);
+    g_assert_error(error, g_quark_from_static_string("codexbar-simple-provider-error"), 8);
+    g_clear_error(&error);
+
+    venice = codexbar_venice_parse(
+        "{\"canConsume\":true,\"consumptionCurrency\":null,"
+        "\"balances\":{\"diem\":\"   \",\"usd\":null},\"diemEpochAllocation\":null}",
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(venice->primary.used_percent, 100.0, 0.0001);
+    codexbar_provider_free(venice);
+
+    CodexBarProvider *zenmux = codexbar_zenmux_parse_subscription(
+        "{\"success\":true,\"data\":{\"plan\":{\"tier\":\"ultra\","
+        "\"expires_at\":\"2026-04-12T08:26:56.000Z\"},\"account_status\":\"healthy\","
+        "\"quota_5_hour\":{\"usage_percentage\":0.0715,\"resets_at\":\"2026-03-24T08:35:09.000Z\","
+        "\"max_flows\":800,\"used_flows\":57.2,\"remaining_flows\":742.8},"
+        "\"quota_7_day\":{\"usage_percentage\":0.0673,\"resets_at\":\"2026-03-26T02:15:05.000Z\","
+        "\"max_flows\":6182,\"used_flows\":416.11,\"remaining_flows\":5765.89}}}",
+        &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(zenmux->plan, ==, "Ultra plan");
+    g_assert_nonnull(strstr(zenmux->note, "plan expires "));
+    g_assert_nonnull(strstr(zenmux->note, "2026"));
+    g_assert_cmpstr(zenmux->primary.label, ==, "5-hour");
+    g_assert_cmpfloat_with_epsilon(zenmux->primary.used_percent, 7.15, 0.0001);
+    g_assert_cmpstr(zenmux->primary.reset_description, ==, "57.20 / 800 flows");
+    g_assert_nonnull(strstr(zenmux->primary.resets_at, "Mar"));
+    g_assert_cmpstr(zenmux->secondary.label, ==, "weekly");
+    g_assert_true(codexbar_zenmux_apply_payg(
+        zenmux, "{\"success\":true,\"data\":{\"currency\":\"usd\",\"total_credits\":482.74}}", &error));
+    g_assert_no_error(error);
+    g_assert_cmpstr(zenmux->credits_label, ==, "pay as you go");
+    g_assert_cmpfloat_with_epsilon(zenmux->credits_remaining, 482.74, 0.0001);
+    g_assert_true(codexbar_zenmux_apply_payg(
+        zenmux, "{\"success\":true,\"data\":{\"currency\":\"usd\",\"total_credits\":10}}", &error));
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(zenmux->credits_remaining, 10.0, 0.0001);
+    g_assert_false(codexbar_zenmux_apply_payg(
+        zenmux, "{\"success\":true,\"data\":{\"currency\":\"eur\",\"total_credits\":10}}", &error));
+    g_assert_error(error, g_quark_from_static_string("codexbar-simple-provider-error"), 10);
+    g_clear_error(&error);
+    codexbar_provider_free(zenmux);
+
+    zenmux = codexbar_zenmux_parse_subscription(
+        "{\"success\":true,\"data\":{\"plan\":{},\"quota_5_hour\":{},\"quota_7_day\":{}}}", &error);
+    g_assert_null(zenmux);
+    g_assert_error(error, g_quark_from_static_string("codexbar-simple-provider-error"), 9);
+    g_clear_error(&error);
 }
 
 static void test_codex_rate_limits(void) {
