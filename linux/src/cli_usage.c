@@ -64,6 +64,13 @@ static char *validate_arguments(int argc, char **argv) {
                 g_ascii_strcasecmp(argv[index + 1], "json") != 0) {
                 return g_strdup("--format must be text or json.");
             }
+            if (g_str_equal(argument, "--source") && g_ascii_strcasecmp(argv[index + 1], "auto") != 0 &&
+                g_ascii_strcasecmp(argv[index + 1], "web") != 0 &&
+                g_ascii_strcasecmp(argv[index + 1], "cli") != 0 &&
+                g_ascii_strcasecmp(argv[index + 1], "oauth") != 0 &&
+                g_ascii_strcasecmp(argv[index + 1], "api") != 0) {
+                return g_strdup("Error: --source must be auto|web|cli|oauth|api.");
+            }
             index++;
             continue;
         }

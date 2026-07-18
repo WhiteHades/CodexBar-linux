@@ -1216,6 +1216,13 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("clawrouter")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
     g_assert_cmpint(codexbar_provider_registry_find("llmproxy")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
     g_assert_cmpint(codexbar_provider_registry_find("codebuff")->native_provider, ==, CODEXBAR_NATIVE_CODEBUFF);
+    const CodexBarProviderDescriptor *jetbrains = codexbar_provider_registry_find("jetbrains");
+    g_assert_cmpint(jetbrains->native_provider, ==, CODEXBAR_NATIVE_JETBRAINS);
+    g_assert_true(codexbar_provider_supports_source(jetbrains, "auto"));
+    g_assert_true(codexbar_provider_supports_source(jetbrains, "cli"));
+    g_assert_false(codexbar_provider_supports_source(jetbrains, "api"));
+    g_assert_false(codexbar_provider_supports_source(jetbrains, "web"));
+    g_assert_false(codexbar_provider_supports_source(jetbrains, "oauth"));
     const CodexBarProviderDescriptor *codex = codexbar_provider_registry_find("codex");
     g_assert_true(codex->default_enabled);
     g_assert_true(codexbar_provider_supports_source(codex, "oauth"));

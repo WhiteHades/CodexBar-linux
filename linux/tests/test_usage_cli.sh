@@ -5,6 +5,7 @@ set -eu
 binary=$1
 backend=$2
 expected_version=$3
+jetbrains_fixture=$4
 work=$(mktemp -d "$PWD/codexbar-usage-cli.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 config=$work/config.json
@@ -76,10 +77,12 @@ case "$output" in
     ;;
 esac
 
-if CODEXBAR_BACKEND="$backend" "$binary" usage --provider deepseek --source web >/dev/null 2>&1; then
-    printf 'unsupported source unexpectedly succeeded\n' >&2
-    exit 1
-fi
+set +e
+output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider deepseek --source web --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+[ "$output" = '[{"provider":"deepseek","source":"web","error":{"message":"Source '\''web'\'' is not supported for deepseek.","code":1,"kind":"provider"}}]' ]
 
 if CODEXBAR_BACKEND="$backend" "$binary" usage --provider unknown >/dev/null 2>&1; then
     printf 'unknown provider unexpectedly succeeded\n' >&2
@@ -115,10 +118,73 @@ esac
 
 [ "$("$binary" --version)" = "CodexBar $expected_version" ]
 
+jetbrains_home=$work/jetbrains-home
+jetbrains_quota_dir=$jetbrains_home/.config/JetBrains/IntelliJIdea2025.3/options
+mkdir -p "$jetbrains_quota_dir"
+cp "$jetbrains_fixture" "$jetbrains_quota_dir/AIAssistantQuotaManager2.xml"
+output=$(env -u CODEXBAR_BACKEND HOME="$jetbrains_home" XDG_CONFIG_HOME="$jetbrains_home/.config" \
+  XDG_DATA_HOME="$jetbrains_home/.local/share" CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider jetbrains --source cli --json)
+case "$output" in
+  '[{"provider":"jetbrains","source":"local"'*'"usedPercent":25'*'"accountOrganization":"IntelliJ IDEA 2025.3"'*'"loginMethod":"Available"'*) ;;
+  *)
+    printf 'unexpected native JetBrains output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+empty_jetbrains_home=$work/empty-jetbrains-home
+mkdir -p "$empty_jetbrains_home"
+set +e
+output=$(env -u CODEXBAR_BACKEND HOME="$empty_jetbrains_home" XDG_CONFIG_HOME="$empty_jetbrains_home/.config" \
+  XDG_DATA_HOME="$empty_jetbrains_home/.local/share" CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider jetbrains --source auto --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+case "$output" in
+  '[{"provider":"jetbrains","source":"auto","error":{"message":"No JetBrains IDE with AI Assistant detected.'*'"code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected missing JetBrains IDE output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+set +e
+output=$(env -u CODEXBAR_BACKEND HOME="$jetbrains_home" CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider jetbrains --source local --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+[ "$output" = '[{"provider":"cli","source":"cli","error":{"message":"Error: --source must be auto|web|cli|oauth|api.","code":1,"kind":"args"}}]' ]
+
+set +e
+output=$(env -u CODEXBAR_BACKEND HOME="$jetbrains_home" CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider jetbrains --source api --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+case "$output" in
+  '[{"provider":"jetbrains","source":"api","error":{"message":"Source '\''api'\'' is not supported for jetbrains.","code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected unsupported JetBrains source output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+cp "${jetbrains_fixture%/*}/invalid-quota.xml" "$jetbrains_quota_dir/AIAssistantQuotaManager2.xml"
+set +e
+output=$(env -u CODEXBAR_BACKEND HOME="$jetbrains_home" CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider jetbrains --source cli --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+[ "$output" = '[{"provider":"jetbrains","source":"cli","error":{"message":"Could not parse JetBrains AI quota: Invalid JSON format","code":1,"kind":"provider"}}]' ]
+
 output=$(env -u CODEXBAR_BACKEND -u KIMI_CODE_API_KEY CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider kimi --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"kimi","source":"api","error":{"message":"Kimi Code API key is missing.'*) ;;
+  '[{"provider":"kimi","source":"api","error":{"message":"Kimi Code API key is missing.'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Kimi missing-key output: %s\n' "$output" >&2
     exit 1
@@ -128,7 +194,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider kimi --source web --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"kimi","source":"web","error":{"message":"Kimi source '\''web'\'' has no native Linux implementation yet"'*) ;;
+  '[{"provider":"kimi","source":"web","error":{"message":"Kimi source '\''web'\'' has no native Linux implementation yet"'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Kimi web-source output: %s\n' "$output" >&2
     exit 1
@@ -138,7 +204,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND -u KIMI_K2_API_KEY -u KIMI_API_KEY -u KIMI_KEY \
   CODEXBAR_CONFIG="$config" "$binary" usage --provider kimi-k2 --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"kimik2","source":"api","error":{"message":"Missing Kimi K2 API key."'*) ;;
+  '[{"provider":"kimik2","source":"api","error":{"message":"Missing Kimi K2 API key."'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Kimi K2 missing-key output: %s\n' "$output" >&2
     exit 1
@@ -148,7 +214,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND -u CLAWROUTER_API_KEY CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider claw-router --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"clawrouter","source":"api","error":{"message":"Missing ClawRouter API key."'*) ;;
+  '[{"provider":"clawrouter","source":"api","error":{"message":"Missing ClawRouter API key."'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native ClawRouter missing-key output: %s\n' "$output" >&2
     exit 1
@@ -158,7 +224,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND -u LLM_PROXY_API_KEY -u LLM_PROXY_BASE_URL CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider llm-proxy --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"llmproxy","source":"api","error":{"message":"Missing LLM Proxy API key."'*) ;;
+  '[{"provider":"llmproxy","source":"api","error":{"message":"Missing LLM Proxy API key."'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native LLM Proxy missing-key output: %s\n' "$output" >&2
     exit 1
@@ -168,7 +234,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND -u CODEBUFF_API_KEY CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider manicode --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"codebuff","source":"api","error":{"message":"Codebuff API token is not configured."'*) ;;
+  '[{"provider":"codebuff","source":"api","error":{"message":"Codebuff API token is not configured."'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Codebuff missing-key output: %s\n' "$output" >&2
     exit 1

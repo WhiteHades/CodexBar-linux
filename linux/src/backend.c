@@ -3,6 +3,7 @@
 #include "config.h"
 #include "codebuff.h"
 #include "codex.h"
+#include "jetbrains.h"
 #include "kimi.h"
 #include "openrouter.h"
 #include "process.h"
@@ -91,7 +92,7 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
     provider->source = g_strdup(source);
     provider->error = g_strdup(error ? error->message : "Provider fetch failed without a diagnostic");
     provider->error_code = 1;
-    provider->error_kind = g_strdup("runtime");
+    provider->error_kind = g_strdup("provider");
     if (error && error->domain == G_SPAWN_ERROR && error->code == G_SPAWN_ERROR_NOENT) {
         provider->error_code = 2;
         g_free(provider->error_kind);
@@ -117,15 +118,29 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     }
 
     const char *configured_source = config->source ? config->source : "auto";
-    const char *native_source = descriptor->native_provider == CODEXBAR_NATIVE_CODEX
-                                    ? "cli"
-                                    : descriptor->native_provider == CODEXBAR_NATIVE_UNAVAILABLE ? NULL : "api";
+    const char *native_source = NULL;
+    switch (descriptor->native_provider) {
+    case CODEXBAR_NATIVE_CODEX:
+    case CODEXBAR_NATIVE_JETBRAINS:
+        native_source = "cli";
+        break;
+    case CODEXBAR_NATIVE_UNAVAILABLE:
+        break;
+    case CODEXBAR_NATIVE_CODEBUFF:
+    case CODEXBAR_NATIVE_KIMI:
+    case CODEXBAR_NATIVE_KIMI_K2:
+    case CODEXBAR_NATIVE_OPENROUTER:
+    case CODEXBAR_NATIVE_PROXY:
+    case CODEXBAR_NATIVE_SIMPLE:
+        native_source = "api";
+        break;
+    }
     if (!codexbar_provider_supports_source(descriptor, configured_source)) {
         GError *error = g_error_new(G_IO_ERROR,
                                     G_IO_ERROR_NOT_SUPPORTED,
-                                    "%s does not support source '%s'",
-                                    descriptor->display_name,
-                                    configured_source);
+                                    "Source '%s' is not supported for %s.",
+                                    configured_source,
+                                    descriptor->cli_name);
         return provider_error(config, configured_source, error);
     }
     if (native_source && !g_str_equal(configured_source, "auto") && !g_str_equal(configured_source, native_source)) {
@@ -145,6 +160,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_CODEBUFF:
         provider = codexbar_codebuff_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_JETBRAINS:
+        provider = codexbar_jetbrains_fetch(&error);
         break;
     case CODEXBAR_NATIVE_KIMI:
         provider = codexbar_kimi_fetch(config, &error);
@@ -166,7 +184,10 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
             G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "%s has no native Linux source yet", descriptor->display_name);
         break;
     }
-    return provider ? provider : provider_error(config, native_source ? native_source : configured_source, error);
+    const char *error_source = descriptor->native_provider == CODEXBAR_NATIVE_JETBRAINS
+                                   ? configured_source
+                                   : native_source ? native_source : configured_source;
+    return provider ? provider : provider_error(config, error_source, error);
 }
 
 CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
@@ -215,13 +236,13 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
         return NULL;
     }
     if (source && !codexbar_provider_supports_source(descriptor, source)) {
-        g_set_error(error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_NOT_SUPPORTED,
-                    "%s does not support source '%s'",
-                    descriptor->display_name,
-                    source);
-        return NULL;
+        CodexBarProviderConfig selected = {.id = (char *)descriptor->id, .source = (char *)source};
+        GError *source_error = g_error_new(G_IO_ERROR,
+                                           G_IO_ERROR_NOT_SUPPORTED,
+                                           "Source '%s' is not supported for %s.",
+                                           source,
+                                           descriptor->cli_name);
+        return provider_error(&selected, source, source_error);
     }
     const char *backend = g_getenv("CODEXBAR_BACKEND");
     if (backend && backend[0] != '\0') {

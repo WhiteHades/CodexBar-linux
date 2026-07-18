@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <component name="AIAssistantQuotaManager2">
+    <option value="{&quot;type&quot;:&quot;paid&quot;,&quot;current&quot;:&quot;100&quot;,&quot;maximum&quot;:&quot;500&quot;}" name="quotaInfo" />
+  </component>
+</application>

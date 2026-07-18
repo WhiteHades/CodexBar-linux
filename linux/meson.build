@@ -17,6 +17,7 @@ core_sources = files(
   'src/config.c',
   'src/codex.c',
   'src/http.c',
+  'src/jetbrains.c',
   'src/kimi.c',
   'src/model.c',
   'src/openrouter.c',
@@ -85,7 +86,12 @@ usage_cli_test = find_program('tests/test_usage_cli.sh')
 test(
   'codexbar-linux-usage-cli',
   usage_cli_test,
-  args: [codexbar_linux, files('tests/fake_backend.sh'), meson.project_version()],
+  args: [
+    codexbar_linux,
+    files('tests/fake_backend.sh'),
+    meson.project_version(),
+    files('../fixtures/native/jetbrains/quota-full.xml'),
+  ],
   depends: process_supervisor,
 )
 
@@ -104,3 +110,16 @@ process_test = executable(
   dependencies: [glib_dep, gio_dep],
 )
 test('codexbar-linux-process', process_test, env: normalized_test_env, depends: process_supervisor)
+
+jetbrains_test = executable(
+  'codexbar-linux-jetbrains-tests',
+  files('src/jetbrains.c', 'src/model.c', 'tests/test_jetbrains.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep, json_dep, math_dep],
+)
+test(
+  'codexbar-linux-jetbrains',
+  jetbrains_test,
+  args: [meson.project_source_root() / 'fixtures/native/jetbrains'],
+  env: normalized_test_env,
+)

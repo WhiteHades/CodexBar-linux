@@ -16,6 +16,7 @@ JetBrains AI is a local-only provider. We read quota information directly from t
    - macOS: `~/Library/Application Support/JetBrains/`
    - macOS (Android Studio): `~/Library/Application Support/Google/`
    - Linux: `~/.config/JetBrains/`
+   - Linux (alternative install root): `~/.local/share/JetBrains/`
    - Linux (Android Studio): `~/.config/Google/`
    - Supported IDEs: IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, DataGrip, RubyMine, Rider, PhpStorm, RustRover, Android Studio, Fleet, Aqua, DataSpell
    - Selection: most recently modified `AIAssistantQuotaManager2.xml`
@@ -40,7 +41,7 @@ JetBrains AI is a local-only provider. We read quota information directly from t
 
 ## Parsing and mapping
 
-- Usage calculation: `tariffQuota.available / maximum * 100` for remaining percent
+- Usage calculation: `current / maximum * 100` for used percent
 - Reset date: from `nextRefill.next`, not `quotaInfo.until`
 - HTML entity decoding: `&#10;` → newline, `&quot;` → quote
 
@@ -56,6 +57,7 @@ JetBrains AI is a local-only provider. We read quota information directly from t
 
 - IDE Picker: auto-detected IDEs list, or "Auto-detect" (default)
 - Custom Path: manual base path override (for advanced users)
+- The native Linux CLI uses auto-detection; the custom path is an app setting and is not exposed by the CLI.
 
 ## Constraints
 
@@ -68,3 +70,5 @@ JetBrains AI is a local-only provider. We read quota information directly from t
 - `Sources/CodexBarCore/Providers/JetBrains/JetBrainsStatusProbe.swift`
 - `Sources/CodexBarCore/Providers/JetBrains/JetBrainsIDEDetector.swift`
 - `Sources/CodexBar/Providers/JetBrains/JetBrainsProviderImplementation.swift`
+- `linux/src/jetbrains.c`
+- `linux/tests/test_jetbrains.c`

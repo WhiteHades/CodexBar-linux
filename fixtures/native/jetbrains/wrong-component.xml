@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <component name="SomeOtherComponent">
+    <option name="quotaInfo" value="{&quot;current&quot;:&quot;1&quot;,&quot;maximum&quot;:&quot;2&quot;}" />
+  </component>
+</application>

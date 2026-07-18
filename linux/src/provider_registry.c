@@ -31,7 +31,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"kiro", "Kiro", "kiro", "kiro-cli", A | C, FALSE, "https://app.kiro.dev/account/usage", "https://health.aws.amazon.com/health/status", CODEXBAR_NATIVE_UNAVAILABLE},
     {"vertexai", "Vertex AI", "vertexai", NULL, A | O, FALSE, "https://console.cloud.google.com/vertex-ai", "https://status.cloud.google.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"augment", "Augment", "augment", NULL, A | C, FALSE, "https://app.augmentcode.com/account/subscription", "https://status.augmentcode.com", CODEXBAR_NATIVE_UNAVAILABLE},
-    {"jetbrains", "JetBrains AI", "jetbrains", NULL, A | C, FALSE, NULL, NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"jetbrains", "JetBrains AI", "jetbrains", NULL, A | C, FALSE, NULL, NULL, CODEXBAR_NATIVE_JETBRAINS},
     {"kimik2", "Kimi K2 (unofficial)", "kimik2", "kimi-k2,kimiK2", A | P, FALSE, "https://kimrel.com/my-credits", NULL, CODEXBAR_NATIVE_KIMI_K2},
     {"moonshot", "Moonshot / Kimi API", "moonshot", NULL, A | P, FALSE, "https://platform.moonshot.ai/console/account", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"amp", "Amp", "amp", NULL, A | P | W | C, FALSE, "https://ampcode.com/settings/usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},

@@ -7,6 +7,60 @@ import Testing
 /// JetBrains AI Assistant quota files.
 @Suite
 struct JetBrainsParserLinuxTests {
+    private func fixtureData(_ name: String) throws -> Data {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("fixtures/native/jetbrains/\(name)")
+        return try Data(contentsOf: fixtureURL)
+    }
+
+    @Test
+    func parsesSharedNativeFixture() throws {
+        let data = try self.fixtureData("quota-full.xml")
+        let snapshot = try JetBrainsStatusProbe.parseXMLData(data, detectedIDE: nil)
+
+        #expect(snapshot.quotaInfo.type == "Available")
+        #expect(snapshot.quotaInfo.used == 250)
+        #expect(snapshot.quotaInfo.maximum == 1000)
+        #expect(snapshot.quotaInfo.available == 750)
+        #expect(snapshot.quotaInfo.until?.timeIntervalSince1970 == 1_924_992_000)
+        #expect(snapshot.refillInfo?.type == "Known")
+        #expect(snapshot.refillInfo?.amount == 1000)
+        #expect(snapshot.refillInfo?.duration == "PT720H")
+        #expect(abs((snapshot.refillInfo?.next?.timeIntervalSince1970 ?? 0) - 1_894_802_454.939) < 0.001)
+    }
+
+    @Test
+    func parsesSharedNativeVariants() throws {
+        let cases: [(String, String?, Double, Double, Bool)] = [
+            ("quota-only.xml", "free", 50, 1000, false),
+            ("reversed-attributes.xml", "paid", 100, 500, false),
+            ("single-quotes.xml", "single", 10, 100, false),
+            ("invalid-refill.xml", "valid", 20, 100, false),
+            ("empty-quota.xml", nil, 0, 0, false),
+        ]
+        for (name, type, used, maximum, hasRefill) in cases {
+            let snapshot = try JetBrainsStatusProbe.parseXMLData(try self.fixtureData(name), detectedIDE: nil)
+            #expect(snapshot.quotaInfo.type == type)
+            #expect(snapshot.quotaInfo.used == used)
+            #expect(snapshot.quotaInfo.maximum == maximum)
+            #expect((snapshot.refillInfo != nil) == hasRefill)
+        }
+    }
+
+    @Test
+    func rejectsSharedNativeInvalidFixtures() throws {
+        for name in ["missing-quota.xml", "wrong-component.xml", "empty-value.xml"] {
+            #expect(throws: JetBrainsStatusProbeError.noQuotaInfo) {
+                _ = try JetBrainsStatusProbe.parseXMLData(try self.fixtureData(name), detectedIDE: nil)
+            }
+        }
+        #expect(throws: JetBrainsStatusProbeError.parseError("Invalid JSON format")) {
+            _ = try JetBrainsStatusProbe.parseXMLData(try self.fixtureData("invalid-quota.xml"), detectedIDE: nil)
+        }
+    }
+
     @Test
     func parsesQuotaXMLWithBothOptions() throws {
         let quotaInfo = [
