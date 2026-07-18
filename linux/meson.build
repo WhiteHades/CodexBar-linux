@@ -20,6 +20,7 @@ core_sources = files(
   'src/kimi.c',
   'src/model.c',
   'src/openrouter.c',
+  'src/process.c',
   'src/provider_registry.c',
   'src/proxy_providers.c',
   'src/render.c',
@@ -28,6 +29,12 @@ core_sources = files(
 )
 
 core_deps = [glib_dep, gio_dep, json_dep, curl_dep, math_dep]
+
+process_supervisor = executable(
+  'codexbar-process-supervisor',
+  files('src/process_supervisor.c'),
+  install: true,
+)
 
 codexbar_linux = executable(
   'codexbar-linux',
@@ -47,7 +54,7 @@ test_executable = executable(
 normalized_test_env = environment()
 normalized_test_env.set('LC_ALL', 'C')
 normalized_test_env.set('TZ', 'UTC')
-test('codexbar-linux', test_executable, env: normalized_test_env)
+test('codexbar-linux', test_executable, env: normalized_test_env, depends: process_supervisor)
 
 serialization_test = executable(
   'codexbar-linux-usage-serialization-tests',
@@ -68,16 +75,18 @@ test(
   'codexbar-linux-waybar',
   waybar_test,
   args: [codexbar_linux, files('tests/fake_backend.sh'), files('../fixtures/native/config-openrouter-missing.json')],
+  depends: process_supervisor,
 )
 
 config_cli_test = find_program('tests/test_config_cli.sh')
-test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux])
+test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux], depends: process_supervisor)
 
 usage_cli_test = find_program('tests/test_usage_cli.sh')
 test(
   'codexbar-linux-usage-cli',
   usage_cli_test,
   args: [codexbar_linux, files('tests/fake_backend.sh'), meson.project_version()],
+  depends: process_supervisor,
 )
 
 tui_actions_test = executable(
@@ -87,3 +96,11 @@ tui_actions_test = executable(
   dependencies: [glib_dep, gio_dep],
 )
 test('codexbar-linux-tui-actions', tui_actions_test)
+
+process_test = executable(
+  'codexbar-linux-process-tests',
+  files('src/process.c', 'tests/test_process.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep],
+)
+test('codexbar-linux-process', process_test, env: normalized_test_env, depends: process_supervisor)

@@ -27,6 +27,43 @@ case "$output" in
     ;;
 esac
 
+nonzero_backend=$work/nonzero-backend.sh
+cat > "$nonzero_backend" <<'EOF'
+#!/bin/sh
+"$CODEXBAR_TEST_BACKEND" "$@"
+exit 7
+EOF
+chmod +x "$nonzero_backend"
+nonzero_output=$(CODEXBAR_BACKEND="$nonzero_backend" CODEXBAR_TEST_BACKEND="$backend" \
+  "$binary" usage --provider codex --format json)
+case "$nonzero_output" in
+  '[{"provider":"codex"'*) ;;
+  *)
+    printf 'valid backend JSON was rejected after a nonzero exit: %s\n' "$nonzero_output" >&2
+    exit 1
+    ;;
+esac
+
+invalid_stderr_backend=$work/invalid-stderr-backend.sh
+cat > "$invalid_stderr_backend" <<'EOF'
+#!/bin/sh
+"$CODEXBAR_TEST_BACKEND" "$@"
+printf '\377' >&2
+EOF
+chmod +x "$invalid_stderr_backend"
+if CODEXBAR_BACKEND="$invalid_stderr_backend" CODEXBAR_TEST_BACKEND="$backend" \
+  "$binary" usage --provider codex --format json >"$work/invalid-stderr-output" 2>"$work/invalid-stderr-error"; then
+    printf 'backend with invalid UTF-8 stderr unexpectedly succeeded\n' >&2
+    exit 1
+fi
+case "$(cat "$work/invalid-stderr-output")" in
+  *'Backend error output is not valid UTF-8 text'*) ;;
+  *)
+    printf 'unexpected invalid stderr diagnostic\n' >&2
+    exit 1
+    ;;
+esac
+
 root_output=$(CODEXBAR_BACKEND="$backend" "$binary" --provider codex --json)
 [ "$root_output" = "$output" ]
 

@@ -5,12 +5,21 @@
 #include "codex.h"
 #include "kimi.h"
 #include "openrouter.h"
+#include "process.h"
 #include "provider_registry.h"
 #include "proxy_providers.h"
 #include "simple_providers.h"
 
 #include <gio/gio.h>
 #include <string.h>
+
+#define ORACLE_TIMEOUT_MILLISECONDS 60000
+#define ORACLE_TERMINATION_GRACE_MILLISECONDS 400
+#define ORACLE_MAXIMUM_OUTPUT_BYTES (1024U * 1024U)
+
+static gboolean valid_process_text(const char *text, size_t length) {
+    return !memchr(text, '\0', length) && g_utf8_validate(text, (gssize)length, NULL);
+}
 
 static CodexBarSnapshot *fetch_oracle(const char *backend,
                                       const char *provider,
@@ -28,40 +37,51 @@ static CodexBarSnapshot *fetch_oracle(const char *backend,
     }
     argv[argument] = NULL;
 
-    GSubprocess *process = g_subprocess_newv(argv,
-                                             G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE,
-                                             error);
-    if (!process) {
+    CodexBarProcessRequest request = {
+        .arguments = argv,
+        .timeout_milliseconds = ORACLE_TIMEOUT_MILLISECONDS,
+        .termination_grace_milliseconds = ORACLE_TERMINATION_GRACE_MILLISECONDS,
+        .maximum_output_bytes = ORACLE_MAXIMUM_OUTPUT_BYTES,
+        .new_session = TRUE,
+    };
+    CodexBarProcessResult *result = codexbar_process_run(&request, NULL, error);
+    if (!result) return NULL;
+    if (!valid_process_text(result->standard_output, result->standard_output_length)) {
+        codexbar_process_result_free(result);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Backend output is not valid UTF-8 text");
+        return NULL;
+    }
+    if (!valid_process_text(result->standard_error, result->standard_error_length)) {
+        codexbar_process_result_free(result);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Backend error output is not valid UTF-8 text");
         return NULL;
     }
 
-    char *stdout_text = NULL;
-    char *stderr_text = NULL;
-    gboolean communicated = g_subprocess_communicate_utf8(process, NULL, NULL, &stdout_text, &stderr_text, error);
-    if (!communicated) {
-        g_object_unref(process);
-        g_free(stdout_text);
-        g_free(stderr_text);
+    CodexBarSnapshot *snapshot = result->standard_output_length > 0
+                                     ? codexbar_snapshot_parse(result->standard_output, NULL)
+                                     : NULL;
+    if (!snapshot && !codexbar_process_result_succeeded(result)) {
+        const char *diagnostic = result->standard_error_length > 0 ? result->standard_error : "no diagnostic output";
+        if (result->termination_signal != 0) {
+            g_set_error(error,
+                        G_IO_ERROR,
+                        G_IO_ERROR_FAILED,
+                        "Backend terminated by signal %d: %s",
+                        result->termination_signal,
+                        diagnostic);
+        } else {
+            g_set_error(error,
+                        G_IO_ERROR,
+                        G_IO_ERROR_FAILED,
+                        "Backend exited with status %d: %s",
+                        result->exit_status,
+                        diagnostic);
+        }
+        codexbar_process_result_free(result);
         return NULL;
     }
-
-    CodexBarSnapshot *snapshot = stdout_text && stdout_text[0] != '\0' ? codexbar_snapshot_parse(stdout_text, NULL) : NULL;
-    if (!snapshot && !g_subprocess_get_successful(process)) {
-        g_set_error(error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_FAILED,
-                    "Backend exited with status %d: %s",
-                    g_subprocess_get_exit_status(process),
-                    stderr_text && stderr_text[0] != '\0' ? stderr_text : "no diagnostic output");
-        g_object_unref(process);
-        g_free(stdout_text);
-        g_free(stderr_text);
-        return NULL;
-    }
-    if (!snapshot) snapshot = codexbar_snapshot_parse(stdout_text, error);
-    g_object_unref(process);
-    g_free(stdout_text);
-    g_free(stderr_text);
+    if (!snapshot) snapshot = codexbar_snapshot_parse(result->standard_output, error);
+    codexbar_process_result_free(result);
     return snapshot;
 }
 
