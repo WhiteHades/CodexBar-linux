@@ -28,6 +28,7 @@ core_sources = files(
   'src/diagnose.c',
   'src/http.c',
   'src/jetbrains.c',
+  'src/kilo.c',
   'src/kimi.c',
   'src/model.c',
   'src/openai_api.c',
@@ -164,6 +165,14 @@ test('codexbar-linux-openai-api', openai_api_test)
 
 openai_api_cli_test = find_program('tests/test_openai_api_cli.sh')
 test('codexbar-linux-openai-api-cli', openai_api_cli_test, args: [codexbar_linux])
+
+kilo_test = executable(
+  'codexbar-linux-kilo-tests',
+  files('tests/test_kilo.c', 'src/kilo.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-kilo', kilo_test)
 
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(

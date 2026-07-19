@@ -6,6 +6,7 @@
 #include "copilot.h"
 #include "codex.h"
 #include "jetbrains.h"
+#include "kilo.h"
 #include "kimi.h"
 #include "openai_api.h"
 #include "openrouter.h"
@@ -142,6 +143,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_SIMPLE:
         native_source = "api";
         break;
+    case CODEXBAR_NATIVE_KILO:
+        native_source = configured_source;
+        break;
     case CODEXBAR_NATIVE_UNAVAILABLE:
         break;
     }
@@ -180,6 +184,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_OPENAI:
         provider = codexbar_openai_api_fetch(config, &error);
         break;
+    case CODEXBAR_NATIVE_KILO:
+        provider = codexbar_kilo_fetch(config, configured_source, &error);
+        break;
     case CODEXBAR_NATIVE_CODEBUFF:
         provider = codexbar_codebuff_fetch(config, &error);
         break;
@@ -206,7 +213,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
             G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "%s has no native Linux source yet", descriptor->display_name);
         break;
     }
-    const char *error_source = descriptor->native_provider == CODEXBAR_NATIVE_JETBRAINS
+    const char *error_source = descriptor->native_provider == CODEXBAR_NATIVE_JETBRAINS ||
+                                       descriptor->native_provider == CODEXBAR_NATIVE_KILO
                                    ? configured_source
                                    : native_source ? native_source : configured_source;
     return provider ? provider : provider_error(config, error_source, error);
