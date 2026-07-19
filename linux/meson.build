@@ -14,6 +14,7 @@ core_sources = files(
   'src/cli_cards.c',
   'src/cli_config.c',
   'src/cli_cost.c',
+  'src/cli_sessions.c',
   'src/cli_usage.c',
   'src/codebuff.c',
   'src/config.c',
@@ -28,6 +29,7 @@ core_sources = files(
   'src/provider_registry.c',
   'src/proxy_providers.c',
   'src/render.c',
+  'src/sessions.c',
   'src/simple_providers.c',
   'src/tui_actions.c',
 )
@@ -103,6 +105,9 @@ test(
 
 cost_cli_test = find_program('tests/test_cost_cli.sh')
 test('codexbar-linux-cost-cli', cost_cli_test, args: [codexbar_linux], depends: process_supervisor)
+
+sessions_cli_test = find_program('tests/test_sessions_cli.sh')
+test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], depends: process_supervisor)
 
 usage_cli_test = find_program('tests/test_usage_cli.sh')
 test(
