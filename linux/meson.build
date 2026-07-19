@@ -39,6 +39,7 @@ core_sources = files(
   'src/serve.c',
   'src/simple_providers.c',
   'src/tui_actions.c',
+  'src/zai.c',
 )
 
 core_deps = [glib_dep, gio_dep, json_dep, curl_dep, math_dep]
@@ -140,6 +141,17 @@ test('codexbar-linux-copilot', copilot_test)
 
 copilot_cli_test = find_program('tests/test_copilot_cli.sh')
 test('codexbar-linux-copilot-cli', copilot_cli_test, args: [codexbar_linux])
+
+zai_test = executable(
+  'codexbar-linux-zai-tests',
+  files('tests/test_zai.c', 'src/zai.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-zai', zai_test)
+
+zai_cli_test = find_program('tests/test_zai_cli.sh')
+test('codexbar-linux-zai-cli', zai_cli_test, args: [codexbar_linux])
 
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(

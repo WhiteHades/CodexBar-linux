@@ -23,7 +23,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"antigravity", "Antigravity", "antigravity", NULL, A | C | O, FALSE, NULL, "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_UNAVAILABLE},
     {"copilot", "Copilot", "copilot", NULL, A | P, FALSE, "https://github.com/settings/copilot", "https://www.githubstatus.com/", CODEXBAR_NATIVE_COPILOT},
     {"devin", "Devin", "devin", NULL, A | W, FALSE, "https://app.devin.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
-    {"zai", "z.ai", "zai", "z.ai", A | P, FALSE, "https://z.ai/manage-apikey/coding-plan/personal/my-plan", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"zai", "z.ai", "zai", "z.ai", A | P, FALSE, "https://z.ai/manage-apikey/coding-plan/personal/my-plan", NULL, CODEXBAR_NATIVE_ZAI},
     {"minimax", "MiniMax", "minimax", "mini-max", A | W | P, FALSE, "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"manus", "Manus", "manus", NULL, A | W, FALSE, "https://manus.im", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"kimi", "Kimi", "kimi", "kimi-ai", A | P | W, FALSE, "https://www.kimi.com/code/console", NULL, CODEXBAR_NATIVE_KIMI},

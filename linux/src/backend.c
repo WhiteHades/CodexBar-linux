@@ -12,6 +12,7 @@
 #include "provider_registry.h"
 #include "proxy_providers.h"
 #include "simple_providers.h"
+#include "zai.h"
 
 #include <gio/gio.h>
 #include <string.h>
@@ -130,6 +131,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         native_source = "oauth";
         break;
     case CODEXBAR_NATIVE_COPILOT:
+    case CODEXBAR_NATIVE_ZAI:
     case CODEXBAR_NATIVE_CODEBUFF:
     case CODEXBAR_NATIVE_KIMI:
     case CODEXBAR_NATIVE_KIMI_K2:
@@ -169,6 +171,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_COPILOT:
         provider = codexbar_copilot_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_ZAI:
+        provider = codexbar_zai_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_CODEBUFF:
         provider = codexbar_codebuff_fetch(config, &error);
