@@ -15,6 +15,7 @@ core_sources = files(
   'src/cli_config.c',
   'src/cli_cost.c',
   'src/cli_sessions.c',
+  'src/cli_serve.c',
   'src/cli_usage.c',
   'src/codebuff.c',
   'src/config.c',
@@ -30,6 +31,7 @@ core_sources = files(
   'src/proxy_providers.c',
   'src/render.c',
   'src/sessions.c',
+  'src/serve.c',
   'src/simple_providers.c',
   'src/tui_actions.c',
 )
@@ -108,6 +110,15 @@ test('codexbar-linux-cost-cli', cost_cli_test, args: [codexbar_linux], depends: 
 
 sessions_cli_test = find_program('tests/test_sessions_cli.sh')
 test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], depends: process_supervisor)
+
+serve_cli_test = find_program('tests/test_serve_cli.sh')
+test(
+  'codexbar-linux-serve-cli',
+  serve_cli_test,
+  args: [codexbar_linux, find_program('tests/fake_backend.sh')],
+  depends: process_supervisor,
+  timeout: 30,
+)
 
 usage_cli_test = find_program('tests/test_usage_cli.sh')
 test(
