@@ -486,7 +486,8 @@ public struct UsageSnapshot: Codable, Sendable {
             }
             return self.primary ?? self.secondary
         default:
-            return self.primary ?? self.secondary
+            // "Weekly progress" is expected to prefer a weekly lane if present.
+            return self.secondary ?? self.primary
         }
     }
 

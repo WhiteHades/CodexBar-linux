@@ -13,6 +13,7 @@ struct CommandCodeProviderTests {
         #expect(descriptor.metadata.cliName == "commandcode")
         #expect(descriptor.branding.iconResourceName == "ProviderIcon-commandcode")
         #expect(descriptor.branding.iconStyle == .commandcode)
+        #expect(descriptor.branding.color == ProviderColor(red: 160 / 255, green: 77 / 255, blue: 253 / 255))
     }
 
     @Test

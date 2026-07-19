@@ -58,7 +58,9 @@ final class ProviderSwitcherView: NSView {
         let minimumGap: CGFloat = 1
         var segments = providers.map { provider in
             let fullTitle = Self.switcherTitle(for: provider)
-            let icon = iconProvider(provider)
+            let sourceIcon = iconProvider(provider)
+            // ProviderBrandIcon is cached; always mutate a per-consumer copy.
+            let icon = (sourceIcon.copy() as? NSImage) ?? sourceIcon
             icon.isTemplate = true
             // Avoid any resampling: we ship exact 16pt/32px assets for crisp rendering.
             icon.size = NSSize(width: 16, height: 16)
@@ -68,7 +70,9 @@ final class ProviderSwitcherView: NSView {
                 title: fullTitle)
         }
         if includesOverview {
-            let overviewIcon = Self.overviewIcon()
+            let sourceOverviewIcon = Self.overviewIcon()
+            // Symbol images may be shared across call sites; keep view-local mutations isolated.
+            let overviewIcon = (sourceOverviewIcon.copy() as? NSImage) ?? sourceOverviewIcon
             overviewIcon.isTemplate = true
             overviewIcon.size = NSSize(width: 16, height: 16)
             segments.insert(
