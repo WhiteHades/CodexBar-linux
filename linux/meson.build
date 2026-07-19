@@ -13,10 +13,12 @@ core_sources = files(
   'src/backend.c',
   'src/cli_cards.c',
   'src/cli_config.c',
+  'src/cli_cost.c',
   'src/cli_usage.c',
   'src/codebuff.c',
   'src/config.c',
   'src/codex.c',
+  'src/cost.c',
   'src/http.c',
   'src/jetbrains.c',
   'src/kimi.c',
@@ -98,6 +100,9 @@ test(
   args: [codexbar_linux, find_program('tests/fake_backend.sh')],
   depends: process_supervisor,
 )
+
+cost_cli_test = find_program('tests/test_cost_cli.sh')
+test('codexbar-linux-cost-cli', cost_cli_test, args: [codexbar_linux], depends: process_supervisor)
 
 usage_cli_test = find_program('tests/test_usage_cli.sh')
 test(
