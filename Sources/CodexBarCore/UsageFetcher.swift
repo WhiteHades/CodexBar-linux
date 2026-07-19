@@ -462,8 +462,7 @@ public struct UsageSnapshot: Codable, Sendable {
 
     public func switcherWeeklyWindow(for provider: UsageProvider, showUsed: Bool) -> RateWindow? {
         switch provider {
-        case .factory:
-            // Factory prefers secondary window
+        case .factory, .claude:
             return self.secondary ?? self.primary
         case .perplexity:
             return self.automaticPerplexityWindow()
@@ -486,8 +485,7 @@ public struct UsageSnapshot: Codable, Sendable {
             }
             return self.primary ?? self.secondary
         default:
-            // "Weekly progress" is expected to prefer a weekly lane if present.
-            return self.secondary ?? self.primary
+            return self.primary ?? self.secondary
         }
     }
 

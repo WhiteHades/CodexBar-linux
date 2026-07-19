@@ -26,4 +26,18 @@ struct UsageSnapshotSwitcherWeeklyWindowTests {
 
         #expect(window == primary)
     }
+
+    @Test
+    func `switcher weekly uses primary when secondary is present for cursor by default`() {
+        let primary = RateWindow(usedPercent: 25, windowMinutes: 60, resetsAt: nil, resetDescription: nil)
+        let secondary = RateWindow(usedPercent: 10, windowMinutes: 7 * 24 * 60, resetsAt: nil, resetDescription: nil)
+        let snapshot = UsageSnapshot(
+            primary: primary,
+            secondary: secondary,
+            updatedAt: Date())
+
+        let window = snapshot.switcherWeeklyWindow(for: .cursor, showUsed: false)
+
+        #expect(window == primary)
+    }
 }
