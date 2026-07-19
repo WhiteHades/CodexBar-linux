@@ -79,6 +79,14 @@ test(
   depends: process_supervisor,
 )
 
+tui_launch_test = find_program('tests/test_tui_launch.sh')
+test(
+  'codexbar-linux-tui-launch',
+  tui_launch_test,
+  args: [codexbar_linux],
+  depends: process_supervisor,
+)
+
 config_cli_test = find_program('tests/test_config_cli.sh')
 test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux], depends: process_supervisor)
 

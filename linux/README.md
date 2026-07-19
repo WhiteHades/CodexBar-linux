@@ -26,7 +26,8 @@ codexbar-linux --version
 
 `waybar` prints one line of json for the waybar module and its hover tooltip.
 
-`tui` opens the interactive terminal interface.
+`tui` opens the interactive terminal interface. when a panel or desktop launcher starts it without a terminal,
+codexbar opens the system terminal automatically.
 
 invoking `codexbar-linux` without a command defaults to `usage`. provider selection accepts stable IDs, CLI names, and
 aliases; `--provider both` selects Codex and Claude, while explicit `--provider all` selects the full registry.
