@@ -1,4 +1,5 @@
 #include "backend.h"
+#include "cli_cache.h"
 #include "cli_cards.h"
 #include "cli_config.h"
 #include "cli_cost.h"
@@ -159,6 +160,7 @@ static int print_usage(const char *program) {
     fprintf(stderr, "       %s cost [--provider <codex|claude|both|all>] [--format text|json]\n", program);
     fprintf(stderr, "       %s sessions [list|focus] [--json]\n", program);
     fprintf(stderr, "       %s serve [--port <port>] [--refresh-interval <seconds>]\n", program);
+    fprintf(stderr, "       %s cache clear <--cookies|--cost|--all> [--provider <name>]\n", program);
     fprintf(stderr, "       %s <waybar|tui>\n", program);
     fprintf(stderr, "       %s config <validate|dump|providers|enable|disable|set-api-key>\n", program);
     fprintf(stderr, "       %s --version\n", program);
@@ -179,6 +181,7 @@ int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "cost") == 0) return codexbar_cli_cost_run(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "sessions") == 0) return codexbar_cli_sessions_run(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "serve") == 0) return codexbar_cli_serve_run(argc - 2, argv + 2);
+    if (argc >= 2 && strcmp(argv[1], "cache") == 0) return codexbar_cli_cache_run(argc - 2, argv + 2);
     if (argc == 1) return codexbar_cli_usage_run(0, NULL);
     if (strcmp(argv[1], "usage") == 0) return codexbar_cli_usage_run(argc - 2, argv + 2);
     if (argv[1][0] == '-') return codexbar_cli_usage_run(argc - 1, argv + 1);

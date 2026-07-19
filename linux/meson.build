@@ -11,6 +11,7 @@ configure_file(output: 'version.h', configuration: version_config)
 
 core_sources = files(
   'src/backend.c',
+  'src/cli_cache.c',
   'src/cli_cards.c',
   'src/cli_config.c',
   'src/cli_cost.c',
@@ -110,6 +111,9 @@ test('codexbar-linux-cost-cli', cost_cli_test, args: [codexbar_linux], depends: 
 
 sessions_cli_test = find_program('tests/test_sessions_cli.sh')
 test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], depends: process_supervisor)
+
+cache_cli_test = find_program('tests/test_cache_cli.sh')
+test('codexbar-linux-cache-cli', cache_cli_test, args: [codexbar_linux])
 
 serve_cli_test = find_program('tests/test_serve_cli.sh')
 test(
