@@ -19,6 +19,7 @@ core_sources = files(
   'src/cli_sessions.c',
   'src/cli_serve.c',
   'src/cli_usage.c',
+  'src/claude.c',
   'src/codebuff.c',
   'src/config.c',
   'src/codex.c',
@@ -116,6 +117,17 @@ test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], d
 
 cache_cli_test = find_program('tests/test_cache_cli.sh')
 test('codexbar-linux-cache-cli', cache_cli_test, args: [codexbar_linux])
+
+claude_test = executable(
+  'codexbar-linux-claude-tests',
+  files('tests/test_claude.c', 'src/claude.c', 'src/http.c', 'src/model.c', 'src/process.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-claude', claude_test)
+
+claude_cli_test = find_program('tests/test_claude_cli.sh')
+test('codexbar-linux-claude-cli', claude_cli_test, args: [codexbar_linux], depends: process_supervisor)
 
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(

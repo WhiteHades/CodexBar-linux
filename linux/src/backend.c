@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "codebuff.h"
+#include "claude.h"
 #include "codex.h"
 #include "jetbrains.h"
 #include "kimi.h"
@@ -124,6 +125,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_JETBRAINS:
         native_source = "cli";
         break;
+    case CODEXBAR_NATIVE_CLAUDE:
+        native_source = "oauth";
+        break;
     case CODEXBAR_NATIVE_UNAVAILABLE:
         break;
     case CODEXBAR_NATIVE_CODEBUFF:
@@ -157,6 +161,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     switch (descriptor->native_provider) {
     case CODEXBAR_NATIVE_CODEX:
         provider = codexbar_codex_fetch(&error);
+        break;
+    case CODEXBAR_NATIVE_CLAUDE:
+        provider = codexbar_claude_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_CODEBUFF:
         provider = codexbar_codebuff_fetch(config, &error);

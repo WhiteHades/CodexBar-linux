@@ -12,7 +12,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"codex", "Codex", "codex", NULL, A | W | C | O, TRUE, "https://chatgpt.com/codex/settings/usage", "https://status.openai.com/", CODEXBAR_NATIVE_CODEX},
     {"openai", "OpenAI", "openai", "openai-api", A | P, FALSE, "https://platform.openai.com/usage", "https://status.openai.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"azureopenai", "Azure OpenAI", "azure-openai", "azureopenai,aoai", A | P, FALSE, "https://ai.azure.com", "https://azure.status.microsoft/en-us/status", CODEXBAR_NATIVE_UNAVAILABLE},
-    {"claude", "Claude", "claude", NULL, A | P | W | C | O, FALSE, "https://console.anthropic.com/settings/billing", "https://status.claude.com/", CODEXBAR_NATIVE_UNAVAILABLE},
+    {"claude", "Claude", "claude", NULL, A | P | W | C | O, FALSE, "https://console.anthropic.com/settings/billing", "https://status.claude.com/", CODEXBAR_NATIVE_CLAUDE},
     {"cursor", "Cursor", "cursor", NULL, A | C | W, FALSE, "https://cursor.com/dashboard?tab=usage", "https://status.cursor.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"opencode", "OpenCode", "opencode", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"opencodego", "OpenCode Go", "opencodego", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
