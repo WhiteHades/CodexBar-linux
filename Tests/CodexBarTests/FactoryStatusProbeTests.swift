@@ -118,6 +118,31 @@ struct FactoryStatusSnapshotTests {
     }
 
     @Test
+    func `ignores percent scale ratio when allowance is reliable`() {
+        let snapshot = FactoryStatusSnapshot(
+            standardUserTokens: 50_000_000,
+            standardOrgTokens: 0,
+            standardAllowance: 100_000_000,
+            standardUsedRatio: 10.0,
+            premiumUserTokens: 0,
+            premiumOrgTokens: 0,
+            premiumAllowance: 0,
+            premiumUsedRatio: nil,
+            periodStart: nil,
+            periodEnd: nil,
+            planName: nil,
+            tier: nil,
+            organizationName: nil,
+            accountEmail: nil,
+            userId: nil,
+            rawJSON: nil)
+
+        let usage = snapshot.toUsageSnapshot()
+
+        #expect(usage.primary?.usedPercent == 50)
+    }
+
+    @Test
     func `falls back to calculation when API ratio is zero but usage and allowance are present`() {
         let snapshot = FactoryStatusSnapshot(
             standardUserTokens: 5_826_293,

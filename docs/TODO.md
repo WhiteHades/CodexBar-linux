@@ -1,8 +1,9 @@
 ---
-summary: "Pending cleanup items for CodexBar (e.g., retire Claude Opus fallback)."
+summary: "No active cleanup items currently tracked in this thread."
 read_when:
   - Grooming backlog or planning maintenance
-  - Removing legacy Claude Opus handling
 ---
 
 ## TODO
+
+- (none currently open)

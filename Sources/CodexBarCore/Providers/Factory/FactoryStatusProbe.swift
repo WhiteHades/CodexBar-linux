@@ -565,14 +565,12 @@ public struct FactoryStatusSnapshot: Sendable {
     {
         guard ratio.isFinite else { return nil }
 
-        // Primary: ratio scale (0.0 - 1.0). Clamp to account for rounding.
+        // Primary contract: usedRatio comes in as 0.0-1.0.
         if ratio >= -0.001, ratio <= 1.001 {
             return min(100, max(0, ratio * 100))
         }
 
-        // TODO: Confirm usedRatio contract (0.0-1.0 vs 0.0-100.0) and tighten this fallback.
-        // Secondary: percent scale (0.0 - 100.0), only when allowance is missing/unreliable.
-        // This avoids misinterpreting slightly-over-1 ratios when we can calculate locally.
+        // Secondary: some endpoints emit 0.0-100.0 while allowance is unavailable/unreliable.
         let allowanceIsReliable = allowance > 0 && allowance <= unlimitedThreshold
         if !allowanceIsReliable, ratio >= -0.1, ratio <= 100.1 {
             return min(100, max(0, ratio))
