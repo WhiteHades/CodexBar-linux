@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=CodexBar status item
+Comment=Show AI provider usage in the desktop status area
+TryExec=codexbar-linux
+Exec=codexbar-linux status-item
+Icon=utilities-system-monitor
+Terminal=false
+NoDisplay=true
+StartupNotify=false

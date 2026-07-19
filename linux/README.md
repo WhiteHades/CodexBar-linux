@@ -18,6 +18,7 @@ the binary is at `.build/c23/linux/codexbar-linux`.
 ```bash
 codexbar-linux waybar
 codexbar-linux tui
+codexbar-linux status-item
 codexbar-linux usage --provider openrouter --format json --pretty
 codexbar-linux config validate
 codexbar-linux config providers
@@ -28,6 +29,10 @@ codexbar-linux --version
 
 `tui` opens the interactive terminal interface. when a panel or desktop launcher starts it without a terminal,
 codexbar opens the system terminal automatically.
+
+`status-item` runs the standard desktop status item. it provides its own usage tooltip and opens the tui on left click.
+right click and middle click refresh usage. packaged installs start it through the standard xdg autostart entry. this does
+not create or change a waybar configuration.
 
 invoking `codexbar-linux` without a command defaults to `usage`. provider selection accepts stable IDs, CLI names, and
 aliases; `--provider both` selects Codex and Claude, while explicit `--provider all` selects the full registry.

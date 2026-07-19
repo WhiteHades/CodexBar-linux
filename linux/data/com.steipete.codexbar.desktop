@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=CodexBar
+GenericName=AI usage monitor
+Comment=View AI provider usage and account limits
+TryExec=codexbar-linux
+Exec=codexbar-linux tui
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+StartupWMClass=com.steipete.codexbar
+SingleMainWindow=true

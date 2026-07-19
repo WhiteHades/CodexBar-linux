@@ -26,6 +26,7 @@ core_sources = files(
   'src/codex.c',
   'src/cost.c',
   'src/diagnose.c',
+  'src/desktop.c',
   'src/http.c',
   'src/jetbrains.c',
   'src/kilo.c',
@@ -58,6 +59,15 @@ codexbar_linux = executable(
   include_directories: source_includes,
   dependencies: core_deps + [ncurses_dep],
   install: true,
+)
+
+install_data(
+  'data/com.steipete.codexbar.desktop',
+  install_dir: get_option('datadir') / 'applications',
+)
+install_data(
+  'data/codexbar-status.desktop',
+  install_dir: get_option('sysconfdir') / 'xdg' / 'autostart',
 )
 
 test_executable = executable(
@@ -100,6 +110,20 @@ test(
   tui_launch_test,
   args: [codexbar_linux],
   depends: process_supervisor,
+)
+
+status_item_test = find_program('tests/test_status_item.sh')
+test(
+  'codexbar-linux-status-item',
+  status_item_test,
+  args: [
+    codexbar_linux,
+    find_program('tests/fake_backend.sh'),
+    files('data/com.steipete.codexbar.desktop'),
+    files('data/codexbar-status.desktop'),
+  ],
+  depends: process_supervisor,
+  timeout: 30,
 )
 
 config_cli_test = find_program('tests/test_config_cli.sh')
