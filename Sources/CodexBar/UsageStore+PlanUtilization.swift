@@ -483,7 +483,6 @@ extension UsageStore {
         case .claude:
             appendWindow(snapshot.primary, name: .session)
             appendWindow(snapshot.secondary, name: .weekly)
-            appendWindow(snapshot.tertiary, name: .opus)
         case .antigravity:
             let namedWeeklyWindows = snapshot.extraRateWindows?
                 .filter {

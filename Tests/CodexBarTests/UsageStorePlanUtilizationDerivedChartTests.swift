@@ -31,7 +31,7 @@ struct UsageStorePlanUtilizationDerivedChartTests {
 
     @MainActor
     @Test
-    func `chart exposes claude opus as separate native tab`() {
+    func `chart omits claude opus native tab after tertiary removal`() {
         let boundary = Date(timeIntervalSince1970: 1_710_000_000)
         let histories = [
             planSeries(name: .session, windowMinutes: 300, entries: [
@@ -50,6 +50,6 @@ struct UsageStorePlanUtilizationDerivedChartTests {
             provider: .claude,
             referenceDate: boundary)
 
-        #expect(model.visibleSeries == ["session:300", "weekly:10080", "opus:10080"])
+        #expect(model.visibleSeries == ["session:300", "weekly:10080"])
     }
 }

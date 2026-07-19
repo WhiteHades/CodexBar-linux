@@ -761,7 +761,6 @@ extension ClaudeUsageFetcher {
             firstWindowDict([
                 "week_sonnet",
                 "week_sonnet_only",
-                "week_opus",
             ]),
             windowMinutes: Self.weeklyWindowMinutes)
         return ClaudeUsageSnapshot(
@@ -1013,7 +1012,6 @@ extension ClaudeUsageFetcher {
             ?? makeWindow(usage.sevenDay, windowMinutes: 7 * 24 * 60)
             ?? makeWindow(usage.sevenDayOAuthApps, windowMinutes: 7 * 24 * 60)
             ?? makeWindow(usage.sevenDaySonnet, windowMinutes: 7 * 24 * 60)
-            ?? makeWindow(usage.sevenDayOpus, windowMinutes: 7 * 24 * 60)
         let treatAsSpendLimit = primary == nil && usage.extraUsage?.isEnabled == true
         let providerCost = Self.oauthExtraUsageCost(
             usage.extraUsage,
@@ -1045,7 +1043,7 @@ extension ClaudeUsageFetcher {
 
         let weekly = makeWindow(usage.sevenDay, windowMinutes: 7 * 24 * 60)
         let modelSpecific = makeWindow(
-            usage.sevenDaySonnet ?? usage.sevenDayOpus,
+            usage.sevenDaySonnet,
             windowMinutes: 7 * 24 * 60)
         let extraRateWindows = Self.oauthExtraRateWindows(from: usage)
 
@@ -1223,18 +1221,10 @@ extension ClaudeUsageFetcher {
                 resetDescription: webData.weeklyResetsAt.map { Self.formatResetDate($0) })
         }
 
-        let opus: RateWindow? = webData.opusPercentUsed.map { opusPct in
-            RateWindow(
-                usedPercent: opusPct,
-                windowMinutes: 7 * 24 * 60,
-                resetsAt: webData.weeklyResetsAt,
-                resetDescription: webData.weeklyResetsAt.map { Self.formatResetDate($0) })
-        }
-
         return ClaudeUsageSnapshot(
             primary: primary,
             secondary: secondary,
-            opus: opus,
+            opus: nil,
             extraRateWindows: webData.extraRateWindows,
             providerCost: webData.extraUsageCost,
             updatedAt: Date(),
@@ -1322,15 +1312,11 @@ extension ClaudeUsageFetcher {
             pctLeft: snap.weeklyPercentLeft,
             reset: snap.secondaryResetDescription,
             windowMinutes: Self.weeklyWindowMinutes)
-        let opus = makeWindow(
-            pctLeft: snap.opusPercentLeft,
-            reset: snap.opusResetDescription,
-            windowMinutes: Self.weeklyWindowMinutes)
 
         return ClaudeUsageSnapshot(
             primary: primary,
             secondary: weekly,
-            opus: opus,
+            opus: nil,
             extraRateWindows: snap.extraRateWindows,
             providerCost: nil,
             updatedAt: now,

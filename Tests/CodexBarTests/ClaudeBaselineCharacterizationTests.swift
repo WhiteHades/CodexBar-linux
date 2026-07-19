@@ -440,7 +440,7 @@ struct ClaudeBaselineCharacterizationTests {
                         #expect(result.sourceLabel == "claude")
                         #expect(result.usage.primary?.usedPercent == 12)
                         #expect(result.usage.secondary?.usedPercent == 40)
-                        #expect(result.usage.tertiary?.usedPercent == 5)
+                        #expect(result.usage.tertiary == nil)
                         #expect(result.usage.identity?.accountEmail == "user@example.com")
                     case let .failure(error):
                         Issue.record("Unexpected failure: \(error)")

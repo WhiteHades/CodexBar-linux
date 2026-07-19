@@ -253,11 +253,6 @@ struct PlanUtilizationHistoryChartMenuView: View {
         case .claude:
             if snapshot.primary != nil { names.insert(.session) }
             if snapshot.secondary != nil { names.insert(.weekly) }
-            if snapshot.tertiary != nil,
-               ProviderDescriptorRegistry.metadata[provider]?.supportsOpus == true
-            {
-                names.insert(.opus)
-            }
         default:
             let windows = [snapshot.primary, snapshot.secondary, snapshot.tertiary].compactMap(\.self)
                 + (snapshot.extraRateWindows?.filter(\.usageKnown).map(\.window) ?? [])

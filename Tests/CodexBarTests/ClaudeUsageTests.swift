@@ -523,9 +523,7 @@ struct ClaudeUsageTests {
         """
         let data = Data(json.utf8)
         let snap = ClaudeUsageFetcher.parse(json: data)
-        #expect(snap?.opus?.usedPercent == 0)
-        #expect(snap?.opus?.windowMinutes == 10080)
-        #expect(snap?.opus?.resetDescription?.isEmpty == true)
+        #expect(snap?.opus == nil)
         #expect(snap?.accountEmail == "steipete@gmail.com")
         #expect(snap?.accountOrganization == nil)
     }
@@ -674,7 +672,7 @@ struct ClaudeUsageTests {
         {
           "five_hour": { "utilization": 9, "resets_at": "2025-12-23T16:00:00.000Z" },
           "seven_day": { "utilization": 4, "resets_at": "2025-12-29T23:00:00.000Z" },
-          "seven_day_opus": { "utilization": 1 }
+          "seven_day_sonnet": { "utilization": 1 }
         }
         """
         let data = Data(json.utf8)
@@ -1131,7 +1129,7 @@ struct ClaudeAutoFetcherCharacterizationTests {
                             {
                               "five_hour": { "utilization": 11, "resets_at": "2025-12-23T16:00:00.000Z" },
                               "seven_day": { "utilization": 22, "resets_at": "2025-12-29T23:00:00.000Z" },
-                              "seven_day_opus": { "utilization": 33 }
+                              "seven_day_sonnet": { "utilization": 33 }
                             }
                             """
                             return Self.makeJSONResponse(
@@ -1205,7 +1203,7 @@ struct ClaudeAutoFetcherCharacterizationTests {
                             {
                               "five_hour": { "utilization": 11, "resets_at": "2025-12-23T16:00:00.000Z" },
                               "seven_day": { "utilization": 22, "resets_at": "2025-12-29T23:00:00.000Z" },
-                              "seven_day_opus": { "utilization": 33 }
+                              "seven_day_sonnet": { "utilization": 33 }
                             }
                             """
                             return Self.makeJSONResponse(url: url, body: body)
@@ -1239,7 +1237,7 @@ struct ClaudeAutoFetcherCharacterizationTests {
 
                         #expect(snapshot.primary.usedPercent == 11)
                         #expect(snapshot.secondary?.usedPercent == 22)
-                        #expect(snapshot.opus?.usedPercent == 33)
+                        #expect(snapshot.opus == nil)
                         #expect(snapshot.accountEmail == "web@example.com")
                         #expect(snapshot.loginMethod == "Claude Max")
                         #expect(log.contents().isEmpty)

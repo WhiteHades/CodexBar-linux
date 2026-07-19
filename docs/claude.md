@@ -75,7 +75,7 @@ Admin API key setup:
 - Mapping:
   - `five_hour` → session window.
   - `seven_day` → weekly window; also becomes the primary fallback when `five_hour` is absent or has no utilization.
-  - `seven_day_sonnet` / `seven_day_opus` → model-specific weekly window.
+  - `seven_day_sonnet` → model-specific weekly window (legacy `seven_day_opus` is no longer treated as a fallback).
   - `limits[].weekly_scoped` → model-specific weekly windows; generic `All models` scopes stay in the main weekly row.
   - `seven_day_routines` / `seven_day_cowork` → Daily Routines extra window.
   - Claude Design/Omelette keys are ignored because Claude Design shares the main Claude usage limit.
@@ -106,11 +106,11 @@ Admin API key setup:
   Reused before re-importing from browsers.
 - API calls (all include `Cookie: sessionKey=<value>`):
   - `GET https://claude.ai/api/organizations` → org UUID.
-  - `GET https://claude.ai/api/organizations/{orgId}/usage` → session/weekly/opus.
+  - `GET https://claude.ai/api/organizations/{orgId}/usage` → session + weekly.
   - `GET https://claude.ai/api/organizations/{orgId}/overage_spend_limit` → Extra usage spend/limit.
   - `GET https://claude.ai/api/account` → email + plan hints.
 - Outputs:
-  - Session + weekly + model-specific percent used.
+  - Session + weekly (plus model-specific sonnet weekly usage when present).
   - Daily Routines extra window when returned by the usage API.
   - Extra usage spend/limit (if enabled).
   - Account email + inferred plan.

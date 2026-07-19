@@ -407,7 +407,7 @@ struct ClaudeOAuthTests {
     }
 
     @Test
-    func `prefers opus when sonnet missing`() throws {
+    func `does not infer opus when sonnet missing`() throws {
         let json = """
         {
           "five_hour": { "utilization": 10, "resets_at": "2025-12-25T12:00:00.000Z" },
@@ -415,7 +415,7 @@ struct ClaudeOAuthTests {
         }
         """
         let snap = try ClaudeUsageFetcher._mapOAuthUsageForTesting(Data(json.utf8))
-        #expect(snap.opus?.usedPercent == 42)
+        #expect(snap.opus == nil)
     }
 
     @Test

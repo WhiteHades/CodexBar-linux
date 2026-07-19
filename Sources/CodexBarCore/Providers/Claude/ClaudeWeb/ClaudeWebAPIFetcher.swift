@@ -641,12 +641,10 @@ public enum ClaudeWebAPIFetcher {
             }
         }
 
-        // Parse seven_day_sonnet (preferred) / seven_day_opus usage
+        // Parse seven_day_sonnet usage.
         var opusPercent: Double?
         if let sevenDaySonnet = json["seven_day_sonnet"] as? [String: Any] {
             opusPercent = Self.percentValue(from: sevenDaySonnet["utilization"])
-        } else if let sevenDayOpus = json["seven_day_opus"] as? [String: Any] {
-            opusPercent = Self.percentValue(from: sevenDayOpus["utilization"])
         }
         let extraRateParse = ClaudeWebExtraRateWindowParser.parse(from: json)
         if let sourceKey = extraRateParse.sourceKeys["claude-routines"] {

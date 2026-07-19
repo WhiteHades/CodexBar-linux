@@ -178,9 +178,6 @@ struct UsageStorePlanUtilizationTests {
             planSeries(name: .weekly, windowMinutes: 10080, entries: [
                 planEntry(at: Date(timeIntervalSince1970: 1_700_086_400), usedPercent: 48),
             ]),
-            planSeries(name: .opus, windowMinutes: 10080, entries: [
-                planEntry(at: Date(timeIntervalSince1970: 1_700_086_400), usedPercent: 12),
-            ]),
         ]
         let snapshot = UsageSnapshot(
             primary: RateWindow(usedPercent: 3, windowMinutes: 300, resetsAt: nil, resetDescription: nil),
@@ -747,7 +744,7 @@ struct UsageStorePlanUtilizationTests {
 
     @MainActor
     @Test
-    func `record plan history stores claude opus as separate series`() async {
+    func `record plan history stores claude session and weekly lanes`() async {
         let store = Self.makeStore()
         let snapshot = UsageSnapshot(
             primary: RateWindow(usedPercent: 10, windowMinutes: 300, resetsAt: nil, resetDescription: nil),
@@ -769,7 +766,6 @@ struct UsageStorePlanUtilizationTests {
         let histories = store.planUtilizationHistory(for: .claude)
         #expect(findSeries(histories, name: .session, windowMinutes: 300)?.entries.last?.usedPercent == 10)
         #expect(findSeries(histories, name: .weekly, windowMinutes: 10080)?.entries.last?.usedPercent == 20)
-        #expect(findSeries(histories, name: .opus, windowMinutes: 10080)?.entries.last?.usedPercent == 30)
     }
 
     @MainActor

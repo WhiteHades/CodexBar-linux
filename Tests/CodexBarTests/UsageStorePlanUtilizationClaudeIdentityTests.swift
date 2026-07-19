@@ -74,7 +74,6 @@ struct UsageStorePlanUtilizationClaudeIdentityTests {
         let histories = try #require(buckets.accounts[bobKey])
         #expect(findSeries(histories, name: .session, windowMinutes: 300)?.entries.last?.usedPercent == 10)
         #expect(findSeries(histories, name: .weekly, windowMinutes: 10080)?.entries.last?.usedPercent == 20)
-        #expect(findSeries(histories, name: .opus, windowMinutes: 10080)?.entries.last?.usedPercent == 30)
     }
 
     @MainActor
