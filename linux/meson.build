@@ -15,6 +15,7 @@ core_sources = files(
   'src/cli_cards.c',
   'src/cli_config.c',
   'src/cli_cost.c',
+  'src/cli_diagnose.c',
   'src/cli_sessions.c',
   'src/cli_serve.c',
   'src/cli_usage.c',
@@ -22,6 +23,7 @@ core_sources = files(
   'src/config.c',
   'src/codex.c',
   'src/cost.c',
+  'src/diagnose.c',
   'src/http.c',
   'src/jetbrains.c',
   'src/kimi.c',
@@ -114,6 +116,14 @@ test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], d
 
 cache_cli_test = find_program('tests/test_cache_cli.sh')
 test('codexbar-linux-cache-cli', cache_cli_test, args: [codexbar_linux])
+
+diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
+test(
+  'codexbar-linux-diagnose-cli',
+  diagnose_cli_test,
+  args: [codexbar_linux, find_program('tests/fake_backend.sh')],
+  depends: process_supervisor,
+)
 
 serve_cli_test = find_program('tests/test_serve_cli.sh')
 test(
