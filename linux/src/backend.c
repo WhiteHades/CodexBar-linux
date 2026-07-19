@@ -3,6 +3,7 @@
 #include "config.h"
 #include "codebuff.h"
 #include "claude.h"
+#include "copilot.h"
 #include "codex.h"
 #include "jetbrains.h"
 #include "kimi.h"
@@ -128,8 +129,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_CLAUDE:
         native_source = "oauth";
         break;
-    case CODEXBAR_NATIVE_UNAVAILABLE:
-        break;
+    case CODEXBAR_NATIVE_COPILOT:
     case CODEXBAR_NATIVE_CODEBUFF:
     case CODEXBAR_NATIVE_KIMI:
     case CODEXBAR_NATIVE_KIMI_K2:
@@ -137,6 +137,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_PROXY:
     case CODEXBAR_NATIVE_SIMPLE:
         native_source = "api";
+        break;
+    case CODEXBAR_NATIVE_UNAVAILABLE:
         break;
     }
     if (!codexbar_provider_supports_source(descriptor, configured_source)) {
@@ -164,6 +166,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_CLAUDE:
         provider = codexbar_claude_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_COPILOT:
+        provider = codexbar_copilot_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_CODEBUFF:
         provider = codexbar_codebuff_fetch(config, &error);

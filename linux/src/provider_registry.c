@@ -21,7 +21,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"factory", "Droid", "factory", NULL, A | P | W | C, FALSE, "https://app.factory.ai/settings/billing", "https://status.factory.ai", CODEXBAR_NATIVE_UNAVAILABLE},
     {"gemini", "Gemini", "gemini", NULL, A | P, FALSE, "https://gemini.google.com", "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_UNAVAILABLE},
     {"antigravity", "Antigravity", "antigravity", NULL, A | C | O, FALSE, NULL, "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_UNAVAILABLE},
-    {"copilot", "Copilot", "copilot", NULL, A | P, FALSE, "https://github.com/settings/copilot", "https://www.githubstatus.com/", CODEXBAR_NATIVE_UNAVAILABLE},
+    {"copilot", "Copilot", "copilot", NULL, A | P, FALSE, "https://github.com/settings/copilot", "https://www.githubstatus.com/", CODEXBAR_NATIVE_COPILOT},
     {"devin", "Devin", "devin", NULL, A | W, FALSE, "https://app.devin.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"zai", "z.ai", "zai", "z.ai", A | P, FALSE, "https://z.ai/manage-apikey/coding-plan/personal/my-plan", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"minimax", "MiniMax", "minimax", "mini-max", A | W | P, FALSE, "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3", NULL, CODEXBAR_NATIVE_UNAVAILABLE},

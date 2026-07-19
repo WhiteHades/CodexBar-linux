@@ -22,6 +22,7 @@ core_sources = files(
   'src/claude.c',
   'src/codebuff.c',
   'src/config.c',
+  'src/copilot.c',
   'src/codex.c',
   'src/cost.c',
   'src/diagnose.c',
@@ -128,6 +129,17 @@ test('codexbar-linux-claude', claude_test)
 
 claude_cli_test = find_program('tests/test_claude_cli.sh')
 test('codexbar-linux-claude-cli', claude_cli_test, args: [codexbar_linux], depends: process_supervisor)
+
+copilot_test = executable(
+  'codexbar-linux-copilot-tests',
+  files('tests/test_copilot.c', 'src/copilot.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-copilot', copilot_test)
+
+copilot_cli_test = find_program('tests/test_copilot_cli.sh')
+test('codexbar-linux-copilot-cli', copilot_cli_test, args: [codexbar_linux])
 
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(
