@@ -30,6 +30,7 @@ core_sources = files(
   'src/jetbrains.c',
   'src/kimi.c',
   'src/model.c',
+  'src/openai_api.c',
   'src/openrouter.c',
   'src/process.c',
   'src/provider_registry.c',
@@ -152,6 +153,17 @@ test('codexbar-linux-zai', zai_test)
 
 zai_cli_test = find_program('tests/test_zai_cli.sh')
 test('codexbar-linux-zai-cli', zai_cli_test, args: [codexbar_linux])
+
+openai_api_test = executable(
+  'codexbar-linux-openai-api-tests',
+  files('tests/test_openai_api.c', 'src/openai_api.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-openai-api', openai_api_test)
+
+openai_api_cli_test = find_program('tests/test_openai_api_cli.sh')
+test('codexbar-linux-openai-api-cli', openai_api_cli_test, args: [codexbar_linux])
 
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(

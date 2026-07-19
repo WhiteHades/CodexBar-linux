@@ -7,6 +7,7 @@
 #include "codex.h"
 #include "jetbrains.h"
 #include "kimi.h"
+#include "openai_api.h"
 #include "openrouter.h"
 #include "process.h"
 #include "provider_registry.h"
@@ -132,6 +133,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_COPILOT:
     case CODEXBAR_NATIVE_ZAI:
+    case CODEXBAR_NATIVE_OPENAI:
     case CODEXBAR_NATIVE_CODEBUFF:
     case CODEXBAR_NATIVE_KIMI:
     case CODEXBAR_NATIVE_KIMI_K2:
@@ -174,6 +176,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_ZAI:
         provider = codexbar_zai_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_OPENAI:
+        provider = codexbar_openai_api_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_CODEBUFF:
         provider = codexbar_codebuff_fetch(config, &error);
