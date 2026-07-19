@@ -15,8 +15,6 @@
 #include <time.h>
 #include <unistd.h>
 
-extern char **environ;
-
 enum {
     CONFIGURATION_FD = 3,
     STARTUP_FD = 4,

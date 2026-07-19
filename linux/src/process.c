@@ -15,8 +15,6 @@
 #include <time.h>
 #include <unistd.h>
 
-extern char **environ;
-
 typedef enum {
     STOP_NONE,
     STOP_CANCELLED,
