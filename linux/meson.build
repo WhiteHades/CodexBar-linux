@@ -11,6 +11,7 @@ configure_file(output: 'version.h', configuration: version_config)
 
 core_sources = files(
   'src/backend.c',
+  'src/cli_cards.c',
   'src/cli_config.c',
   'src/cli_usage.c',
   'src/codebuff.c',
@@ -89,6 +90,14 @@ test(
 
 config_cli_test = find_program('tests/test_config_cli.sh')
 test('codexbar-linux-config-cli', config_cli_test, args: [codexbar_linux], depends: process_supervisor)
+
+cards_cli_test = find_program('tests/test_cards_cli.sh')
+test(
+  'codexbar-linux-cards-cli',
+  cards_cli_test,
+  args: [codexbar_linux, find_program('tests/fake_backend.sh')],
+  depends: process_supervisor,
+)
 
 usage_cli_test = find_program('tests/test_usage_cli.sh')
 test(
