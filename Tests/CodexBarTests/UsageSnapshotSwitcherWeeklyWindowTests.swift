@@ -1,4 +1,5 @@
 import CodexBarCore
+import Foundation
 import Testing
 
 struct UsageSnapshotSwitcherWeeklyWindowTests {
@@ -20,6 +21,7 @@ struct UsageSnapshotSwitcherWeeklyWindowTests {
         let primary = RateWindow(usedPercent: 42, windowMinutes: 5 * 60, resetsAt: nil, resetDescription: nil)
         let snapshot = UsageSnapshot(
             primary: primary,
+            secondary: nil,
             updatedAt: Date())
 
         let window = snapshot.switcherWeeklyWindow(for: .claude, showUsed: false)
