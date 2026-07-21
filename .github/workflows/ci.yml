@@ -150,6 +150,7 @@ jobs:
             libglib2.0-dev \
             libjson-c-dev \
             libncurses-dev \
+            libsqlite3-dev \
             ninja-build \
             pkg-config \
             python3-venv

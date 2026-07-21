@@ -240,3 +240,23 @@ case "$output" in
     exit 1
     ;;
 esac
+
+output=$(env -u CODEXBAR_BACKEND HOME="$work/empty-opencode-go-home" CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider opencodego --source auto --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"opencodego","source":"auto","error":{"message":"OpenCode Go not detected. Log in with OpenCode Go or use it locally first.","code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected native OpenCode Go detection output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+output=$(env -u CODEXBAR_BACKEND HOME="$work/empty-opencode-go-home" CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider opencodego --source web --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"opencodego","source":"web","error":{"message":"OpenCode Go source '\''web'\'' has no native Linux implementation yet","code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected native OpenCode Go web-source output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac

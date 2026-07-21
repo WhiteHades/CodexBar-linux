@@ -3,6 +3,7 @@ gio_dep = dependency('gio-2.0', version: '>=2.78')
 json_dep = dependency('json-c', version: '>=0.17')
 ncurses_dep = dependency('ncursesw', version: '>=6.4')
 curl_dep = dependency('libcurl', version: '>=8.0')
+sqlite_dep = dependency('sqlite3')
 math_dep = meson.get_compiler('c').find_library('m')
 source_includes = include_directories('src')
 version_config = configuration_data()
@@ -33,6 +34,7 @@ core_sources = files(
   'src/kimi.c',
   'src/model.c',
   'src/openai_api.c',
+  'src/opencode_go.c',
   'src/openrouter.c',
   'src/process.c',
   'src/provider_registry.c',
@@ -45,7 +47,7 @@ core_sources = files(
   'src/zai.c',
 )
 
-core_deps = [glib_dep, gio_dep, json_dep, curl_dep, math_dep]
+core_deps = [glib_dep, gio_dep, json_dep, curl_dep, sqlite_dep, math_dep]
 
 process_supervisor = executable(
   'codexbar-process-supervisor',
@@ -197,6 +199,14 @@ kilo_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-kilo', kilo_test)
+
+opencode_go_test = executable(
+  'codexbar-linux-opencode-go-tests',
+  files('tests/test_opencode_go.c', 'src/opencode_go.c', 'src/model.c', 'src/provider_registry.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep, json_dep, sqlite_dep, math_dep],
+)
+test('codexbar-linux-opencode-go', opencode_go_test, env: normalized_test_env)
 
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(

@@ -15,7 +15,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"claude", "Claude", "claude", NULL, A | P | W | C | O, FALSE, "https://console.anthropic.com/settings/billing", "https://status.claude.com/", CODEXBAR_NATIVE_CLAUDE},
     {"cursor", "Cursor", "cursor", NULL, A | C | W, FALSE, "https://cursor.com/dashboard?tab=usage", "https://status.cursor.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"opencode", "OpenCode", "opencode", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
-    {"opencodego", "OpenCode Go", "opencodego", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"opencodego", "OpenCode Go", "opencodego", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_OPENCODE_GO},
     {"alibaba", "Alibaba", "alibaba-coding-plan", "alibaba,bailian", A | W | P, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan#/efm/coding_plan", "https://status.aliyun.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"alibabatokenplan", "Alibaba Token Plan", "alibaba-token-plan", "alibaba-token,bailian-token-plan", A | W, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=plan#/efm/subscription/token-plan", "https://status.aliyun.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"factory", "Droid", "factory", NULL, A | P | W | C, FALSE, "https://app.factory.ai/settings/billing", "https://status.factory.ai", CODEXBAR_NATIVE_UNAVAILABLE},

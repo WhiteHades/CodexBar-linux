@@ -9,6 +9,7 @@
 #include "kilo.h"
 #include "kimi.h"
 #include "openai_api.h"
+#include "opencode_go.h"
 #include "openrouter.h"
 #include "process.h"
 #include "provider_registry.h"
@@ -132,6 +133,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_CLAUDE:
         native_source = "oauth";
         break;
+    case CODEXBAR_NATIVE_OPENCODE_GO:
+        native_source = "auto";
+        break;
     case CODEXBAR_NATIVE_COPILOT:
     case CODEXBAR_NATIVE_ZAI:
     case CODEXBAR_NATIVE_OPENAI:
@@ -192,6 +196,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_JETBRAINS:
         provider = codexbar_jetbrains_fetch(&error);
+        break;
+    case CODEXBAR_NATIVE_OPENCODE_GO:
+        provider = codexbar_opencode_go_fetch(&error);
         break;
     case CODEXBAR_NATIVE_KIMI:
         provider = codexbar_kimi_fetch(config, &error);
