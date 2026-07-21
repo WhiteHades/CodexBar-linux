@@ -243,6 +243,9 @@ struct PlanUtilizationHistoryChartMenuView: View {
         provider: UsageProvider,
         snapshot: UsageSnapshot?) -> Set<PlanUtilizationSeriesName>?
     {
+        if provider == .claude, snapshot == nil {
+            return [.session, .weekly]
+        }
         guard let snapshot else { return nil }
 
         var names: Set<PlanUtilizationSeriesName> = []
