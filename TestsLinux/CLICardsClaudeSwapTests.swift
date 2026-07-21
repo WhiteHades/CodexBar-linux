@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import CodexBarCLI
 
+@Suite(.serialized)
 struct CLICardsClaudeSwapTests {
     private actor InvocationCounter {
         private(set) var value = 0
