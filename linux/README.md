@@ -37,12 +37,12 @@ not create or change a waybar configuration.
 invoking `codexbar-linux` without a command defaults to `usage`. provider selection accepts stable IDs, CLI names, and
 aliases; `--provider both` selects Codex and Claude, while explicit `--provider all` selects the full registry.
 
-the native engine currently owns Codex, Codebuff API-key usage, JetBrains local usage, Kimi API-key usage, Kimi K2,
+the native engine currently owns Codex, OpenAI, Claude, Copilot, z.ai, Kilo, Codebuff, JetBrains, OpenCode Go, Kimi,
 OpenRouter, ClawRouter, LLM Proxy, DeepSeek, Moonshot, ElevenLabs, Crof, Venice, and ZenMux. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.
 
-the native config commands normalize all 60 stable providers while preserving provider-specific fields that are not
+the native config commands normalize all 63 stable providers while preserving provider-specific fields that are not
 native yet. writes are atomic, reject concurrent changes, and keep the config file at mode `0600`.
 
 ```bash

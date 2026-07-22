@@ -21,7 +21,7 @@ the repository started with 1,903 tracked files.
 3. `Sources/CodexBarCLI` has 27 swift files for the existing cli.
 4. `Tests/CodexBarTests` has 603 swift files and more than 6,000 test declarations.
 5. `TestsLinux` has 24 swift files for the portable behavior that already works on linux.
-6. there are 60 stable provider ids and 59 provider source directories.
+6. there are 63 stable provider ids.
 
 the old linux cli is useful as a behavior reference while the migration is happening. it is not part of the final
 version. the macos interface cannot be translated line by line because appkit, swiftui, widgetkit, keychain, webkit,
@@ -133,7 +133,7 @@ without a swift toolchain or swift binary.
    settings, about, and quit actions.
 4. settings need provider enablement, order, source, credentials, accounts, refresh, display, notifications, and privacy.
 5. the cli needs usage, cards, cost, sessions, serve, config, cache, diagnose, compatible json, and compatible exit codes.
-6. all 60 provider ids need working linux behavior or a clear unavailable state when the provider itself has no linux
+6. all 63 provider ids need working linux behavior or a clear unavailable state when the provider itself has no linux
    source.
 7. account support needs token accounts, managed codex accounts, switching, ownership checks, and credential refresh.
 8. desktop support needs waybar, notifications, startup, terminal themes, scaling, and multiple monitors.

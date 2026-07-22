@@ -141,7 +141,6 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_OPENAI:
     case CODEXBAR_NATIVE_CODEBUFF:
     case CODEXBAR_NATIVE_KIMI:
-    case CODEXBAR_NATIVE_KIMI_K2:
     case CODEXBAR_NATIVE_OPENROUTER:
     case CODEXBAR_NATIVE_PROXY:
     case CODEXBAR_NATIVE_SIMPLE:
@@ -202,9 +201,6 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_KIMI:
         provider = codexbar_kimi_fetch(config, &error);
-        break;
-    case CODEXBAR_NATIVE_KIMI_K2:
-        provider = codexbar_kimik2_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_OPENROUTER:
         provider = codexbar_openrouter_fetch(config, &error);

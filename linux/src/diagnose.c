@@ -63,10 +63,6 @@ static gboolean nonempty_environment(const char *name) {
 static gboolean environment_api_auth(const char *provider) {
     if (g_str_equal(provider, "codebuff")) return nonempty_environment("CODEBUFF_API_KEY");
     if (g_str_equal(provider, "kimi")) return nonempty_environment("KIMI_CODE_API_KEY");
-    if (g_str_equal(provider, "kimik2")) {
-        return nonempty_environment("KIMI_K2_API_KEY") || nonempty_environment("KIMI_API_KEY") ||
-               nonempty_environment("KIMI_KEY");
-    }
     if (g_str_equal(provider, "openrouter")) return nonempty_environment("OPENROUTER_API_KEY");
     if (g_str_equal(provider, "deepseek")) return nonempty_environment("DEEPSEEK_API_KEY");
     if (g_str_equal(provider, "moonshot")) return nonempty_environment("MOONSHOT_API_KEY");
@@ -195,7 +191,7 @@ static json_object *provider_specific_data(const CodexBarProvider *provider) {
         "kiroUsage",          "ampUsage",          "zaiUsage",       "minimaxUsage",
         "deepseekUsage",      "openRouterUsage",   "sakanaPayAsYouGo",
         "openAIAPIUsage",     "claudeAdminAPIUsage", "mistralUsage", "deepgramUsage",
-        "cursorRequests",     "crossModelUsage",
+        "cursorRequests",
     };
     json_object *array = json_object_new_array();
     if (!provider->usage_extensions || !json_object_is_type(provider->usage_extensions, json_type_object)) {

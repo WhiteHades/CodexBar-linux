@@ -8,16 +8,12 @@ import { localeCatalog, localeMessages } from "../docs/site-locales.mjs";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const indexHtml = fs.readFileSync(path.join(repoRoot, "docs/index.html"), "utf8");
 const providerSource = fs.readFileSync(
-  path.join(repoRoot, "Sources/CodexBarCore/Providers/Providers.swift"),
+  path.join(repoRoot, "linux/src/provider_registry.c"),
   "utf8",
 );
-const providerEnumBody = providerSource.match(
-  /public enum UsageProvider:[^{]+\{([\s\S]*?)\n\}/,
-)?.[1];
-assert(providerEnumBody, "could not locate UsageProvider cases");
-const providerIDs = [...providerEnumBody.matchAll(/^\s*case\s+(\w+)\s*$/gm)].map((match) => match[1]);
-assert(providerIDs.length > 0, "UsageProvider must define at least one provider");
-assertEqual(new Set(providerIDs).size, providerIDs.length, "UsageProvider IDs");
+const providerIDs = [...providerSource.matchAll(/^\s*\{"([^"]+)"/gm)].map((match) => match[1]);
+assert(providerIDs.length > 0, "native provider registry must define at least one provider");
+assertEqual(new Set(providerIDs).size, providerIDs.length, "native provider registry IDs");
 const providerCount = providerIDs.length;
 
 const publicCountFiles = [

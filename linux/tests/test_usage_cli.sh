@@ -201,15 +201,9 @@ case "$output" in
     ;;
 esac
 
-output=$(env -u CODEXBAR_BACKEND -u KIMI_K2_API_KEY -u KIMI_API_KEY -u KIMI_KEY \
-  CODEXBAR_CONFIG="$config" "$binary" usage --provider kimi-k2 --json 2>/dev/null || true)
-case "$output" in
-  '[{"provider":"kimik2","source":"api","error":{"message":"Missing Kimi K2 API key."'*'"code":1,"kind":"provider"}}]') ;;
-  *)
-    printf 'unexpected native Kimi K2 missing-key output: %s\n' "$output" >&2
-    exit 1
-    ;;
-esac
+output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider kimi-k2 --json 2>/dev/null || true)
+[ "$output" = '[{"provider":"cli","source":"cli","error":{"message":"Unknown provider: kimi-k2","code":1,"kind":"args"}}]' ]
 
 output=$(env -u CODEXBAR_BACKEND -u CLAWROUTER_API_KEY CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider claw-router --json 2>/dev/null || true)

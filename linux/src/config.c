@@ -104,9 +104,12 @@ static CodexBarProviderConfig *provider_config_new(const CodexBarProviderDescrip
 
 static CodexBarProviderConfig *parse_provider(json_object *entry, GError **error) {
     char *id = clean_string(entry, "id");
-    const CodexBarProviderDescriptor *descriptor = id ? codexbar_provider_registry_find(id) : NULL;
-    if (!id || !descriptor || !g_str_equal(id, descriptor->id)) {
-        g_set_error(error, config_error_quark(), 2, "Unknown or missing provider id: %s", id ? id : "<missing>");
+    if (!id) {
+        g_set_error_literal(error, config_error_quark(), 2, "Missing provider id");
+        return NULL;
+    }
+    const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(id);
+    if (!descriptor || !g_str_equal(id, descriptor->id)) {
         g_free(id);
         return NULL;
     }
@@ -230,11 +233,16 @@ static CodexBarConfig *config_load(gboolean for_update, GError **error) {
         for (size_t index = 0; index < count; index++) {
             json_object *entry = json_object_array_get_idx(providers, index);
             if (!json_object_is_type(entry, json_type_object)) continue;
-            CodexBarProviderConfig *provider = parse_provider(entry, error);
+            GError *provider_error = NULL;
+            CodexBarProviderConfig *provider = parse_provider(entry, &provider_error);
             if (!provider) {
-                g_hash_table_unref(seen);
-                codexbar_config_free(config);
-                return NULL;
+                if (provider_error) {
+                    g_propagate_error(error, provider_error);
+                    g_hash_table_unref(seen);
+                    codexbar_config_free(config);
+                    return NULL;
+                }
+                continue;
             }
             if (g_hash_table_contains(seen, provider->id)) {
                 provider_config_free(provider);
@@ -574,7 +582,8 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
         const char *token_providers[] = {
             "openai", "claude", "deepseek", "antigravity", "zai", "cursor", "opencode", "opencodego",
             "factory", "minimax", "manus", "augment", "ollama", "abacus", "mistral", "qoder", "copilot",
-            "venice", "elevenlabs", "groq", "llmproxy", "litellm", "sub2api", "stepfun",
+            "venice", "elevenlabs", "groq", "llmproxy", "litellm", "sub2api", "stepfun", "deepinfra",
+            "neuralwatt",
         };
         if (has_accounts && !id_in(provider->id, token_providers, G_N_ELEMENTS(token_providers))) {
             add_issue(issues,

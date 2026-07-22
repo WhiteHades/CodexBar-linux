@@ -13,6 +13,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"openai", "OpenAI", "openai", "openai-api", A | P, FALSE, "https://platform.openai.com/usage", "https://status.openai.com", CODEXBAR_NATIVE_OPENAI},
     {"azureopenai", "Azure OpenAI", "azure-openai", "azureopenai,aoai", A | P, FALSE, "https://ai.azure.com", "https://azure.status.microsoft/en-us/status", CODEXBAR_NATIVE_UNAVAILABLE},
     {"claude", "Claude", "claude", NULL, A | P | W | C | O, FALSE, "https://console.anthropic.com/settings/billing", "https://status.claude.com/", CODEXBAR_NATIVE_CLAUDE},
+    {"clinepass", "ClinePass", "clinepass", NULL, A | P, FALSE, "https://app.cline.bot/dashboard/subscription?personal=true", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"cursor", "Cursor", "cursor", NULL, A | C | W, FALSE, "https://cursor.com/dashboard?tab=usage", "https://status.cursor.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"opencode", "OpenCode", "opencode", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"opencodego", "OpenCode Go", "opencodego", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_OPENCODE_GO},
@@ -32,7 +33,6 @@ static const CodexBarProviderDescriptor providers[] = {
     {"vertexai", "Vertex AI", "vertexai", NULL, A | O, FALSE, "https://console.cloud.google.com/vertex-ai", "https://status.cloud.google.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"augment", "Augment", "augment", NULL, A | C, FALSE, "https://app.augmentcode.com/account/subscription", "https://status.augmentcode.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"jetbrains", "JetBrains AI", "jetbrains", NULL, A | C, FALSE, NULL, NULL, CODEXBAR_NATIVE_JETBRAINS},
-    {"kimik2", "Kimi K2 (unofficial)", "kimik2", "kimi-k2,kimiK2", A | P, FALSE, "https://kimrel.com/my-credits", NULL, CODEXBAR_NATIVE_KIMI_K2},
     {"moonshot", "Moonshot / Kimi API", "moonshot", NULL, A | P, FALSE, "https://platform.moonshot.ai/console/account", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"amp", "Amp", "amp", NULL, A | P | W | C, FALSE, "https://ampcode.com/settings/usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"t3chat", "T3 Chat", "t3chat", "t3-chat,t3", A | W, FALSE, "https://t3.chat/settings/customization", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
@@ -50,6 +50,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"abacus", "Abacus AI", "abacusai", "abacus-ai", A | W, FALSE, "https://apps.abacus.ai/chatllm/admin/compute-points-usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"mistral", "Mistral", "mistral", "mistral-ai", A | W, FALSE, "https://admin.mistral.ai/organization/usage", "https://status.mistral.ai", CODEXBAR_NATIVE_UNAVAILABLE},
     {"deepseek", "DeepSeek", "deepseek", "deep-seek,ds", A | P, FALSE, "https://platform.deepseek.com/usage", "https://status.deepseek.com", CODEXBAR_NATIVE_SIMPLE},
+    {"deepinfra", "DeepInfra", "deepinfra", "deep-infra,di", A | P, FALSE, "https://deepinfra.com/dash", "https://status.deepinfra.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"codebuff", "Codebuff", "codebuff", "manicode", A | P, FALSE, "https://www.codebuff.com/usage", NULL, CODEXBAR_NATIVE_CODEBUFF},
     {"crof", "Crof", "crof", "crofai", A | P, FALSE, "https://crof.ai/dashboard", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"venice", "Venice", "venice", "ven", A | P, FALSE, "https://venice.ai/settings/api", NULL, CODEXBAR_NATIVE_SIMPLE},
@@ -64,11 +65,13 @@ static const CodexBarProviderDescriptor providers[] = {
     {"deepgram", "Deepgram", "deepgram", "dg", A | P, FALSE, "https://console.deepgram.com/project/", "https://status.deepgram.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"poe", "Poe", "poe", NULL, A | P, FALSE, "https://poe.com/api/keys", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"chutes", "Chutes", "chutes", "chutes.ai", A | P, FALSE, "https://chutes.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
-    {"crossmodel", "CrossModel", "crossmodel", "cm", A | P, FALSE, "https://crossmodel.ai/console/usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"neuralwatt", "Neuralwatt", "neuralwatt", "nw,neural", A | P, FALSE, "https://portal.neuralwatt.com/dashboard", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"clawrouter", "ClawRouter", "clawrouter", "claw-router", A | P, FALSE, "https://clawrouter.openclaw.ai/dashboard/access", NULL, CODEXBAR_NATIVE_PROXY},
+    {"longcat", "LongCat", "longcat", "long-cat,lc", A | W, FALSE, "https://longcat.chat/platform/", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"sub2api", "sub2api", "sub2api", "sub-2-api", A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"wayfinder", "Wayfinder", "wayfinder", "wayfinder-router", A | P, FALSE, "http://127.0.0.1:8088/router", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"zenmux", "ZenMux", "zenmux", "zen-mux", A | P, FALSE, "https://zenmux.ai/platform/management", NULL, CODEXBAR_NATIVE_SIMPLE},
+    {"aiand", "ai&", "aiand", "ai&,ai-and", A | P, FALSE, "https://console.aiand.com", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
 };
 
 #undef A
@@ -134,12 +137,12 @@ gboolean codexbar_provider_status_is_pollable(const CodexBarProviderDescriptor *
 gboolean codexbar_provider_supports_config_api_key(const CodexBarProviderDescriptor *provider) {
     if (!provider) return FALSE;
     const char *supported[] = {
-        "amp",       "openai",    "azureopenai", "claude",     "zai",       "minimax",
-        "alibaba",   "kilo",      "synthetic",   "openrouter", "elevenlabs", "moonshot",
-        "kimi",      "ollama",    "venice",      "deepgram",   "groq",      "llmproxy",
-        "chutes",    "poe",       "litellm",     "crossmodel", "clawrouter", "factory",
-        "sub2api",   "zenmux",    "copilot",     "kimik2",    "warp",      "codebuff",
-        "crof",      "doubao",
+        "amp",       "openai",    "azureopenai", "claude",     "clinepass", "zai",
+        "minimax",   "alibaba",   "kilo",        "synthetic",  "openrouter", "elevenlabs",
+        "moonshot",  "kimi",      "ollama",      "venice",     "deepgram",   "groq",
+        "llmproxy",  "chutes",    "poe",         "litellm",    "clawrouter", "factory",
+        "sub2api",   "zenmux",    "copilot",     "warp",       "codebuff",   "crof",
+        "doubao",    "deepinfra", "neuralwatt",  "aiand",
     };
     for (guint index = 0; index < G_N_ELEMENTS(supported); index++) {
         if (g_str_equal(provider->id, supported[index])) return TRUE;

@@ -568,6 +568,60 @@ static void test_config_normalization_and_secure_persistence(void) {
     g_free(directory);
 }
 
+static void test_config_skips_removed_and_unknown_providers(void) {
+    GError *error = NULL;
+    char *cwd = g_get_current_dir();
+    char *path = g_build_filename(cwd, "codexbar-config-removed-providers-test.json", NULL);
+    g_free(cwd);
+    const char json[] =
+        "{\"version\":1,\"providers\":["
+        "{\"id\":\"kimik2\",\"enabled\":true},"
+        "{\"id\":\"crossmodel\",\"enabled\":true},"
+        "{\"id\":\"or\",\"enabled\":true},"
+        "{\"id\":\"future-provider\",\"enabled\":true},"
+        "{\"id\":\"codex\",\"enabled\":false,\"source\":\"oauth\"}]}";
+    g_assert_true(g_file_set_contents(path, json, -1, &error));
+    g_assert_no_error(error);
+    const char *previous = g_getenv("CODEXBAR_CONFIG");
+    char *saved = previous ? g_strdup(previous) : NULL;
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+
+    CodexBarConfig *config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    g_assert_nonnull(config);
+    g_assert_cmpuint(config->providers->len, ==, codexbar_provider_registry_count());
+    CodexBarProviderConfig *codex = codexbar_config_provider(config, "codex");
+    g_assert_nonnull(codex);
+    g_assert_false(codex->enabled);
+    g_assert_cmpstr(codex->source, ==, "oauth");
+    g_assert_null(codexbar_config_provider(config, "kimik2"));
+    g_assert_null(codexbar_config_provider(config, "crossmodel"));
+    char *rendered = codexbar_config_render_json(config, FALSE);
+    g_assert_null(strstr(rendered, "kimik2"));
+    g_assert_null(strstr(rendered, "crossmodel"));
+    g_assert_null(strstr(rendered, "future-provider"));
+    g_free(rendered);
+    codexbar_config_free(config);
+
+    g_assert_true(g_file_set_contents(path, "{\"providers\":[{\"enabled\":true}]}", -1, &error));
+    g_assert_no_error(error);
+    config = codexbar_config_load(&error);
+    g_assert_null(config);
+    g_assert_error(error, g_quark_from_static_string("codexbar-config-error"), 2);
+    g_clear_error(&error);
+    config = codexbar_config_load(NULL);
+    g_assert_null(config);
+
+    if (saved) {
+        g_setenv("CODEXBAR_CONFIG", saved, TRUE);
+    } else {
+        g_unsetenv("CODEXBAR_CONFIG");
+    }
+    g_free(saved);
+    g_assert_cmpint(g_remove(path), ==, 0);
+    g_free(path);
+}
+
 static void test_waybar_rendering(void) {
     GError *error = NULL;
     CodexBarSnapshot *snapshot = codexbar_snapshot_parse(fixture, &error);
@@ -874,45 +928,6 @@ static void test_kimi_usage(void) {
     codexbar_provider_free(provider);
 }
 
-static void test_kimik2_credits(void) {
-    GError *error = NULL;
-    CodexBarProvider *provider = codexbar_kimik2_parse_credits(
-        "{\"data\":{\"usage\":{\"totalCreditsConsumed\":12.5,\"creditsRemaining\":\"1234.5\","
-        "\"updatedAt\":1800000000}}}",
-        "999",
-        G_GINT64_CONSTANT(1700000000000),
-        &error);
-    g_assert_no_error(error);
-    g_assert_nonnull(provider);
-    g_assert_cmpstr(provider->provider, ==, "kimik2");
-    g_assert_cmpstr(provider->source, ==, "api");
-    g_assert_cmpint(provider->updated_at_ms, ==, G_GINT64_CONSTANT(1800000000000));
-    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
-    g_assert_cmpuint(provider->balances->len, ==, 0);
-    g_assert_nonnull(provider->identity);
-    g_assert_cmpstr(provider->identity->login_method, ==, "Credits: 1,234.5 left");
-    codexbar_provider_free(provider);
-
-    provider = codexbar_kimik2_parse_credits(
-        "{\"timestamp\":1000000000000}", "42.25", G_GINT64_CONSTANT(1700000000000), &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(provider->updated_at_ms, ==, G_GINT64_CONSTANT(1000000000000));
-    g_assert_cmpstr(provider->identity->login_method, ==, "Credits: 42.25 left");
-    codexbar_provider_free(provider);
-
-    provider = codexbar_kimik2_parse_credits(
-        "{\"credits_remaining\":-10,\"timestamp\":1e20}", NULL, G_GINT64_CONSTANT(1700000000000), &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(provider->updated_at_ms, ==, G_GINT64_CONSTANT(1700000000000));
-    g_assert_cmpstr(provider->identity->login_method, ==, "Credits: 0 left");
-    codexbar_provider_free(provider);
-
-    provider = codexbar_kimik2_parse_credits("[]", NULL, 1, &error);
-    g_assert_null(provider);
-    g_assert_error(error, g_quark_from_static_string("codexbar-kimi-error"), 4);
-    g_clear_error(&error);
-}
-
 static void test_clawrouter_usage(void) {
     GError *error = NULL;
     const char *json =
@@ -1182,13 +1197,14 @@ static void test_codex_rate_limits(void) {
 
 static void test_provider_registry(void) {
     const char *expected_ids[] = {
-        "codex", "openai", "azureopenai", "claude", "cursor", "opencode", "opencodego", "alibaba",
-        "alibabatokenplan", "factory", "gemini", "antigravity", "copilot", "devin", "zai", "minimax",
-        "manus", "kimi", "kilo", "kiro", "vertexai", "augment", "jetbrains", "kimik2", "moonshot",
+        "codex", "openai", "azureopenai", "claude", "clinepass", "cursor", "opencode", "opencodego",
+        "alibaba", "alibabatokenplan", "factory", "gemini", "antigravity", "copilot", "devin", "zai",
+        "minimax", "manus", "kimi", "kilo", "kiro", "vertexai", "augment", "jetbrains", "moonshot",
         "amp", "t3chat", "ollama", "synthetic", "warp", "openrouter", "elevenlabs", "windsurf", "zed",
-        "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek", "codebuff", "crof",
-        "venice", "commandcode", "qoder", "stepfun", "bedrock", "grok", "groq", "llmproxy", "litellm",
-        "deepgram", "poe", "chutes", "crossmodel", "clawrouter", "sub2api", "wayfinder", "zenmux",
+        "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek", "deepinfra",
+        "codebuff", "crof", "venice", "commandcode", "qoder", "stepfun", "bedrock", "grok", "groq",
+        "llmproxy", "litellm", "deepgram", "poe", "chutes", "neuralwatt", "clawrouter", "longcat",
+        "sub2api", "wayfinder", "zenmux", "aiand",
     };
     g_assert_cmpuint(codexbar_provider_registry_count(), ==, G_N_ELEMENTS(expected_ids));
     for (guint index = 0; index < G_N_ELEMENTS(expected_ids); index++) {
@@ -1210,9 +1226,9 @@ static void test_provider_registry(void) {
     g_assert_cmpstr(codexbar_provider_registry_find("aoai")->id, ==, "azureopenai");
     g_assert_cmpstr(codexbar_provider_registry_find("or")->id, ==, "openrouter");
     g_assert_cmpstr(codexbar_provider_registry_find("groq")->id, ==, "groq");
-    g_assert_cmpstr(codexbar_provider_registry_find("kimiK2")->id, ==, "kimik2");
+    g_assert_null(codexbar_provider_registry_find("kimiK2"));
+    g_assert_null(codexbar_provider_registry_find("crossmodel"));
     g_assert_cmpint(codexbar_provider_registry_find("kimi")->native_provider, ==, CODEXBAR_NATIVE_KIMI);
-    g_assert_cmpint(codexbar_provider_registry_find("kimik2")->native_provider, ==, CODEXBAR_NATIVE_KIMI_K2);
     g_assert_cmpint(codexbar_provider_registry_find("clawrouter")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
     g_assert_cmpint(codexbar_provider_registry_find("llmproxy")->native_provider, ==, CODEXBAR_NATIVE_PROXY);
     g_assert_cmpint(codexbar_provider_registry_find("codebuff")->native_provider, ==, CODEXBAR_NATIVE_CODEBUFF);
@@ -1229,6 +1245,19 @@ static void test_provider_registry(void) {
     g_assert_false(codexbar_provider_supports_source(codex, "api"));
     g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "api"));
     g_assert_false(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "web"));
+    const CodexBarProviderDescriptor *clinepass = codexbar_provider_registry_find("clinepass");
+    g_assert_cmpstr(clinepass->dashboard_url, ==, "https://app.cline.bot/dashboard/subscription?personal=true");
+    g_assert_true(codexbar_provider_supports_source(clinepass, "api"));
+    g_assert_true(codexbar_provider_supports_config_api_key(clinepass));
+    const CodexBarProviderDescriptor *deepinfra = codexbar_provider_registry_find("di");
+    g_assert_cmpstr(deepinfra->id, ==, "deepinfra");
+    g_assert_cmpstr(deepinfra->status_url, ==, "https://status.deepinfra.com");
+    g_assert_false(codexbar_provider_status_is_pollable(deepinfra));
+    g_assert_true(codexbar_provider_supports_config_api_key(deepinfra));
+    g_assert_true(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("neural")));
+    g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("long-cat"), "web"));
+    g_assert_false(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("longcat")));
+    g_assert_true(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("ai&")));
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }
@@ -1247,13 +1276,13 @@ int main(int argc, char **argv) {
     g_test_add_func("/http/redirect-policy", test_http_redirect_policy);
     g_test_add_func("/config/extended-provider-fields", test_extended_provider_config);
     g_test_add_func("/config/normalization-secure-persistence", test_config_normalization_and_secure_persistence);
+    g_test_add_func("/config/skips-removed-unknown-providers", test_config_skips_removed_and_unknown_providers);
     g_test_add_func("/render/waybar", test_waybar_rendering);
     g_test_add_func("/render/claude-presentation-metadata", test_claude_presentation_metadata);
     g_test_add_func("/render/freshness-login-fallback", test_freshness_and_login_method_fallback);
     g_test_add_func("/render/provider-siloing-operational-status", test_identity_provider_siloing_and_operational_status);
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     g_test_add_func("/provider/kimi-usage", test_kimi_usage);
-    g_test_add_func("/provider/kimik2-credits", test_kimik2_credits);
     g_test_add_func("/provider/clawrouter-usage", test_clawrouter_usage);
     g_test_add_func("/provider/llmproxy-usage", test_llmproxy_usage);
     g_test_add_func("/provider/codebuff-usage", test_codebuff_usage);
