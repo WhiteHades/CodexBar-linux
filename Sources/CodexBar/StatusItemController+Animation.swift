@@ -809,12 +809,6 @@ extension StatusItemController {
         {
             return UsageFormatter.usdString(balance)
         }
-        if provider == .crossmodel,
-           self.settings.menuBarMetricPreference(for: provider, snapshot: snapshot) == .automatic,
-           let usage = snapshot?.crossModelUsage
-        {
-            return usage.balanceDisplay
-        }
         if provider == .opencodego,
            let balance = Self.openCodeGoZenBalanceDisplayText(snapshot: snapshot)
         {
@@ -822,6 +816,11 @@ extension StatusItemController {
         }
         if provider == .deepseek,
            let balance = Self.deepSeekBalanceDisplayText(snapshot: snapshot)
+        {
+            return balance
+        }
+        if provider == .deepinfra,
+           let balance = Self.deepInfraBalanceDisplayText(snapshot: snapshot)
         {
             return balance
         }
@@ -850,11 +849,6 @@ extension StatusItemController {
             {
                 return spend
             }
-        }
-        if provider == .kimik2,
-           let credits = Self.kimiK2CreditsDisplayText(snapshot: snapshot)
-        {
-            return credits
         }
         if provider == .kiro {
             return Self.kiroDisplayText(
@@ -957,6 +951,22 @@ extension StatusItemController {
         return balance.map(String.init)
     }
 
+    nonisolated static func deepInfraBalanceDisplayText(snapshot: UsageSnapshot?) -> String? {
+        guard
+            let detail = snapshot?.primary?.resetDescription?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                let balanceDetail = detail.components(separatedBy: " · ").dropLast().last?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                    balanceDetail.hasPrefix("$"),
+                    let value = balanceDetail.split(separator: " ", maxSplits: 1).first
+        else {
+            return nil
+        }
+
+        let prefix = balanceDetail.contains(" owed") ? "-" : ""
+        return prefix + String(value)
+    }
+
     nonisolated static func miMoBalanceDisplayText(
         snapshot: UsageSnapshot?,
         preference: MenuBarMetricPreference) -> String?
@@ -992,13 +1002,6 @@ extension StatusItemController {
             from: snapshot?.identity?.loginMethod,
             prefix: "API spend:",
             removingSuffix: " this month")
-    }
-
-    nonisolated static func kimiK2CreditsDisplayText(snapshot: UsageSnapshot?) -> String? {
-        self.displayValue(
-            from: snapshot?.identity?.loginMethod,
-            prefix: "Credits:",
-            removingSuffix: " left")
     }
 
     nonisolated static func extraUsageSpendDisplayText(snapshot: UsageSnapshot?) -> String? {

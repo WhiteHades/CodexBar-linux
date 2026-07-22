@@ -7,6 +7,7 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case openai
     case azureopenai
     case claude
+    case clinepass
     case cursor
     case opencode
     case opencodego
@@ -26,7 +27,6 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case vertexai
     case augment
     case jetbrains
-    case kimik2
     case moonshot
     case amp
     case t3chat
@@ -44,6 +44,7 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case abacus
     case mistral
     case deepseek
+    case deepinfra
     case codebuff
     case crof
     case venice
@@ -58,11 +59,13 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case deepgram
     case poe
     case chutes
-    case crossmodel
+    case neuralwatt
     case clawrouter
+    case longcat
     case sub2api
     case wayfinder
     case zenmux
+    case aiand
 }
 
 // swiftformat:enable sortDeclarations
@@ -71,6 +74,7 @@ public enum IconStyle: String, Sendable, CaseIterable {
     case codex
     case openai
     case claude
+    case clinepass
     case zai
     case minimax
     case manus
@@ -84,7 +88,6 @@ public enum IconStyle: String, Sendable, CaseIterable {
     case copilot
     case devin
     case kimi
-    case kimik2
     case kilo
     case kiro
     case vertexai
@@ -107,6 +110,7 @@ public enum IconStyle: String, Sendable, CaseIterable {
     case abacus
     case mistral
     case deepseek
+    case deepinfra
     case codebuff
     case crof
     case venice
@@ -121,11 +125,13 @@ public enum IconStyle: String, Sendable, CaseIterable {
     case deepgram
     case poe
     case chutes
-    case crossmodel
+    case neuralwatt
     case clawrouter
+    case longcat
     case sub2api
     case wayfinder
     case zenmux
+    case aiand
     case combined
 }
 
@@ -278,6 +284,15 @@ public enum ProviderBrowserCookieDefaults {
 
     /// Copilot budget imports should stay Chrome-only by default to avoid prompting unrelated browsers.
     public static var copilotCookieImportOrder: BrowserCookieImportOrder? {
+        #if os(macOS)
+        [.chrome]
+        #else
+        nil
+        #endif
+    }
+
+    /// LongCat Auto imports only from Chrome by default to avoid prompting unrelated browser keychains.
+    public static var longcatCookieImportOrder: BrowserCookieImportOrder? {
         #if os(macOS)
         [.chrome]
         #else

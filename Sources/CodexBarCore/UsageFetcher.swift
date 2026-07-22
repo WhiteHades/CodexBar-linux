@@ -193,7 +193,6 @@ public struct UsageSnapshot: Codable, Sendable {
     public let mimoUsage: MiMoUsageSnapshot?
     public let openRouterUsage: OpenRouterUsageSnapshot?
     public let sakanaPayAsYouGo: SakanaPayAsYouGoSnapshot?
-    public let crossModelUsage: CrossModelUsageSnapshot?
     public let clawRouterUsage: ClawRouterUsageSnapshot?
     public let sub2APIUsage: Sub2APIUsageDetails?
     public let wayfinderUsage: WayfinderUsageSnapshot?
@@ -228,7 +227,6 @@ public struct UsageSnapshot: Codable, Sendable {
         case mimoUsage
         case openRouterUsage
         case sakanaPayAsYouGo
-        case crossModelUsage
         case clawRouterUsage
         case sub2APIUsage
         case wayfinderUsage
@@ -263,7 +261,6 @@ public struct UsageSnapshot: Codable, Sendable {
         mimoUsage: MiMoUsageSnapshot? = nil,
         openRouterUsage: OpenRouterUsageSnapshot? = nil,
         sakanaPayAsYouGo: SakanaPayAsYouGoSnapshot? = nil,
-        crossModelUsage: CrossModelUsageSnapshot? = nil,
         clawRouterUsage: ClawRouterUsageSnapshot? = nil,
         sub2APIUsage: Sub2APIUsageDetails? = nil,
         wayfinderUsage: WayfinderUsageSnapshot? = nil,
@@ -297,7 +294,6 @@ public struct UsageSnapshot: Codable, Sendable {
         self.mimoUsage = mimoUsage
         self.openRouterUsage = openRouterUsage
         self.sakanaPayAsYouGo = sakanaPayAsYouGo
-        self.crossModelUsage = crossModelUsage
         self.clawRouterUsage = clawRouterUsage
         self.sub2APIUsage = sub2APIUsage
         self.wayfinderUsage = wayfinderUsage
@@ -350,7 +346,6 @@ public struct UsageSnapshot: Codable, Sendable {
         self.sakanaPayAsYouGo = try container.decodeIfPresent(
             SakanaPayAsYouGoSnapshot.self,
             forKey: .sakanaPayAsYouGo)
-        self.crossModelUsage = try container.decodeIfPresent(CrossModelUsageSnapshot.self, forKey: .crossModelUsage)
         self.clawRouterUsage = try container.decodeIfPresent(ClawRouterUsageSnapshot.self, forKey: .clawRouterUsage)
         self.sub2APIUsage = try container.decodeIfPresent(Sub2APIUsageDetails.self, forKey: .sub2APIUsage)
         self.wayfinderUsage = try container.decodeIfPresent(WayfinderUsageSnapshot.self, forKey: .wayfinderUsage)
@@ -410,7 +405,6 @@ public struct UsageSnapshot: Codable, Sendable {
         try container.encodeIfPresent(self.mimoUsage, forKey: .mimoUsage)
         try container.encodeIfPresent(self.openRouterUsage, forKey: .openRouterUsage)
         try container.encodeIfPresent(self.sakanaPayAsYouGo, forKey: .sakanaPayAsYouGo)
-        try container.encodeIfPresent(self.crossModelUsage, forKey: .crossModelUsage)
         try container.encodeIfPresent(self.clawRouterUsage, forKey: .clawRouterUsage)
         try container.encodeIfPresent(self.sub2APIUsage, forKey: .sub2APIUsage)
         try container.encodeIfPresent(self.wayfinderUsage, forKey: .wayfinderUsage)
@@ -611,7 +605,6 @@ public struct UsageSnapshot: Codable, Sendable {
             mimoUsage: self.mimoUsage,
             openRouterUsage: self.openRouterUsage,
             sakanaPayAsYouGo: self.sakanaPayAsYouGo,
-            crossModelUsage: self.crossModelUsage,
             clawRouterUsage: self.clawRouterUsage,
             sub2APIUsage: self.sub2APIUsage,
             wayfinderUsage: self.wayfinderUsage,

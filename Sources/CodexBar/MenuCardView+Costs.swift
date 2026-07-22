@@ -324,7 +324,7 @@ extension UsageMenuCardView.Model {
                 percentLine: nil)
         }
 
-        if provider == .zenmux {
+        if provider == .zenmux || provider == .neuralwatt {
             let balance = UsageFormatter.currencyString(cost.used, currencyCode: cost.currencyCode)
             return ProviderCostSection(
                 title: L("metric_mistral_payg"),
@@ -333,7 +333,9 @@ extension UsageMenuCardView.Model {
                 percentLine: nil)
         }
 
-        if provider == .openai || provider == .claude || provider == .litellm, cost.limit <= 0 {
+        if provider == .openai || provider == .claude || provider == .litellm || provider == .aiand,
+           cost.limit <= 0
+        {
             let spend = UsageFormatter.currencyString(cost.used, currencyCode: cost.currencyCode)
             let periodLabel = Self.localizedPeriodLabel(cost.period ?? "Last 30 days")
             return ProviderCostSection(

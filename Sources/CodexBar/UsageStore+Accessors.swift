@@ -67,8 +67,6 @@ extension UsageStore {
             return ZaiSettingsError.missingToken.errorDescription
         case .openrouter:
             return OpenRouterSettingsError.missingToken.errorDescription
-        case .crossmodel:
-            return CrossModelSettingsError.missingToken.errorDescription
         case .clawrouter:
             return ClawRouterUsageError.missingCredentials.errorDescription
         case .sub2api:
@@ -87,6 +85,8 @@ extension UsageStore {
             return ElevenLabsUsageError.missingCredentials.errorDescription
         case .deepseek:
             return DeepSeekUsageError.missingCredentials.errorDescription
+        case .deepinfra:
+            return DeepInfraUsageError.missingCredentials.errorDescription
         case .perplexity:
             return PerplexityAPIError.missingToken.errorDescription
         case .minimax:

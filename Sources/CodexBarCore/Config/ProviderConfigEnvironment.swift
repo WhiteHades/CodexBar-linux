@@ -19,10 +19,6 @@ public enum ProviderConfigEnvironment {
         switch provider {
         case .copilot:
             env["COPILOT_API_TOKEN"] = apiKey
-        case .kimik2:
-            if let key = KimiK2SettingsReader.apiKeyEnvironmentKeys.first {
-                env[key] = apiKey
-            }
         case .warp:
             if let key = WarpSettingsReader.apiKeyEnvironmentKeys.first {
                 env[key] = apiKey
@@ -51,9 +47,11 @@ public enum ProviderConfigEnvironment {
     }
 
     public static func supportsAPIKeyOverride(for provider: UsageProvider) -> Bool {
-        if self.directAPIKeyEnvironmentKey(for: provider) != nil { return true }
+        if self.directAPIKeyEnvironmentKey(for: provider) != nil {
+            return true
+        }
         switch provider {
-        case .copilot, .kimik2, .warp, .codebuff, .crof, .doubao:
+        case .copilot, .warp, .codebuff, .crof, .doubao:
             return true
         case .azureopenai:
             return true
@@ -105,6 +103,8 @@ public enum ProviderConfigEnvironment {
             self.applyDoubaoOverrides(base: base, config: config)
         case .sakana:
             self.applySakanaOverrides(base: base, config: config)
+        case .longcat:
+            self.applyLongCatOverrides(base: base, config: config)
         default:
             nil
         }
@@ -125,6 +125,7 @@ public enum ProviderConfigEnvironment {
         }
     }
 
+    // swiftlint:disable:next cyclomatic_complexity
     private static func directAPIKeyEnvironmentKey(for provider: UsageProvider) -> String? {
         switch provider {
         case .amp:
@@ -135,6 +136,8 @@ public enum ProviderConfigEnvironment {
             AzureOpenAISettingsReader.apiKeyEnvironmentKey
         case .claude:
             ClaudeAdminAPISettingsReader.adminAPIKeyEnvironmentKey
+        case .clinepass:
+            ClinePassSettingsReader.apiKeyEnvironmentKey
         case .zai:
             ZaiSettingsReader.apiTokenKey
         case .minimax:
@@ -163,7 +166,7 @@ public enum ProviderConfigEnvironment {
             GroqSettingsReader.apiKeyEnvironmentKey
         case .llmproxy:
             LLMProxySettingsReader.apiKeyEnvironmentKey
-        case .chutes, .poe, .litellm, .crossmodel, .clawrouter, .factory, .sub2api, .zenmux:
+        case .chutes, .poe, .litellm, .clawrouter, .factory, .sub2api, .neuralwatt, .zenmux, .deepinfra, .aiand:
             self.additionalAPIKeyEnvironmentKey(for: provider)
         default:
             nil
@@ -178,16 +181,20 @@ public enum ProviderConfigEnvironment {
             PoeSettingsReader.apiKeyEnvironmentKey
         case .litellm:
             LiteLLMSettingsReader.apiKeyEnvironmentKey
-        case .crossmodel:
-            CrossModelSettingsReader.envKey
         case .clawrouter:
             ClawRouterSettingsReader.apiKeyEnvironmentKey
         case .sub2api:
             Sub2APISettingsReader.apiKeyEnvironmentKey
+        case .neuralwatt:
+            NeuralWattSettingsReader.apiKeyEnvironmentKey
         case .factory:
             FactorySettingsReader.apiTokenKey
         case .zenmux:
             ZenMuxSettingsReader.managementAPIKeyEnvironmentKey
+        case .deepinfra:
+            DeepInfraSettingsReader.apiKeyEnvironmentKey
+        case .aiand:
+            AiAndSettingsReader.apiKeyEnvironmentKey
         default:
             nil
         }
@@ -364,6 +371,20 @@ public enum ProviderConfigEnvironment {
         var env = base
         if let cookieHeader = config.sanitizedCookieHeader {
             env[SakanaSettingsReader.cookieHeaderKey] = cookieHeader
+        }
+        return env
+    }
+
+    private static func applyLongCatOverrides(
+        base: [String: String],
+        config: ProviderConfig?) -> [String: String]
+    {
+        guard let config else { return base }
+        var env = base
+        if config.cookieSource == .manual,
+           let cookieHeader = config.sanitizedCookieHeader
+        {
+            env[LongCatSettingsReader.cookieHeaderKey] = cookieHeader
         }
         return env
     }

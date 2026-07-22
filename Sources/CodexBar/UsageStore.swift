@@ -1031,7 +1031,6 @@ extension UsageStore {
         let openAIDebugContext = self.openAIAPIKeyDebugContext(processEnvironment: processEnvironment)
         let azureOpenAIDebugContext = self.azureOpenAIAPIKeyDebugContext(processEnvironment: processEnvironment)
         let openRouterDebugContext = self.openRouterAPIKeyDebugContext(processEnvironment: processEnvironment)
-        let crossModelDebugContext = self.crossModelAPIKeyDebugContext(processEnvironment: processEnvironment)
         let elevenLabsDebugContext = self.elevenLabsAPIKeyDebugContext(processEnvironment: processEnvironment)
         let deepSeekHasEnvToken = DeepSeekSettingsReader.apiKey(environment: processEnvironment) != nil
         let deepSeekHasTokenAccount = self.settings.selectedTokenAccount(for: .deepseek) != nil
@@ -1047,6 +1046,7 @@ extension UsageStore {
             let unimplementedDebugLogMessages: [UsageProvider: String] = [
                 .gemini: "Gemini debug log not yet implemented",
                 .antigravity: "Antigravity debug log not yet implemented",
+                .clinepass: "ClinePass debug log not yet implemented",
                 .opencode: "OpenCode debug log not yet implemented",
                 .alibaba: "Alibaba Coding Plan debug log not yet implemented",
                 .alibabatokenplan: "Alibaba Token Plan debug log not yet implemented",
@@ -1057,12 +1057,12 @@ extension UsageStore {
                 .kilo: "Kilo debug log not yet implemented",
                 .kiro: "Kiro debug log not yet implemented",
                 .kimi: "Kimi debug log not yet implemented",
-                .kimik2: "Kimi K2 debug log not yet implemented",
                 .jetbrains: "JetBrains AI debug log not yet implemented",
                 .mimo: "Xiaomi MiMo debug log not yet implemented",
                 .doubao: "Doubao debug log not yet implemented",
                 .sakana: "Sakana AI debug log not yet implemented",
                 .venice: "Venice debug log not yet implemented",
+                .deepinfra: "DeepInfra debug log not yet implemented",
                 .commandcode: "Command Code debug log not yet implemented",
                 .qoder: "Qoder debug log not yet implemented",
                 .stepfun: "StepFun debug log not yet implemented",
@@ -1078,6 +1078,7 @@ extension UsageStore {
                 .wayfinder: "Wayfinder debug log not yet implemented",
                 .sub2api: "sub2api debug log not yet implemented",
                 .zenmux: "ZenMux debug log not yet implemented",
+                .aiand: "ai& debug log not yet implemented",
             ]
             let buildText = {
                 switch provider {
@@ -1138,8 +1139,6 @@ extension UsageStore {
                         ollamaCookieHeader: ollamaCookieHeader)
                 case .openrouter:
                     return Self.apiKeyDebugLine(openRouterDebugContext)
-                case .crossmodel:
-                    return Self.apiKeyDebugLine(crossModelDebugContext)
                 case .elevenlabs:
                     return Self.apiKeyDebugLine(elevenLabsDebugContext)
                 case .warp:
@@ -1154,12 +1153,12 @@ extension UsageStore {
                         configToken: nil,
                         hasEnvToken: deepSeekHasEnvToken,
                         hasTokenAccount: deepSeekHasTokenAccount)
-                case .gemini, .antigravity, .opencode, .opencodego, .alibabatokenplan, .factory, .copilot, .devin,
-                     .vertexai, .kilo, .kiro, .kimi, .kimik2, .moonshot, .jetbrains, .perplexity, .mimo, .doubao,
-                     .sakana, .abacus, .mistral, .codebuff, .crof, .windsurf, .venice, .manus, .commandcode, .qoder,
-                     .stepfun,
-                     .bedrock, .grok, .groq, .t3chat, .llmproxy, .litellm, .zed, .deepgram, .poe, .chutes,
-                     .clawrouter, .wayfinder, .sub2api, .zenmux:
+                case .clinepass, .gemini, .antigravity, .opencode, .opencodego, .alibabatokenplan, .factory,
+                     .copilot, .devin, .vertexai, .kilo, .kiro, .kimi, .moonshot, .jetbrains, .perplexity, .mimo,
+                     .doubao, .sakana, .abacus, .mistral, .deepinfra, .codebuff, .crof, .windsurf, .venice, .manus,
+                     .commandcode, .qoder, .stepfun, .bedrock, .grok, .groq, .t3chat, .llmproxy, .litellm, .zed,
+                     .deepgram, .poe, .chutes, .neuralwatt, .clawrouter, .longcat, .wayfinder, .sub2api, .zenmux,
+                     .aiand:
                     return unimplementedDebugLogMessages[provider] ?? "Debug log not yet implemented"
                 }
             }

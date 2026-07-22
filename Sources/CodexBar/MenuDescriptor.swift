@@ -228,8 +228,8 @@ struct MenuDescriptor {
             if let primary = snap.primary {
                 let primaryDetail = primary.resetDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let primaryDescriptionIsDetail = provider == .warp || provider == .kilo || provider == .abacus ||
-                    provider == .deepseek || provider == .azureopenai || provider == .mimo || provider == .qoder ||
-                    provider == .sub2api
+                    provider == .deepseek || provider == .deepinfra || provider == .neuralwatt ||
+                    provider == .azureopenai || provider == .mimo || provider == .qoder || provider == .sub2api
                 let primaryWindow = if primaryDescriptionIsDetail {
                     // Some providers use resetDescription for non-reset detail
                     // (e.g., "Unlimited", "X/Y credits"). Avoid rendering it as a "Resets ..." line.
@@ -457,10 +457,6 @@ struct MenuDescriptor {
             }
             for detail in kiloLogin.details {
                 entries.append(.text("\(L("Activity")): \(detail)", .secondary))
-            }
-        } else if provider == .crossmodel {
-            if let loginMethodText, !loginMethodText.isEmpty {
-                entries.append(.text("\(L("Auth")): \(loginMethodText)", .secondary))
             }
         } else if let loginMethodText, !loginMethodText.isEmpty {
             if provider == .openrouter || provider == .mimo || provider == .poe,
