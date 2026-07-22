@@ -3,6 +3,7 @@
 #include "config.h"
 #include "codebuff.h"
 #include "claude.h"
+#include "clinepass.h"
 #include "copilot.h"
 #include "codex.h"
 #include "jetbrains.h"
@@ -137,6 +138,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         native_source = "auto";
         break;
     case CODEXBAR_NATIVE_COPILOT:
+    case CODEXBAR_NATIVE_CLINEPASS:
     case CODEXBAR_NATIVE_ZAI:
     case CODEXBAR_NATIVE_OPENAI:
     case CODEXBAR_NATIVE_CODEBUFF:
@@ -177,6 +179,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_CLAUDE:
         provider = codexbar_claude_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_CLINEPASS:
+        provider = codexbar_clinepass_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_COPILOT:
         provider = codexbar_copilot_fetch(config, &error);

@@ -55,6 +55,13 @@ static gboolean nonempty_environment(const char *name) {
     const char *value = g_getenv(name);
     if (!value) return FALSE;
     char *trimmed = g_strstrip(g_strdup(value));
+    size_t length = strlen(trimmed);
+    if (length >= 1 && ((trimmed[0] == '\'' && trimmed[length - 1] == '\'') ||
+                        (trimmed[0] == '"' && trimmed[length - 1] == '"'))) {
+        trimmed[length - 1] = '\0';
+        memmove(trimmed, trimmed + 1, length - 1);
+        g_strstrip(trimmed);
+    }
     gboolean present = trimmed[0] != '\0';
     g_free(trimmed);
     return present;
@@ -62,6 +69,9 @@ static gboolean nonempty_environment(const char *name) {
 
 static gboolean environment_api_auth(const char *provider) {
     if (g_str_equal(provider, "codebuff")) return nonempty_environment("CODEBUFF_API_KEY");
+    if (g_str_equal(provider, "clinepass")) {
+        return nonempty_environment("CLINE_API_KEY") || nonempty_environment("CLINEPASS_API_KEY");
+    }
     if (g_str_equal(provider, "kimi")) return nonempty_environment("KIMI_CODE_API_KEY");
     if (g_str_equal(provider, "openrouter")) return nonempty_environment("OPENROUTER_API_KEY");
     if (g_str_equal(provider, "deepseek")) return nonempty_environment("DEEPSEEK_API_KEY");
@@ -215,8 +225,13 @@ static json_object *usage_summary(const CodexBarProvider *provider) {
     json_object *windows = json_object_new_array();
     guint count = provider->quota_windows ? provider->quota_windows->len : 0;
     for (guint index = 0; index < count; index++) {
+        const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
         const char *label = index == 0 ? "primary" : index == 1 ? "secondary" : index == 2 ? "tertiary" : "extra";
-        json_object_array_add(windows, diagnostic_window(g_ptr_array_index(provider->quota_windows, index), label));
+        if (g_str_equal(window->id, "primary") || g_str_equal(window->id, "secondary") ||
+            g_str_equal(window->id, "tertiary")) {
+            label = window->id;
+        }
+        json_object_array_add(windows, diagnostic_window(window, label));
     }
     json_object_object_add(object, "windows", windows);
     json_object_object_add(object, "extraWindowCount", json_object_new_int64(count > 3 ? count - 3 : 0));

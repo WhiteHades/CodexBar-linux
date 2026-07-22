@@ -1295,6 +1295,7 @@ static void test_provider_registry(void) {
     g_assert_false(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "web"));
     const CodexBarProviderDescriptor *clinepass = codexbar_provider_registry_find("clinepass");
     g_assert_cmpstr(clinepass->dashboard_url, ==, "https://app.cline.bot/dashboard/subscription?personal=true");
+    g_assert_cmpint(clinepass->native_provider, ==, CODEXBAR_NATIVE_CLINEPASS);
     g_assert_true(codexbar_provider_supports_source(clinepass, "api"));
     g_assert_true(codexbar_provider_supports_config_api_key(clinepass));
     const CodexBarProviderDescriptor *deepinfra = codexbar_provider_registry_find("di");

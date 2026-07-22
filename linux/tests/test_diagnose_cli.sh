@@ -31,6 +31,22 @@ printf '%s\n' "$output" | grep -q '"diagnostics":\['
 printf '%s\n' "$output" | grep -q '"provider":"codex"'
 printf '%s\n' "$output" | grep -q '"provider":"claude"'
 
+sparse_backend=$work/sparse-backend.sh
+cat >"$sparse_backend" <<'EOF'
+#!/bin/sh
+printf '%s\n' \
+  '[{"provider":"clinepass","source":"api","usage":{"primary":null,'\
+'"secondary":{"usedPercent":40,"windowMinutes":10080},"tertiary":null,'\
+'"updatedAt":"2026-01-01T00:00:00Z"}}]'
+EOF
+chmod +x "$sparse_backend"
+output=$(CODEXBAR_BACKEND="$sparse_backend" "$binary" diagnose --provider clinepass --format json)
+printf '%s\n' "$output" | grep -q '"label":"secondary"'
+if printf '%s\n' "$output" | grep -q '"label":"primary"'; then
+    printf 'sparse diagnostic mislabeled secondary window\n' >&2
+    exit 1
+fi
+
 output=$(CODEXBAR_BACKEND="$fake_backend" "$binary" diagnose --provider antigravity --format json)
 printf '%s\n' "$output" | grep -q '"provider":"antigravity"'
 printf '%s\n' "$output" | grep -q '"source":"failed"'

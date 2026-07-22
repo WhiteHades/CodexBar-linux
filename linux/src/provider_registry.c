@@ -13,7 +13,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"openai", "OpenAI", "openai", "openai-api", A | P, FALSE, "https://platform.openai.com/usage", "https://status.openai.com", CODEXBAR_NATIVE_OPENAI},
     {"azureopenai", "Azure OpenAI", "azure-openai", "azureopenai,aoai", A | P, FALSE, "https://ai.azure.com", "https://azure.status.microsoft/en-us/status", CODEXBAR_NATIVE_UNAVAILABLE},
     {"claude", "Claude", "claude", NULL, A | P | W | C | O, FALSE, "https://console.anthropic.com/settings/billing", "https://status.claude.com/", CODEXBAR_NATIVE_CLAUDE},
-    {"clinepass", "ClinePass", "clinepass", NULL, A | P, FALSE, "https://app.cline.bot/dashboard/subscription?personal=true", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"clinepass", "ClinePass", "clinepass", NULL, A | P, FALSE, "https://app.cline.bot/dashboard/subscription?personal=true", NULL, CODEXBAR_NATIVE_CLINEPASS},
     {"cursor", "Cursor", "cursor", NULL, A | C | W, FALSE, "https://cursor.com/dashboard?tab=usage", "https://status.cursor.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"opencode", "OpenCode", "opencode", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"opencodego", "OpenCode Go", "opencodego", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_OPENCODE_GO},

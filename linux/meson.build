@@ -21,6 +21,7 @@ core_sources = files(
   'src/cli_serve.c',
   'src/cli_usage.c',
   'src/claude.c',
+  'src/clinepass.c',
   'src/codebuff.c',
   'src/config.c',
   'src/copilot.c',
@@ -169,6 +170,14 @@ test('codexbar-linux-copilot', copilot_test)
 
 copilot_cli_test = find_program('tests/test_copilot_cli.sh')
 test('codexbar-linux-copilot-cli', copilot_cli_test, args: [codexbar_linux])
+
+clinepass_test = executable(
+  'codexbar-linux-clinepass-tests',
+  files('tests/test_clinepass.c', 'src/clinepass.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-clinepass', clinepass_test)
 
 zai_test = executable(
   'codexbar-linux-zai-tests',
