@@ -6,6 +6,7 @@
 #include "clinepass.h"
 #include "copilot.h"
 #include "codex.h"
+#include "deepinfra.h"
 #include "jetbrains.h"
 #include "kilo.h"
 #include "kimi.h"
@@ -30,9 +31,10 @@ static gboolean valid_process_text(const char *text, size_t length) {
 }
 
 static CodexBarSnapshot *fetch_oracle(const char *backend,
-                                      const char *provider,
-                                      const char *source,
-                                      GError **error) {
+                                       const char *provider,
+                                       const char *source,
+                                       GCancellable *cancellable,
+                                       GError **error) {
     const char *argv[10] = {backend, "usage", "--format", "json", NULL};
     guint argument = 4;
     if (provider) {
@@ -52,7 +54,7 @@ static CodexBarSnapshot *fetch_oracle(const char *backend,
         .maximum_output_bytes = ORACLE_MAXIMUM_OUTPUT_BYTES,
         .new_session = TRUE,
     };
-    CodexBarProcessResult *result = codexbar_process_run(&request, NULL, error);
+    CodexBarProcessResult *result = codexbar_process_run(&request, cancellable, error);
     if (!result) return NULL;
     if (!valid_process_text(result->standard_output, result->standard_output_length)) {
         codexbar_process_result_free(result);
@@ -117,7 +119,7 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
     return provider;
 }
 
-static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
+static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GCancellable *cancellable) {
     const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(config->id);
     if (!descriptor) {
         GError *error = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Unknown provider: %s", config->id);
@@ -139,6 +141,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
         break;
     case CODEXBAR_NATIVE_COPILOT:
     case CODEXBAR_NATIVE_CLINEPASS:
+    case CODEXBAR_NATIVE_DEEPINFRA:
     case CODEXBAR_NATIVE_ZAI:
     case CODEXBAR_NATIVE_OPENAI:
     case CODEXBAR_NATIVE_CODEBUFF:
@@ -186,6 +189,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
     case CODEXBAR_NATIVE_COPILOT:
         provider = codexbar_copilot_fetch(config, &error);
         break;
+    case CODEXBAR_NATIVE_DEEPINFRA:
+        provider = codexbar_deepinfra_fetch_with_cancellable(config, cancellable, &error);
+        break;
     case CODEXBAR_NATIVE_ZAI:
         provider = codexbar_zai_fetch(config, &error);
         break;
@@ -229,9 +235,13 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config) {
 }
 
 CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
+    return codexbar_backend_fetch_with_cancellable(NULL, error);
+}
+
+CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancellable, GError **error) {
     const char *backend = g_getenv("CODEXBAR_BACKEND");
     if (backend && backend[0] != '\0') {
-        return fetch_oracle(backend, NULL, NULL, error);
+        return fetch_oracle(backend, NULL, NULL, cancellable, error);
     }
 
     CodexBarConfig *config = codexbar_config_load(error);
@@ -241,11 +251,23 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
     CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
     snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
     for (guint index = 0; index < config->providers->len; index++) {
+        if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) {
+            codexbar_snapshot_free(snapshot);
+            codexbar_config_free(config);
+            return NULL;
+        }
         CodexBarProviderConfig *provider_config = g_ptr_array_index(config->providers, index);
         if (!provider_config->enabled) {
             continue;
         }
-        g_ptr_array_add(snapshot->providers, fetch_provider(provider_config));
+        CodexBarProvider *provider = fetch_provider(provider_config, cancellable);
+        if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) {
+            codexbar_provider_free(provider);
+            codexbar_snapshot_free(snapshot);
+            codexbar_config_free(config);
+            return NULL;
+        }
+        g_ptr_array_add(snapshot->providers, provider);
     }
     codexbar_config_free(config);
     return snapshot;
@@ -253,7 +275,7 @@ CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
 
 CodexBarSnapshot *codexbar_backend_fetch_all(GError **error) {
     const char *backend = g_getenv("CODEXBAR_BACKEND");
-    if (backend && backend[0] != '\0') return fetch_oracle(backend, "all", NULL, error);
+    if (backend && backend[0] != '\0') return fetch_oracle(backend, "all", NULL, NULL, error);
     CodexBarConfig *config = codexbar_config_load(error);
     if (!config) return NULL;
     CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
@@ -261,7 +283,7 @@ CodexBarSnapshot *codexbar_backend_fetch_all(GError **error) {
     for (guint index = 0; index < codexbar_provider_registry_count(); index++) {
         const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_at(index);
         CodexBarProviderConfig *provider_config = codexbar_config_provider(config, descriptor->id);
-        g_ptr_array_add(snapshot->providers, fetch_provider(provider_config));
+        g_ptr_array_add(snapshot->providers, fetch_provider(provider_config, NULL));
     }
     codexbar_config_free(config);
     return snapshot;
@@ -286,7 +308,7 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     }
     const char *backend = g_getenv("CODEXBAR_BACKEND");
     if (backend && backend[0] != '\0') {
-        CodexBarSnapshot *snapshot = fetch_oracle(backend, descriptor->cli_name, source, error);
+        CodexBarSnapshot *snapshot = fetch_oracle(backend, descriptor->cli_name, source, NULL, error);
         if (!snapshot) return NULL;
         CodexBarProvider *result = NULL;
         for (guint index = 0; index < snapshot->providers->len; index++) {
@@ -308,7 +330,7 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     CodexBarProviderConfig *stored = codexbar_config_provider(config, descriptor->id);
     CodexBarProviderConfig selected = *stored;
     selected.source = g_strdup(source ? source : stored->source);
-    CodexBarProvider *result = fetch_provider(&selected);
+    CodexBarProvider *result = fetch_provider(&selected, NULL);
     g_free(selected.source);
     codexbar_config_free(config);
     return result;

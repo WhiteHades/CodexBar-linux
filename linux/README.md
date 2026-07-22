@@ -38,7 +38,8 @@ invoking `codexbar-linux` without a command defaults to `usage`. provider select
 aliases; `--provider both` selects Codex and Claude, while explicit `--provider all` selects the full registry.
 
 the native engine currently owns Codex, OpenAI, Claude, ClinePass, Copilot, z.ai, Kilo, Codebuff, JetBrains,
-OpenCode Go, Kimi, OpenRouter, ClawRouter, LLM Proxy, DeepSeek, Moonshot, ElevenLabs, Crof, Venice, and ZenMux. configure
+OpenCode Go, Kimi, OpenRouter, ClawRouter, LLM Proxy, DeepSeek, DeepInfra, Moonshot, ElevenLabs, Crof, Venice,
+and ZenMux. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.
 

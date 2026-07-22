@@ -245,11 +245,12 @@ static int run_toggle(int argc, char **argv, gboolean enabled) {
     return 0;
 }
 
-static char *read_stdin(void) {
+static char *read_stdin(size_t *length) {
     GString *input = g_string_new(NULL);
     char buffer[4096];
     size_t count = 0;
     while ((count = fread(buffer, 1, sizeof(buffer), stdin)) > 0) g_string_append_len(input, buffer, count);
+    *length = input->len;
     return g_string_free(input, FALSE);
 }
 
@@ -269,8 +270,10 @@ static int run_set_api_key(int argc, char **argv) {
     if ((argument != NULL) == from_stdin) {
         return print_message_error(argc, argv, "Use exactly one of --api-key <key> or --stdin.");
     }
-    char *stdin_key = from_stdin ? read_stdin() : NULL;
+    size_t api_key_length = 0;
+    char *stdin_key = from_stdin ? read_stdin(&api_key_length) : NULL;
     const char *api_key = stdin_key ? stdin_key : argument;
+    if (!from_stdin) api_key_length = strlen(api_key);
     GError *error = NULL;
     CodexBarConfig *config = load_config_for_update(&error);
     if (!config) {
@@ -278,7 +281,7 @@ static int run_set_api_key(int argc, char **argv) {
         return print_error(argc, argv, error);
     }
     gboolean enabled = !has_flag(argc, argv, "--no-enable");
-    if (!codexbar_config_set_api_key(config, provider->id, api_key, enabled, &error) ||
+    if (!codexbar_config_set_api_key(config, provider->id, api_key, api_key_length, enabled, &error) ||
         !codexbar_config_save(config, &error)) {
         codexbar_config_free(config);
         g_free(stdin_key);

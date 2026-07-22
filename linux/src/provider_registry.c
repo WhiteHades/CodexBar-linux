@@ -50,7 +50,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"abacus", "Abacus AI", "abacusai", "abacus-ai", A | W, FALSE, "https://apps.abacus.ai/chatllm/admin/compute-points-usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"mistral", "Mistral", "mistral", "mistral-ai", A | W, FALSE, "https://admin.mistral.ai/organization/usage", "https://status.mistral.ai", CODEXBAR_NATIVE_UNAVAILABLE},
     {"deepseek", "DeepSeek", "deepseek", "deep-seek,ds", A | P, FALSE, "https://platform.deepseek.com/usage", "https://status.deepseek.com", CODEXBAR_NATIVE_SIMPLE},
-    {"deepinfra", "DeepInfra", "deepinfra", "deep-infra,di", A | P, FALSE, "https://deepinfra.com/dash", "https://status.deepinfra.com", CODEXBAR_NATIVE_UNAVAILABLE},
+    {"deepinfra", "DeepInfra", "deepinfra", "deep-infra,di", A | P, FALSE, "https://deepinfra.com/dash", "https://status.deepinfra.com", CODEXBAR_NATIVE_DEEPINFRA},
     {"codebuff", "Codebuff", "codebuff", "manicode", A | P, FALSE, "https://www.codebuff.com/usage", NULL, CODEXBAR_NATIVE_CODEBUFF},
     {"crof", "Crof", "crof", "crofai", A | P, FALSE, "https://crof.ai/dashboard", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"venice", "Venice", "venice", "ven", A | P, FALSE, "https://venice.ai/settings/api", NULL, CODEXBAR_NATIVE_SIMPLE},

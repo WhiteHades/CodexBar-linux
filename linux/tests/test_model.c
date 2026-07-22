@@ -28,6 +28,13 @@ typedef struct {
     gboolean invalid_target;
 } RedirectTestServer;
 
+typedef struct {
+    GSocketListener *listener;
+    GMutex mutex;
+    GCond condition;
+    gboolean request_received;
+} CancellationTestServer;
+
 static GSocketConnection *accept_http_connection(GSocketListener *listener) {
     GError *error = NULL;
     GSocketConnection *connection = g_socket_listener_accept(listener, NULL, NULL, &error);
@@ -99,6 +106,32 @@ static gpointer serve_http_test(gpointer data) {
     g_assert_no_error(error);
     g_io_stream_close(G_IO_STREAM(connection), NULL, NULL);
     g_object_unref(connection);
+    return NULL;
+}
+
+static gpointer serve_cancellation_test(gpointer data) {
+    CancellationTestServer *server = data;
+    GSocketConnection *connection = accept_http_connection(server->listener);
+    g_mutex_lock(&server->mutex);
+    server->request_received = TRUE;
+    g_cond_signal(&server->condition);
+    g_mutex_unlock(&server->mutex);
+
+    char buffer[64];
+    GInputStream *input = g_io_stream_get_input_stream(G_IO_STREAM(connection));
+    while (g_input_stream_read(input, buffer, sizeof(buffer), NULL, NULL) > 0) {}
+    g_object_unref(connection);
+    return NULL;
+}
+
+static gpointer cancel_received_request(gpointer data) {
+    gpointer *values = data;
+    CancellationTestServer *server = values[0];
+    GCancellable *cancellable = values[1];
+    g_mutex_lock(&server->mutex);
+    while (!server->request_received) g_cond_wait(&server->condition, &server->mutex);
+    g_mutex_unlock(&server->mutex);
+    g_cancellable_cancel(cancellable);
     return NULL;
 }
 
@@ -217,6 +250,25 @@ static void test_parse_snapshot(void) {
     g_assert_cmpstr(balance->title, ==, "balance");
     g_assert_cmpfloat(balance->remaining, ==, 12.5);
     g_assert_cmpfloat(codexbar_snapshot_highest_used(snapshot), ==, 91.0);
+    codexbar_snapshot_free(snapshot);
+}
+
+static void test_data_confidence_values(void) {
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(
+        "[{\"provider\":\"test\",\"usage\":{\"dataConfidence\":\"percentOnly\"}}]", &error);
+    g_assert_no_error(error);
+    CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    json_object *value = NULL;
+    g_assert_true(json_object_object_get_ex(provider->usage_extensions, "dataConfidence", &value));
+    g_assert_cmpstr(json_object_get_string(value), ==, "percentOnly");
+    codexbar_snapshot_free(snapshot);
+
+    snapshot = codexbar_snapshot_parse(
+        "[{\"provider\":\"test\",\"usage\":{\"dataConfidence\":\"exact\\u0000ignored\"}}]", &error);
+    g_assert_no_error(error);
+    provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_null(provider->usage_extensions);
     codexbar_snapshot_free(snapshot);
 }
 
@@ -473,6 +525,44 @@ static void test_http_redirect_policy(void) {
     }
 }
 
+static void test_http_cancellation(void) {
+    GError *error = NULL;
+    CancellationTestServer server = {.listener = g_socket_listener_new()};
+    g_mutex_init(&server.mutex);
+    g_cond_init(&server.condition);
+    guint16 port = g_socket_listener_add_any_inet_port(server.listener, NULL, &error);
+    g_assert_no_error(error);
+    GThread *server_thread = g_thread_new("http-cancellation-server", serve_cancellation_test, &server);
+    GCancellable *cancellable = g_cancellable_new();
+    gpointer cancel_data[] = {&server, cancellable};
+    GThread *cancel_thread = g_thread_new("http-cancellation-trigger", cancel_received_request, cancel_data);
+
+    char *url = g_strdup_printf("http://127.0.0.1:%u/wait", port);
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .timeout_seconds = 10,
+        .protocol_policy = CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    gint64 started = g_get_monotonic_time();
+    CodexBarHttpResponse *response = codexbar_http_send(&request, &error);
+    gint64 elapsed = g_get_monotonic_time() - started;
+    g_assert_null(response);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+    g_assert_cmpint(elapsed, <, 3 * G_USEC_PER_SEC);
+    g_clear_error(&error);
+
+    g_thread_join(cancel_thread);
+    g_thread_join(server_thread);
+    g_free(url);
+    g_object_unref(cancellable);
+    g_object_unref(server.listener);
+    g_cond_clear(&server.condition);
+    g_mutex_clear(&server.mutex);
+}
+
 static void test_extended_provider_config(void) {
     GError *error = NULL;
     char *cwd = g_get_current_dir();
@@ -483,7 +573,8 @@ static void test_extended_provider_config(void) {
         "\"extrasEnabled\":false,\"apiKey\":\" access \",\"secretKey\":\" secret \","
         "\"region\":\"us-east-1\",\"workspaceID\":\"project-1\","
         "\"enterpriseHost\":\"api.example.com\",\"awsProfile\":\"prod\","
-        "\"awsAuthMode\":\"profile\"},{\"id\":\"poe\",\"enabled\":true}]}";
+        "\"awsAuthMode\":\"profile\"},{\"id\":\"poe\",\"enabled\":true},"
+        "{\"id\":\"deepinfra\",\"enabled\":true,\"apiKey\":\"valid\\u0000bad\"}]}";
     g_assert_true(g_file_set_contents(path, json, -1, &error));
     g_assert_no_error(error);
     const char *previous = g_getenv("CODEXBAR_CONFIG");
@@ -504,6 +595,8 @@ static void test_extended_provider_config(void) {
     g_assert_cmpstr(provider->aws_auth_mode, ==, "profile");
     provider = g_ptr_array_index(config->providers, 1);
     g_assert_false(provider->has_extras_enabled);
+    provider = codexbar_config_provider(config, "deepinfra");
+    g_assert_null(provider->api_key);
     codexbar_config_free(config);
     if (saved) {
         g_setenv("CODEXBAR_CONFIG", saved, TRUE);
@@ -540,7 +633,8 @@ static void test_config_normalization_and_secure_persistence(void) {
     CodexBarProviderConfig *openrouter = codexbar_config_provider(config, "or");
     g_assert_nonnull(openrouter);
     g_assert_false(openrouter->enabled);
-    g_assert_true(codexbar_config_set_api_key(config, "or", "  test-secret  ", TRUE, &error));
+    g_assert_true(codexbar_config_set_api_key(
+        config, "or", "  test-secret  ", strlen("  test-secret  "), TRUE, &error));
     g_assert_no_error(error);
     g_assert_cmpstr(openrouter->api_key, ==, "test-secret");
     g_assert_true(openrouter->enabled);
@@ -576,7 +670,8 @@ static void test_config_normalization_and_secure_persistence(void) {
     config = codexbar_config_load_for_update(&error);
     g_assert_no_error(error);
     g_assert_cmpint(config->version, ==, 1);
-    g_assert_false(codexbar_config_set_api_key(config, "bedrock", "not-valid-for-bedrock", TRUE, &error));
+    g_assert_false(codexbar_config_set_api_key(
+        config, "bedrock", "not-valid-for-bedrock", strlen("not-valid-for-bedrock"), TRUE, &error));
     g_assert_error(error, g_quark_from_static_string("codexbar-config-error"), 4);
     g_clear_error(&error);
     g_assert_true(codexbar_config_set_enabled(config, "deepseek", TRUE, &error));
@@ -1300,6 +1395,7 @@ static void test_provider_registry(void) {
     g_assert_true(codexbar_provider_supports_config_api_key(clinepass));
     const CodexBarProviderDescriptor *deepinfra = codexbar_provider_registry_find("di");
     g_assert_cmpstr(deepinfra->id, ==, "deepinfra");
+    g_assert_cmpint(deepinfra->native_provider, ==, CODEXBAR_NATIVE_DEEPINFRA);
     g_assert_cmpstr(deepinfra->status_url, ==, "https://status.deepinfra.com");
     g_assert_false(codexbar_provider_status_is_pollable(deepinfra));
     g_assert_true(codexbar_provider_supports_config_api_key(deepinfra));
@@ -1316,6 +1412,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/model/usage-percent-display-normalization", test_usage_percent_display_normalization);
     g_test_add_func("/model/raw-overage-waybar-projection", test_raw_usage_overage_has_clamped_waybar_projection);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
+    g_test_add_func("/model/data-confidence-values", test_data_confidence_values);
     g_test_add_func("/model/parse-canonical-collections", test_parse_canonical_collections);
     g_test_add_func(
         "/model/empty-canonical-falls-back", test_empty_canonical_collections_fall_back_to_legacy);
@@ -1325,6 +1422,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/http/post-and-response-headers", test_http_post_and_response_headers);
     g_test_add_func("/http/rejects-malformed-requests", test_http_rejects_malformed_requests);
     g_test_add_func("/http/redirect-policy", test_http_redirect_policy);
+    g_test_add_func("/http/cancellation", test_http_cancellation);
     g_test_add_func("/config/extended-provider-fields", test_extended_provider_config);
     g_test_add_func("/config/normalization-secure-persistence", test_config_normalization_and_secure_persistence);
     g_test_add_func("/config/skips-removed-unknown-providers", test_config_skips_removed_and_unknown_providers);

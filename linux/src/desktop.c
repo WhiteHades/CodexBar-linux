@@ -43,6 +43,7 @@ typedef struct {
     char *tooltip;
     int percentage;
     char *status;
+    GCancellable *refresh_cancellable;
     gboolean refreshing;
     gboolean stopping;
 } CodexBarStatusItem;
@@ -216,6 +217,7 @@ static void status_item_free(CodexBarStatusItem *item) {
     g_free(item->program);
     g_free(item->tooltip);
     g_free(item->status);
+    g_clear_object(&item->refresh_cancellable);
     g_free(item);
 }
 
@@ -402,9 +404,8 @@ static void set_snapshot_state(CodexBarStatusItem *item, const CodexBarSnapshot 
 static void refresh_worker(GTask *task, gpointer source_object, gpointer task_data, GCancellable *cancellable) {
     (void)source_object;
     (void)task_data;
-    (void)cancellable;
     GError *error = NULL;
-    CodexBarSnapshot *snapshot = codexbar_backend_fetch(&error);
+    CodexBarSnapshot *snapshot = codexbar_backend_fetch_with_cancellable(cancellable, &error);
     if (snapshot) {
         g_task_return_pointer(task, snapshot, (GDestroyNotify)codexbar_snapshot_free);
     } else {
@@ -418,6 +419,7 @@ static void refresh_complete(GObject *source_object, GAsyncResult *result, gpoin
     GError *error = NULL;
     CodexBarSnapshot *snapshot = g_task_propagate_pointer(G_TASK(result), &error);
     item->refreshing = FALSE;
+    g_clear_object(&item->refresh_cancellable);
     if (!item->stopping) {
         if (snapshot) {
             set_snapshot_state(item, snapshot);
@@ -434,7 +436,8 @@ static gboolean start_refresh(gpointer user_data) {
     CodexBarStatusItem *item = user_data;
     if (item->stopping || item->refreshing) return G_SOURCE_CONTINUE;
     item->refreshing = TRUE;
-    GTask *task = g_task_new(NULL, NULL, refresh_complete, status_item_ref(item));
+    item->refresh_cancellable = g_cancellable_new();
+    GTask *task = g_task_new(NULL, item->refresh_cancellable, refresh_complete, status_item_ref(item));
     g_task_run_in_thread(task, refresh_worker);
     g_object_unref(task);
     return G_SOURCE_CONTINUE;
@@ -546,12 +549,14 @@ static gboolean register_status_item(CodexBarStatusItem *item, GError **error) {
 static gboolean stop_status_item(gpointer user_data) {
     CodexBarStatusItem *item = user_data;
     item->stopping = TRUE;
+    if (item->refresh_cancellable) g_cancellable_cancel(item->refresh_cancellable);
     g_main_loop_quit(item->loop);
     return G_SOURCE_REMOVE;
 }
 
 static void status_item_shutdown(CodexBarStatusItem *item) {
     item->stopping = TRUE;
+    if (item->refresh_cancellable) g_cancellable_cancel(item->refresh_cancellable);
     if (item->refresh_timer) g_source_remove(item->refresh_timer);
     if (item->freedesktop_watcher) g_bus_unwatch_name(item->freedesktop_watcher);
     if (item->kde_watcher) g_bus_unwatch_name(item->kde_watcher);

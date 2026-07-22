@@ -27,6 +27,7 @@ core_sources = files(
   'src/copilot.c',
   'src/codex.c',
   'src/cost.c',
+  'src/deepinfra.c',
   'src/diagnose.c',
   'src/desktop.c',
   'src/http.c',
@@ -178,6 +179,14 @@ clinepass_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-clinepass', clinepass_test)
+
+deepinfra_test = executable(
+  'codexbar-linux-deepinfra-tests',
+  files('tests/test_deepinfra.c', 'src/deepinfra.c', 'src/http.c', 'src/model.c', 'src/render.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-deepinfra', deepinfra_test)
 
 zai_test = executable(
   'codexbar-linux-zai-tests',

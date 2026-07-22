@@ -51,8 +51,7 @@ static const char *source_mode(const CodexBarProviderConfig *config) {
     return "auto";
 }
 
-static gboolean nonempty_environment(const char *name) {
-    const char *value = g_getenv(name);
+static gboolean valid_api_credential(const char *value) {
     if (!value) return FALSE;
     char *trimmed = g_strstrip(g_strdup(value));
     size_t length = strlen(trimmed);
@@ -63,14 +62,24 @@ static gboolean nonempty_environment(const char *name) {
         g_strstrip(trimmed);
     }
     gboolean present = trimmed[0] != '\0';
+    for (const unsigned char *cursor = (const unsigned char *)trimmed; present && *cursor; cursor++) {
+        if (*cursor < 32 || *cursor == 127) present = FALSE;
+    }
     g_free(trimmed);
     return present;
+}
+
+static gboolean nonempty_environment(const char *name) {
+    return valid_api_credential(g_getenv(name));
 }
 
 static gboolean environment_api_auth(const char *provider) {
     if (g_str_equal(provider, "codebuff")) return nonempty_environment("CODEBUFF_API_KEY");
     if (g_str_equal(provider, "clinepass")) {
         return nonempty_environment("CLINE_API_KEY") || nonempty_environment("CLINEPASS_API_KEY");
+    }
+    if (g_str_equal(provider, "deepinfra")) {
+        return nonempty_environment("DEEPINFRA_API_KEY") || nonempty_environment("DEEPINFRA_TOKEN");
     }
     if (g_str_equal(provider, "kimi")) return nonempty_environment("KIMI_CODE_API_KEY");
     if (g_str_equal(provider, "openrouter")) return nonempty_environment("OPENROUTER_API_KEY");
@@ -109,11 +118,9 @@ static json_object *auth_summary(const CodexBarProviderDescriptor *descriptor,
                                  const CodexBarProviderConfig *config,
                                  const CodexBarProvider *provider) {
     json_object *modes = json_object_new_array();
-    gboolean api = config && ((config->api_key && config->api_key[0] != '\0') ||
-                              (config->secret_key && config->secret_key[0] != '\0'));
+    gboolean api = config && (valid_api_credential(config->api_key) || valid_api_credential(config->secret_key));
     if (g_str_equal(descriptor->id, "bedrock")) {
-        api = config && config->api_key && config->api_key[0] != '\0' && config->secret_key &&
-              config->secret_key[0] != '\0';
+        api = config && valid_api_credential(config->api_key) && valid_api_credential(config->secret_key);
     }
     api = api || environment_api_auth(descriptor->id);
     gboolean web = config_web_auth(config);
@@ -221,7 +228,20 @@ static json_object *usage_summary(const CodexBarProvider *provider) {
     char *updated = provider->has_updated_at ? iso8601_milliseconds(provider->updated_at_ms) : iso8601_now();
     json_object_object_add(object, "updatedAt", json_object_new_string(updated));
     g_free(updated);
-    json_object_object_add(object, "dataConfidence", json_object_new_string("unknown"));
+    const char *confidence = "unknown";
+    json_object *confidence_value = NULL;
+    if (provider->usage_extensions &&
+        json_object_object_get_ex(provider->usage_extensions, "dataConfidence", &confidence_value) &&
+        json_object_is_type(confidence_value, json_type_string)) {
+        const char *candidate = json_object_get_string(confidence_value);
+        size_t length = (size_t)json_object_get_string_len(confidence_value);
+        if (!memchr(candidate, '\0', length) &&
+            (g_str_equal(candidate, "exact") || g_str_equal(candidate, "estimated") ||
+             g_str_equal(candidate, "percentOnly"))) {
+            confidence = candidate;
+        }
+    }
+    json_object_object_add(object, "dataConfidence", json_object_new_string(confidence));
     json_object *windows = json_object_new_array();
     guint count = provider->quota_windows ? provider->quota_windows->len : 0;
     for (guint index = 0; index < count; index++) {

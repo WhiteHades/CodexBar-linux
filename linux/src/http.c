@@ -173,6 +173,19 @@ static size_t append_header(char *data, size_t size, size_t count, void *user_da
     return bytes;
 }
 
+static int transfer_progress(void *user_data,
+                             curl_off_t download_total,
+                             curl_off_t download_now,
+                             curl_off_t upload_total,
+                             curl_off_t upload_now) {
+    (void)download_total;
+    (void)download_now;
+    (void)upload_total;
+    (void)upload_now;
+    GCancellable *cancellable = user_data;
+    return cancellable && g_cancellable_is_cancelled(cancellable) ? 1 : 0;
+}
+
 static gboolean token_character(unsigned char character) {
     return g_ascii_isalnum(character) || strchr("!#$%&'*+-.^_`|~", character) != NULL;
 }
@@ -218,6 +231,7 @@ static gboolean validate_request(const CodexBarHttpRequest *request, GError **er
 }
 
 static CodexBarHttpResponse *send_once(const CodexBarHttpRequest *request, const char *url, GError **error) {
+    if (request->cancellable && g_cancellable_set_error_if_cancelled(request->cancellable, error)) return NULL;
     CURL *curl = curl_easy_init();
     if (!curl) {
         g_set_error_literal(error, http_error_quark(), 2, "Could not initialize libcurl");
@@ -257,6 +271,11 @@ static CodexBarHttpResponse *send_once(const CodexBarHttpRequest *request, const
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, request->timeout_seconds > 0 ? request->timeout_seconds : 15L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    if (request->cancellable) {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, transfer_progress);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, request->cancellable);
+    }
     curl_easy_setopt(curl,
                      CURLOPT_PROTOCOLS_STR,
                      request->protocol_policy == CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP ? "http,https" : "https");
@@ -271,10 +290,12 @@ static CodexBarHttpResponse *send_once(const CodexBarHttpRequest *request, const
 
     CURLcode result = curl_easy_perform(curl);
     if (result != CURLE_OK) {
-        const char *message = body.exceeded ? "HTTP response exceeded the configured size limit"
-                              : response_headers.exceeded ? "HTTP response headers exceeded the size limit"
-                                                          : curl_easy_strerror(result);
-        g_set_error(error, http_error_quark(), (int)result, "HTTP request failed: %s", message);
+        if (!request->cancellable || !g_cancellable_set_error_if_cancelled(request->cancellable, error)) {
+            const char *message = body.exceeded ? "HTTP response exceeded the configured size limit"
+                                   : response_headers.exceeded ? "HTTP response headers exceeded the size limit"
+                                                               : curl_easy_strerror(result);
+            g_set_error(error, http_error_quark(), (int)result, "HTTP request failed: %s", message);
+        }
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         g_byte_array_unref(body.data);

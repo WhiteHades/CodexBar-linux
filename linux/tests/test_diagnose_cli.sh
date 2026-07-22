@@ -47,6 +47,34 @@ if printf '%s\n' "$output" | grep -q '"label":"primary"'; then
     exit 1
 fi
 
+confidence_backend=$work/confidence-backend.sh
+cat >"$confidence_backend" <<'EOF'
+#!/bin/sh
+printf '%s\n' \
+  '[{"provider":"deepinfra","source":"api","usage":{"primary":{"usedPercent":0},'\
+'"secondary":null,"tertiary":null,"updatedAt":"2026-01-01T00:00:00Z",'\
+'"dataConfidence":"exact"}}]'
+EOF
+chmod +x "$confidence_backend"
+output=$(CODEXBAR_BACKEND="$confidence_backend" "$binary" diagnose --provider deepinfra --format json)
+printf '%s\n' "$output" | grep -q '"dataConfidence":"exact"'
+
+sed 's/"exact"/"percentOnly"/' "$confidence_backend" >"$work/percent-only-backend.sh"
+chmod +x "$work/percent-only-backend.sh"
+output=$(CODEXBAR_BACKEND="$work/percent-only-backend.sh" \
+  "$binary" diagnose --provider deepinfra --format json)
+printf '%s\n' "$output" | grep -q '"dataConfidence":"percentOnly"'
+
+credential_backend=$work/credential-backend.sh
+cat >"$credential_backend" <<'EOF'
+#!/bin/sh
+printf '%s\n' '[{"provider":"deepinfra","source":"api","error":{"message":"API key rejected","code":1,"kind":"provider"}}]'
+EOF
+chmod +x "$credential_backend"
+output=$(env "DEEPINFRA_API_KEY=invalid$(printf '\177')key" CODEXBAR_BACKEND="$credential_backend" \
+  "$binary" diagnose --provider deepinfra --format json)
+printf '%s\n' "$output" | grep -q '"configured":false'
+
 output=$(CODEXBAR_BACKEND="$fake_backend" "$binary" diagnose --provider antigravity --format json)
 printf '%s\n' "$output" | grep -q '"provider":"antigravity"'
 printf '%s\n' "$output" | grep -q '"source":"failed"'

@@ -29,7 +29,10 @@ static char *duplicate_json_string(json_object *object, const char *key) {
     if (!json_object_is_type(value, json_type_string)) {
         return NULL;
     }
-    return g_strdup(json_object_get_string(value));
+    const char *string = json_object_get_string(value);
+    size_t length = (size_t)json_object_get_string_len(value);
+    if (memchr(string, '\0', length)) return NULL;
+    return g_strdup(string);
 }
 
 static gboolean parse_number(json_object *object, const char *key, double *result) {
@@ -613,6 +616,19 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
             json_object *provider_cost = NULL;
             if (json_object_object_get_ex(usage, "providerCost", &provider_cost)) {
                 provider->provider_cost = parse_provider_cost(provider_cost);
+            }
+            json_object *data_confidence = NULL;
+            if (json_object_object_get_ex(usage, "dataConfidence", &data_confidence) &&
+                json_object_is_type(data_confidence, json_type_string)) {
+                const char *candidate = json_object_get_string(data_confidence);
+                size_t candidate_length = (size_t)json_object_get_string_len(data_confidence);
+                if (!memchr(candidate, '\0', candidate_length) &&
+                    (g_str_equal(candidate, "exact") || g_str_equal(candidate, "estimated") ||
+                     g_str_equal(candidate, "percentOnly"))) {
+                    provider->usage_extensions = json_object_new_object();
+                    json_object_object_add(
+                        provider->usage_extensions, "dataConfidence", json_object_new_string(candidate));
+                }
             }
         }
         gint64 top_level_updated_at = 0;

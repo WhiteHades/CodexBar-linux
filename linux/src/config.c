@@ -25,7 +25,10 @@ static char *clean_string(json_object *object, const char *key) {
     if (!json_object_object_get_ex(object, key, &value) || !json_object_is_type(value, json_type_string)) {
         return NULL;
     }
-    char *clean = g_strdup(json_object_get_string(value));
+    const char *string = json_object_get_string(value);
+    size_t string_length = (size_t)json_object_get_string_len(value);
+    if (memchr(string, '\0', string_length)) return NULL;
+    char *clean = g_strdup(string);
     g_strstrip(clean);
     size_t length = strlen(clean);
     if (length >= 2 && ((clean[0] == '"' && clean[length - 1] == '"') ||
@@ -659,13 +662,15 @@ gboolean codexbar_config_set_enabled(CodexBarConfig *config, const char *id, gbo
 }
 
 gboolean codexbar_config_set_api_key(CodexBarConfig *config,
-                                     const char *id,
-                                     const char *api_key,
-                                     gboolean enable,
-                                     GError **error) {
+                                      const char *id,
+                                      const char *api_key,
+                                      size_t api_key_length,
+                                      gboolean enable,
+                                      GError **error) {
     CodexBarProviderConfig *provider = codexbar_config_provider(config, id);
     const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(id);
-    char *clean = api_key ? g_strdup(api_key) : NULL;
+    gboolean embedded_nul = api_key && memchr(api_key, '\0', api_key_length);
+    char *clean = api_key && !embedded_nul ? g_strndup(api_key, api_key_length) : NULL;
     if (clean) g_strstrip(clean);
     if (!provider || !descriptor) {
         g_set_error(error, config_error_quark(), 3, "Unknown provider: %s", id ? id : "<missing>");
@@ -677,8 +682,13 @@ gboolean codexbar_config_set_api_key(CodexBarConfig *config,
         g_free(clean);
         return FALSE;
     }
-    if (!clean || clean[0] == '\0' || strchr(clean, '\n') || strchr(clean, '\r')) {
-        g_set_error_literal(error, config_error_quark(), 5, "API key must be a non-empty single line");
+    gboolean valid = clean && clean[0] != '\0';
+    for (const unsigned char *cursor = (const unsigned char *)clean; valid && *cursor; cursor++) {
+        if (*cursor < 32 || *cursor == 127) valid = FALSE;
+    }
+    if (!valid) {
+        g_set_error_literal(
+            error, config_error_quark(), 5, "API key must be non-empty and contain no control characters");
         g_free(clean);
         return FALSE;
     }

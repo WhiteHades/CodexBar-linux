@@ -49,8 +49,9 @@ void codexbar_config_issue_free(CodexBarConfigIssue *issue);
 CodexBarProviderConfig *codexbar_config_provider(CodexBarConfig *config, const char *id);
 gboolean codexbar_config_set_enabled(CodexBarConfig *config, const char *id, gboolean enabled, GError **error);
 gboolean codexbar_config_set_api_key(CodexBarConfig *config,
-                                     const char *id,
-                                     const char *api_key,
-                                     gboolean enable,
-                                     GError **error);
+                                      const char *id,
+                                      const char *api_key,
+                                      size_t api_key_length,
+                                      gboolean enable,
+                                      GError **error);
 void codexbar_config_free(CodexBarConfig *config);

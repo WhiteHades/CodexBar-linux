@@ -24,6 +24,17 @@ output=$(CODEXBAR_CONFIG="$config" "$binary" config enable --provider or)
 output=$(printf 'secret-value\n' | CODEXBAR_CONFIG="$config" "$binary" config set-api-key --provider openrouter --stdin)
 [ "$output" = 'Config: stored API key for OpenRouter and enabled' ]
 
+if printf 'prefix\0suffix' | CODEXBAR_CONFIG="$config" \
+  "$binary" config set-api-key --provider openrouter --stdin >/dev/null 2>&1; then
+    printf 'NUL-containing API key unexpectedly succeeded\n' >&2
+    exit 1
+fi
+if printf 'prefix\177suffix' | CODEXBAR_CONFIG="$config" \
+  "$binary" config set-api-key --provider openrouter --stdin >/dev/null 2>&1; then
+    printf 'control-containing API key unexpectedly succeeded\n' >&2
+    exit 1
+fi
+
 if CODEXBAR_CONFIG="$config" "$binary" config set-api-key --provider openrouter --api-key --json >/dev/null 2>&1; then
     printf 'missing API key value unexpectedly succeeded\n' >&2
     exit 1

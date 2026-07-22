@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glib.h>
+#include <gio/gio.h>
 
 typedef struct {
     const char *name;
@@ -33,6 +33,7 @@ typedef struct {
     size_t maximum_response_bytes;
     CodexBarHttpProtocolPolicy protocol_policy;
     CodexBarHttpRedirectPolicy redirect_policy;
+    GCancellable *cancellable;
 } CodexBarHttpRequest;
 
 typedef struct {
