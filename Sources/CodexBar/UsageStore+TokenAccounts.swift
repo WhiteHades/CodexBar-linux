@@ -767,28 +767,23 @@ extension UsageStore {
 
         if let delay = TokenAccountSupportCatalog.support(for: provider)?.minimumDelayBetweenAccountRefreshes {
             var results: [TokenAccountFetchResult] = []
-            results.reserveCapacity(requests.count)
             for request in requests {
                 if !results.isEmpty {
                     do {
                         try await Task.sleep(for: delay)
                     } catch {
-                        for pending in requests.dropFirst(results.count) {
-                            results.append(TokenAccountFetchResult(
+                        return results + requests.dropFirst(results.count).map { pending in
+                            TokenAccountFetchResult(
                                 index: pending.index,
                                 account: pending.account,
-                                outcome: ProviderFetchOutcome(
-                                    result: .failure(CancellationError()),
-                                    attempts: [])))
+                                outcome: ProviderFetchOutcome(result: .failure(CancellationError()), attempts: []))
                         }
-                        return results
                     }
                 }
-                let outcome = await request.descriptor.fetchOutcome(context: request.context)
-                results.append(TokenAccountFetchResult(
+                await results.append(TokenAccountFetchResult(
                     index: request.index,
                     account: request.account,
-                    outcome: outcome))
+                    outcome: request.descriptor.fetchOutcome(context: request.context)))
             }
             return results
         }
@@ -799,11 +794,10 @@ extension UsageStore {
         { group in
             for request in requests {
                 group.addTask {
-                    let outcome = await request.descriptor.fetchOutcome(context: request.context)
-                    return TokenAccountFetchResult(
+                    await TokenAccountFetchResult(
                         index: request.index,
                         account: request.account,
-                        outcome: outcome)
+                        outcome: request.descriptor.fetchOutcome(context: request.context))
                 }
             }
 

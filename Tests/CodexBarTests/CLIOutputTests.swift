@@ -174,5 +174,4 @@ struct CLIOutputTests {
         #expect(text.contains("Plan: \(summary)"))
         #expect(!text.contains("Stale 34D"))
     }
-
 }

@@ -52,5 +52,4 @@ struct UsageStorePathDebugTests {
 
         #expect(debugLog == "DEEPSEEK_API_KEY=present source=settings-token-account")
     }
-
 }
