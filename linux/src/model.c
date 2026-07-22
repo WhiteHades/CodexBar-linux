@@ -7,6 +7,20 @@ static GQuark codexbar_model_error_quark(void) {
     return g_quark_from_static_string("codexbar-model-error");
 }
 
+CodexBarUsagePercent codexbar_usage_percent_from_raw(double raw) {
+    return (CodexBarUsagePercent){.raw = raw};
+}
+
+CodexBarUsagePercent codexbar_usage_percent_from_ratio(double used, double limit) {
+    g_return_val_if_fail(limit > 0.0, ((CodexBarUsagePercent){0}));
+    return codexbar_usage_percent_from_raw(used / limit * 100.0);
+}
+
+double codexbar_usage_percent_display(CodexBarUsagePercent percent) {
+    if (!(percent.raw > 0.0)) return 0.0;
+    return MIN(percent.raw, 100.0);
+}
+
 static char *duplicate_json_string(json_object *object, const char *key) {
     json_object *value = NULL;
     if (!object || !json_object_object_get_ex(object, key, &value) || json_object_is_type(value, json_type_null)) {
@@ -199,7 +213,7 @@ static CodexBarQuotaWindow *parse_quota_window(json_object *object, const char *
         json_object_is_type(usage_known, json_type_boolean)) {
         window->usage_known = has_usage && json_object_get_boolean(usage_known);
     }
-    if (has_usage) window->used_percent = CLAMP(used_percent, 0.0, 100.0);
+    if (has_usage) window->used_percent = codexbar_usage_percent_from_raw(used_percent).raw;
 
     double window_minutes = 0.0;
     if (parse_number(object, "windowMinutes", &window_minutes) ||

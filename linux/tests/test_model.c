@@ -14,6 +14,7 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <json-c/json.h>
+#include <math.h>
 #include <sys/stat.h>
 
 typedef struct {
@@ -135,6 +136,53 @@ static CodexBarBalance *balance_at(const CodexBarProvider *provider, guint index
     CodexBarBalance *balance = codexbar_provider_balance(provider, index);
     g_assert_nonnull(balance);
     return balance;
+}
+
+static void test_usage_percent_display_normalization(void) {
+    const double boundaries[] = {0.0, 0.25, 100.0};
+    for (guint index = 0; index < G_N_ELEMENTS(boundaries); index++) {
+        CodexBarUsagePercent percent = codexbar_usage_percent_from_raw(boundaries[index]);
+        g_assert_cmpfloat(percent.raw, ==, boundaries[index]);
+        g_assert_cmpfloat(codexbar_usage_percent_display(percent), ==, boundaries[index]);
+    }
+
+    CodexBarUsagePercent overage = codexbar_usage_percent_from_ratio(150.0, 100.0);
+    g_assert_cmpfloat(overage.raw, ==, 150.0);
+    g_assert_cmpfloat(codexbar_usage_percent_display(overage), ==, 100.0);
+
+    CodexBarUsagePercent negative = codexbar_usage_percent_from_ratio(-1.0, 100.0);
+    g_assert_cmpfloat(negative.raw, ==, -1.0);
+    g_assert_cmpfloat(codexbar_usage_percent_display(negative), ==, 0.0);
+
+    g_assert_cmpfloat(codexbar_usage_percent_display(codexbar_usage_percent_from_raw(NAN)), ==, 0.0);
+    g_assert_cmpfloat(codexbar_usage_percent_display(codexbar_usage_percent_from_raw(INFINITY)), ==, 100.0);
+    g_assert_cmpfloat(codexbar_usage_percent_display(codexbar_usage_percent_from_raw(-INFINITY)), ==, 0.0);
+}
+
+static void test_raw_usage_overage_has_clamped_waybar_projection(void) {
+    GError *error = NULL;
+    CodexBarSnapshot *snapshot = codexbar_snapshot_parse(
+        "[{\"provider\":\"copilot\",\"usage\":{\"primary\":{\"usedPercent\":115}}}]", &error);
+    g_assert_no_error(error);
+    CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 115.0);
+
+    char *rendered = codexbar_render_waybar(snapshot);
+    json_object *object = json_tokener_parse(rendered);
+    json_object *percentage = NULL;
+    json_object *tooltip = NULL;
+    g_assert_true(json_object_object_get_ex(object, "percentage", &percentage));
+    g_assert_cmpint(json_object_get_int(percentage), ==, 100);
+    g_assert_true(json_object_object_get_ex(object, "tooltip", &tooltip));
+    g_assert_nonnull(strstr(json_object_get_string(tooltip), "100% used · 0% left"));
+    json_object_put(object);
+    g_free(rendered);
+
+    char *usage_text = codexbar_render_usage_text(snapshot);
+    g_assert_nonnull(strstr(usage_text, "100% used"));
+    g_assert_null(strstr(usage_text, "115% used"));
+    g_free(usage_text);
+    codexbar_snapshot_free(snapshot);
 }
 
 static void test_parse_snapshot(void) {
@@ -1264,6 +1312,8 @@ static void test_provider_registry(void) {
 
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
+    g_test_add_func("/model/usage-percent-display-normalization", test_usage_percent_display_normalization);
+    g_test_add_func("/model/raw-overage-waybar-projection", test_raw_usage_overage_has_clamped_waybar_projection);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
     g_test_add_func("/model/parse-canonical-collections", test_parse_canonical_collections);
     g_test_add_func(

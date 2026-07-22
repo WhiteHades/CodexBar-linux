@@ -155,7 +155,8 @@ CodexBarProvider *codexbar_codebuff_parse_usage(const char *json, gint64 now_ms,
         double resolved_used = has_used ? MAX(0.0, used) : has_remaining ? MAX(0.0, total - remaining) : 0.0;
         CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "credits");
         window->usage_known = TRUE;
-        window->used_percent = CLAMP((resolved_used / total) * 100.0, 0.0, 100.0);
+        window->used_percent = codexbar_usage_percent_display(
+            codexbar_usage_percent_from_ratio(resolved_used, total));
         window->has_resets_at = has_reset;
         window->resets_at_ms = reset_ms;
         codexbar_provider_add_quota_window(provider, window);

@@ -212,7 +212,9 @@ CodexBarProvider *codexbar_jetbrains_parse_xml(
     provider->identity->login_method = type ? g_strdup(type) : NULL;
     CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "Current");
     window->usage_known = TRUE;
-    window->used_percent = maximum > 0.0 ? CLAMP(current / maximum * 100.0, 0.0, 100.0) : 0.0;
+    window->used_percent = maximum > 0.0
+                               ? codexbar_usage_percent_display(codexbar_usage_percent_from_ratio(current, maximum))
+                               : 0.0;
     if (has_reset) {
         window->has_resets_at = TRUE;
         window->resets_at_ms = reset_ms;

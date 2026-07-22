@@ -172,7 +172,7 @@ static double limit_used_percent(const ZaiLimit *limit) {
         }
         if (known) {
             used = CLAMP(used, 0.0, limit->usage);
-            return CLAMP(used / limit->usage * 100.0, 0.0, 100.0);
+            return codexbar_usage_percent_display(codexbar_usage_percent_from_ratio(used, limit->usage));
         }
     }
     return limit->has_percentage ? limit->percentage : 0.0;

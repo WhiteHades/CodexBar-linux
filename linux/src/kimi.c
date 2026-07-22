@@ -95,7 +95,10 @@ static CodexBarQuotaWindow *kimi_window(json_object *detail, const char *id, con
 
     CodexBarQuotaWindow *window = codexbar_quota_window_new(id, title);
     window->usage_known = TRUE;
-    window->used_percent = limit > 0 ? CLAMP(((double)used / (double)limit) * 100.0, 0.0, 100.0) : 0.0;
+    window->used_percent = limit > 0
+                               ? codexbar_usage_percent_display(
+                                     codexbar_usage_percent_from_ratio((double)used, (double)limit))
+                               : 0.0;
     if (rate) {
         window->has_window_minutes = TRUE;
         window->window_minutes = 300;

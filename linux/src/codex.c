@@ -29,7 +29,7 @@ static void parse_window(json_object *limits, const char *key, const char *title
     }
     CodexBarQuotaWindow *window = codexbar_quota_window_new(key, title);
     window->usage_known = TRUE;
-    window->used_percent = CLAMP(json_object_get_double(used), 0.0, 100.0);
+    window->used_percent = codexbar_usage_percent_from_raw(json_object_get_double(used)).raw;
     json_object *duration = NULL;
     if (json_object_object_get_ex(object, "windowDurationMins", &duration) &&
         (json_object_is_type(duration, json_type_int) || json_object_is_type(duration, json_type_double))) {

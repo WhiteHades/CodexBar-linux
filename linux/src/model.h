@@ -25,6 +25,10 @@ typedef enum {
 } CodexBarPaceStage;
 
 typedef struct {
+    double raw;
+} CodexBarUsagePercent;
+
+typedef struct {
     CodexBarPaceStage stage;
     double delta_percent;
     double expected_used_percent;
@@ -41,6 +45,7 @@ typedef struct {
     char *output_id;
     char *title;
     gboolean usage_known;
+    /* Raw provider value; display projections must use codexbar_usage_percent_display(). */
     double used_percent;
     gboolean has_window_minutes;
     gint64 window_minutes;
@@ -155,6 +160,9 @@ typedef struct {
 } CodexBarSnapshot;
 
 CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error);
+CodexBarUsagePercent codexbar_usage_percent_from_raw(double raw);
+CodexBarUsagePercent codexbar_usage_percent_from_ratio(double used, double limit);
+double codexbar_usage_percent_display(CodexBarUsagePercent percent);
 CodexBarProvider *codexbar_provider_new(void);
 CodexBarQuotaWindow *codexbar_quota_window_new(const char *id, const char *title);
 void codexbar_provider_add_quota_window(CodexBarProvider *provider, CodexBarQuotaWindow *window);

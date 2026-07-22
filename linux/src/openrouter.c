@@ -57,7 +57,9 @@ CodexBarProvider *codexbar_openrouter_parse_credits(const char *json, GError **e
     codexbar_provider_add_balance(provider, balance);
     CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "session");
     window->usage_known = TRUE;
-    window->used_percent = credits > 0.0 ? CLAMP((usage / credits) * 100.0, 0.0, 100.0) : 0.0;
+    window->used_percent = credits > 0.0
+                               ? codexbar_usage_percent_display(codexbar_usage_percent_from_ratio(usage, credits))
+                               : 0.0;
     codexbar_provider_add_quota_window(provider, window);
     json_object_put(root);
     return provider;

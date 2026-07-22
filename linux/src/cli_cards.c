@@ -148,7 +148,7 @@ static void add_quota_lines(GPtrArray *lines, const CodexBarQuotaWindow *window)
         return;
     }
 
-    int used = (int)(CLAMP(window->used_percent, 0.0, 100.0) + 0.5);
+    int used = (int)(codexbar_usage_percent_display(codexbar_usage_percent_from_raw(window->used_percent)) + 0.5);
     int filled = (used * BAR_WIDTH + 50) / 100;
     GString *bar = g_string_new("[");
     for (int index = 0; index < BAR_WIDTH; index++) g_string_append_c(bar, index < filled ? '#' : '-');
@@ -255,8 +255,11 @@ static void render_brief(const CodexBarSnapshot *snapshot) {
             ? g_ptr_array_index(provider->quota_windows, 0)
             : NULL;
         char *name = safe_text(provider_name(provider), 20);
+        double display_percent = window
+            ? codexbar_usage_percent_display(codexbar_usage_percent_from_raw(window->used_percent))
+            : 0.0;
         char *usage = window && window->usage_known
-            ? g_strdup_printf("%s %.0f%% used", window->title ? window->title : "Usage", window->used_percent)
+            ? g_strdup_printf("%s %.0f%% used", window->title ? window->title : "Usage", display_percent)
             : g_strdup("Usage unavailable");
         const char *reset_text = window
             ? (window->reset_description ? window->reset_description : window->detail)

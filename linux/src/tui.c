@@ -83,7 +83,8 @@ static void draw_border(int y, int x, int height, int width) {
 }
 
 static void draw_progress(int y, int x, int width, double used_percent) {
-    int filled = (int)((used_percent / 100.0) * width + 0.5);
+    double display_percent = codexbar_usage_percent_display(codexbar_usage_percent_from_raw(used_percent));
+    int filled = (int)((display_percent / 100.0) * width + 0.5);
     for (int index = 0; index < width; index++) {
         attron(COLOR_PAIR(index < filled ? COLOR_ACCENT : COLOR_TRACK));
         mvaddch(y, x + index, index < filled ? ACS_CKBOARD : ACS_BULLET);
@@ -148,11 +149,13 @@ static int draw_rate_window(int y,
     attron(COLOR_PAIR(COLOR_MUTED));
     draw_text(y, x, MAX(1, width - 23), rate_window->title);
     if (rate_window->usage_known) {
+        double display_percent =
+            codexbar_usage_percent_display(codexbar_usage_percent_from_raw(rate_window->used_percent));
         mvprintw(y,
                  x + width - 22,
                  "%3.0f%% used · %3.0f%% left",
-                 rate_window->used_percent,
-                 100.0 - rate_window->used_percent);
+                 display_percent,
+                 100.0 - display_percent);
     }
     attroff(COLOR_PAIR(COLOR_MUTED));
     y++;
@@ -606,7 +609,8 @@ static void draw_screen(const CodexBarSnapshot *snapshot,
         if (available <= 0) {
             break;
         }
-        double highest = codexbar_provider_highest_used(provider);
+        double highest = codexbar_usage_percent_display(
+            codexbar_usage_percent_from_raw(codexbar_provider_highest_used(provider)));
         char *tab = provider->error ? g_strdup_printf("%s !", provider->provider)
                                     : g_strdup_printf("%s %.0f%%", provider->provider, highest);
         if (index == selected) {

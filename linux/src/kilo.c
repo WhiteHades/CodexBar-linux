@@ -502,7 +502,10 @@ static CodexBarQuotaWindow *quota_window(const char *id, const char *title, cons
     double used = fields->has_used ? fields->used : 0;
     CodexBarQuotaWindow *window = codexbar_quota_window_new(id, title);
     window->usage_known = TRUE;
-    window->used_percent = fields->total > 0 ? CLAMP(used / fields->total * 100.0, 0.0, 100.0) : 100.0;
+    window->used_percent = fields->total > 0
+                               ? codexbar_usage_percent_display(
+                                     codexbar_usage_percent_from_ratio(used, fields->total))
+                               : 100.0;
     if (fields->has_reset) {
         window->has_resets_at = TRUE;
         window->resets_at_ms = fields->reset_ms;

@@ -251,7 +251,8 @@ static double sum_rows(const GArray *rows, gint64 start_ms, gint64 end_ms) {
 
 static double used_percent(double used, double limit) {
     if (!isfinite(used) || limit <= 0) return 0;
-    return round(CLAMP(used / limit * 100, 0, 100) * 10) / 10;
+    double display = codexbar_usage_percent_display(codexbar_usage_percent_from_ratio(used, limit));
+    return round(display * 10) / 10;
 }
 
 static gint64 rolling_reset_seconds(const GArray *rows, gint64 now_ms) {

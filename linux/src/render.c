@@ -58,14 +58,16 @@ static void append_window(GString *tooltip, const CodexBarQuotaWindow *window) {
     g_string_append_printf(tooltip, "\n  %-8s ", clipped_label);
     g_free(clipped_label);
     if (window->usage_known) {
-        int filled = (int)((CLAMP(window->used_percent, 0.0, 100.0) / 100.0) * 10.0 + 0.5);
+        double used_percent =
+            codexbar_usage_percent_display(codexbar_usage_percent_from_raw(window->used_percent));
+        int filled = (int)((used_percent / 100.0) * 10.0 + 0.5);
         for (int index = 0; index < 10; index++) {
             g_string_append(tooltip, index < filled ? "█" : "░");
         }
         g_string_append_printf(tooltip,
                                "  %.0f%% used · %.0f%% left",
-                               window->used_percent,
-                               100.0 - window->used_percent);
+                               used_percent,
+                               100.0 - used_percent);
     }
     if (window->detail) {
         g_string_append_printf(tooltip, "\n  %-8s %s", "", window->detail);
@@ -204,7 +206,8 @@ static char *serialize_waybar(const char *text, const char *tooltip, const char 
 char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
     g_return_val_if_fail(snapshot != NULL, NULL);
 
-    double highest = codexbar_snapshot_highest_used(snapshot);
+    double highest = codexbar_usage_percent_display(
+        codexbar_usage_percent_from_raw(codexbar_snapshot_highest_used(snapshot)));
     int percentage = (int)(highest + 0.5);
     gboolean has_error = FALSE;
     gboolean has_usage = FALSE;
@@ -605,7 +608,9 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
             const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, window_index);
             g_string_append_printf(text, "  %s: ", window->title);
             if (window->usage_known) {
-                g_string_append_printf(text, "%.0f%% used", window->used_percent);
+                double display_percent =
+                    codexbar_usage_percent_display(codexbar_usage_percent_from_raw(window->used_percent));
+                g_string_append_printf(text, "%.0f%% used", display_percent);
             } else {
                 g_string_append(text, "usage unavailable");
             }

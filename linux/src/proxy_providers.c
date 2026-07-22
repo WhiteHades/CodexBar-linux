@@ -281,7 +281,8 @@ CodexBarProvider *codexbar_clawrouter_parse(const char *json, gint64 now_ms, GEr
     if (has_spent && has_limit && limit_micros > 0) {
         CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "monthly budget");
         window->usage_known = TRUE;
-        window->used_percent = CLAMP(((double)spent_micros / (double)limit_micros) * 100.0, 0.0, 100.0);
+        window->used_percent = codexbar_usage_percent_display(
+            codexbar_usage_percent_from_ratio((double)spent_micros, (double)limit_micros));
         window->has_resets_at = has_reset;
         window->resets_at_ms = reset_ms;
         codexbar_provider_add_quota_window(provider, window);
@@ -496,7 +497,8 @@ CodexBarProvider *codexbar_llmproxy_parse(const char *json, gint64 now_ms, GErro
     if (has_minimum) {
         CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "minimum quota");
         window->usage_known = TRUE;
-        window->used_percent = CLAMP(100.0 - minimum, 0.0, 100.0);
+        window->used_percent =
+            codexbar_usage_percent_display(codexbar_usage_percent_from_raw(100.0 - minimum));
         window->has_resets_at = has_reset;
         window->resets_at_ms = earliest_reset;
         codexbar_provider_add_quota_window(provider, window);

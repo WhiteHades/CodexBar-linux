@@ -187,7 +187,9 @@ CodexBarProvider *codexbar_elevenlabs_parse(const char *json, GError **error) {
     }
     CodexBarProvider *provider = provider_new("elevenlabs");
     CodexBarQuotaWindow *window = add_window(provider, "primary", "session");
-    window->used_percent = limit > 0.0 ? CLAMP((used / limit) * 100.0, 0.0, 100.0) : 0.0;
+    window->used_percent = limit > 0.0
+                               ? codexbar_usage_percent_display(codexbar_usage_percent_from_ratio(used, limit))
+                               : 0.0;
     window->detail = g_strdup_printf("%.0f / %.0f credits", used, limit);
     json_object_put(root);
     return provider;
@@ -274,7 +276,8 @@ CodexBarProvider *codexbar_venice_parse(const char *json, GError **error) {
     } else if (uses_usd && has_usd && usd > 0.0) {
         window->detail = g_strdup_printf("$%.2f USD remaining", usd);
     } else if (!uses_usd && has_diem && has_allocation && allocation > 0.0) {
-        window->used_percent = CLAMP(((allocation - diem) / allocation) * 100.0, 0.0, 100.0);
+        window->used_percent = codexbar_usage_percent_display(
+            codexbar_usage_percent_from_ratio(allocation - diem, allocation));
         window->detail =
             g_strdup_printf("DIEM %.2f / %.2f epoch allocation", diem, allocation);
     } else if (has_diem && diem > 0.0) {
@@ -303,7 +306,7 @@ static gboolean parse_zenmux_window(json_object *data, const char *key, const ch
         return FALSE;
     }
     CodexBarQuotaWindow *window = add_window(provider, key, label);
-    window->used_percent = CLAMP(usage * 100.0, 0.0, 100.0);
+    window->used_percent = codexbar_usage_percent_display(codexbar_usage_percent_from_raw(usage * 100.0));
     char *used_text = amount(used);
     char *maximum_text = amount(maximum);
     window->detail = g_strdup_printf("%s / %s flows", used_text, maximum_text);

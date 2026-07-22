@@ -355,7 +355,8 @@ static void apply_extra_usage(CodexBarProvider *provider, json_object *root, gbo
         if (!json_number(extra, "utilization", &utilization)) utilization = used / limit * 100.0;
         CodexBarQuotaWindow *window = codexbar_quota_window_new("spend-limit", "Spend limit");
         window->usage_known = TRUE;
-        window->used_percent = CLAMP(utilization, 0, 100);
+        window->used_percent =
+            codexbar_usage_percent_display(codexbar_usage_percent_from_raw(utilization));
         codexbar_provider_add_quota_window(provider, window);
     }
 }
