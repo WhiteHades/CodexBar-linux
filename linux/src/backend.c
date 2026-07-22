@@ -269,13 +269,15 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
         return NULL;
     }
     if (source && !codexbar_provider_supports_source(descriptor, source)) {
-        CodexBarProviderConfig selected = {.id = (char *)descriptor->id, .source = (char *)source};
+        CodexBarProviderConfig selected = {.id = g_strdup(descriptor->id)};
         GError *source_error = g_error_new(G_IO_ERROR,
                                            G_IO_ERROR_NOT_SUPPORTED,
                                            "Source '%s' is not supported for %s.",
                                            source,
                                            descriptor->cli_name);
-        return provider_error(&selected, source, source_error);
+        CodexBarProvider *result = provider_error(&selected, source, source_error);
+        g_free(selected.id);
+        return result;
     }
     const char *backend = g_getenv("CODEXBAR_BACKEND");
     if (backend && backend[0] != '\0') {
@@ -300,8 +302,9 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     if (!config) return NULL;
     CodexBarProviderConfig *stored = codexbar_config_provider(config, descriptor->id);
     CodexBarProviderConfig selected = *stored;
-    selected.source = (char *)(source ? source : stored->source);
+    selected.source = g_strdup(source ? source : stored->source);
     CodexBarProvider *result = fetch_provider(&selected);
+    g_free(selected.source);
     codexbar_config_free(config);
     return result;
 }

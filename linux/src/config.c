@@ -399,6 +399,14 @@ static void add_issue(GPtrArray *issues,
                       const char *field,
                       const char *code,
                       const char *format,
+                      ...) G_GNUC_PRINTF(6, 7);
+
+static void add_issue(GPtrArray *issues,
+                      gboolean error,
+                      const char *provider,
+                      const char *field,
+                      const char *code,
+                      const char *format,
                       ...) {
     va_list arguments;
     va_start(arguments, format);

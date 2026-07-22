@@ -33,7 +33,7 @@ static void test_fixture_contract(void) {
     g_assert_true(json_object_object_get_ex(manifest, "cases", &cases));
     g_assert_true(json_object_is_type(cases, json_type_array));
 
-    GHashTable *names = g_hash_table_new(g_str_hash, g_str_equal);
+    GHashTable *names = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     for (size_t index = 0; index < json_object_array_length(cases); index++) {
         json_object *test_case = json_object_array_get_idx(cases, index);
         json_object *name_value = NULL;
@@ -43,7 +43,7 @@ static void test_fixture_contract(void) {
         const char *name = json_object_get_string(name_value);
         g_assert_true(name[0] != '\0');
         g_assert_false(g_hash_table_contains(names, name));
-        g_hash_table_add(names, (gpointer)name);
+        g_hash_table_add(names, g_strdup(name));
         g_assert_true(json_object_object_get_ex(test_case, "payloads", &payloads));
         g_assert_true(json_object_is_type(payloads, json_type_array));
 

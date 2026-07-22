@@ -21,17 +21,17 @@ static void print_help(void) {
          "Diagnostic output is always redacted.");
 }
 
-static gboolean append_descriptor(GPtrArray *selection, const CodexBarProviderDescriptor *descriptor) {
+static gboolean append_descriptor(GArray *selection, const CodexBarProviderDescriptor *descriptor) {
     if (!descriptor) return FALSE;
     for (guint index = 0; index < selection->len; index++) {
-        if (g_ptr_array_index(selection, index) == descriptor) return TRUE;
+        if (g_array_index(selection, const CodexBarProviderDescriptor *, index) == descriptor) return TRUE;
     }
-    g_ptr_array_add(selection, (gpointer)descriptor);
+    g_array_append_val(selection, descriptor);
     return TRUE;
 }
 
-static GPtrArray *provider_selection(const char *raw, CodexBarConfig *config) {
-    GPtrArray *selection = g_ptr_array_new();
+static GArray *provider_selection(const char *raw, CodexBarConfig *config) {
+    GArray *selection = g_array_new(FALSE, FALSE, sizeof(const CodexBarProviderDescriptor *));
     if (raw && (g_ascii_strcasecmp(raw, "all") == 0)) {
         for (guint index = 0; index < codexbar_provider_registry_count(); index++) {
             append_descriptor(selection, codexbar_provider_registry_at(index));
@@ -129,17 +129,18 @@ int codexbar_cli_diagnose_run(int argc, char **argv) {
         g_clear_error(&error);
         return 1;
     }
-    GPtrArray *selection = provider_selection(provider_name, config);
+    GArray *selection = provider_selection(provider_name, config);
     if (provider_name && selection->len == 0) {
         fprintf(stderr, "Error: unknown provider '%s'\n", provider_name);
-        g_ptr_array_unref(selection);
+        g_array_unref(selection);
         codexbar_config_free(config);
         return 1;
     }
 
     json_object *diagnostics = json_object_new_array();
     for (guint index = 0; index < selection->len; index++) {
-        const CodexBarProviderDescriptor *descriptor = g_ptr_array_index(selection, index);
+        const CodexBarProviderDescriptor *descriptor =
+            g_array_index(selection, const CodexBarProviderDescriptor *, index);
         CodexBarProviderConfig *provider_config = codexbar_config_provider(config, descriptor->id);
         json_object_array_add(diagnostics, codexbar_diagnose_provider(descriptor, provider_config));
     }
@@ -171,7 +172,7 @@ int codexbar_cli_diagnose_run(int argc, char **argv) {
 
     json_object_put(root);
     json_object_put(diagnostics);
-    g_ptr_array_unref(selection);
+    g_array_unref(selection);
     codexbar_config_free(config);
     return exit_code;
 }

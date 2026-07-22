@@ -458,6 +458,12 @@ static char *finish_output(GByteArray *output, size_t *length) {
     return (char *)g_byte_array_free(output, FALSE);
 }
 
+static void free_supervisor_arguments(char **arguments, size_t target_count) {
+    if (!arguments) return;
+    for (size_t index = 0; index < target_count; index++) g_free(arguments[index + 5]);
+    g_free(arguments);
+}
+
 CodexBarProcessResult *codexbar_process_run(
     const CodexBarProcessRequest *request, GCancellable *cancellable, GError **error) {
     g_return_val_if_fail(error == NULL || *error == NULL, NULL);
@@ -507,7 +513,7 @@ CodexBarProcessResult *codexbar_process_run(
     supervisor_arguments[3] = grace;
     supervisor_arguments[4] = "--";
     for (size_t index = 0; index < argument_count; index++) {
-        supervisor_arguments[index + 5] = (char *)request->arguments[index];
+        supervisor_arguments[index + 5] = g_strdup(request->arguments[index]);
     }
 
     int stdout_pipe[2] = {-1, -1};
@@ -618,7 +624,7 @@ CodexBarProcessResult *codexbar_process_run(
     close_descriptor(&child_configuration);
     close_descriptor(&child_startup);
     close_descriptor(&child_acknowledgement);
-    g_free(supervisor_arguments);
+    free_supervisor_arguments(supervisor_arguments, argument_count);
     g_free(expected_parent);
     g_free(grace);
     g_free(supervisor);
@@ -881,7 +887,7 @@ setup_failed:
     close_descriptor(&child_startup);
     close_descriptor(&child_acknowledgement);
 arguments_failed:
-    g_free(supervisor_arguments);
+    free_supervisor_arguments(supervisor_arguments, argument_count);
     g_free(expected_parent);
     g_free(grace);
     g_free(supervisor);

@@ -534,7 +534,7 @@ static void draw_actions(const GPtrArray *actions, guint selected, int y, int x,
     attroff(COLOR_PAIR(COLOR_ACCENT) | A_BOLD);
     y++;
     for (guint index = 0; actions && index < actions->len && y < height; index++, y++) {
-        const CodexBarTuiAction *action = g_ptr_array_index((GPtrArray *)actions, index);
+        const CodexBarTuiAction *action = g_ptr_array_index(actions, index);
         if (index == selected) {
             attron(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
         } else {
@@ -695,7 +695,7 @@ static void execute_action(const GPtrArray *actions,
                            gboolean *running,
                            char **status) {
     if (!actions || selected >= actions->len) return;
-    const CodexBarTuiAction *action = g_ptr_array_index((GPtrArray *)actions, selected);
+    const CodexBarTuiAction *action = g_ptr_array_index(actions, selected);
     GError *error = NULL;
     if (action->kind == CODEXBAR_TUI_ACTION_SETTINGS && !ensure_config_file(&error)) {
         g_free(*status);
