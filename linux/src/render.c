@@ -214,7 +214,8 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
     for (guint index = 0; index < snapshot->providers->len; index++) {
         const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
         has_error = has_error || provider->error != NULL;
-        has_usage = has_usage || provider->quota_windows->len > 0 || provider->balances->len > 0;
+        has_usage = has_usage || provider->quota_windows->len > 0 || provider->balances->len > 0 ||
+                    provider->provider_cost != NULL || provider->token_cost != NULL;
     }
     const char *class_name = has_error ? (has_usage ? "stale" : "error")
                                        : percentage >= 90 ? "critical"
@@ -620,6 +621,23 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
             const CodexBarBalance *balance = codexbar_provider_balance(provider, balance_index);
             g_string_append_printf(
                 text, "  %s: %.2f %s left\n", balance->title, balance->remaining, balance->unit);
+        }
+        if (provider->provider_cost) {
+            char *used = format_money(provider->provider_cost->used, provider->provider_cost->currency);
+            g_string_append_printf(text,
+                                   "  %s: %s",
+                                   provider->provider_cost->limit > 0 ? "Extra usage" : "API spend",
+                                   used);
+            g_free(used);
+            if (provider->provider_cost->limit > 0) {
+                char *limit = format_money(provider->provider_cost->limit, provider->provider_cost->currency);
+                g_string_append_printf(text, " / %s", limit);
+                g_free(limit);
+            }
+            if (provider->provider_cost->period) {
+                g_string_append_printf(text, " · %s", provider->provider_cost->period);
+            }
+            g_string_append_c(text, '\n');
         }
         if (provider->error) g_string_append_printf(text, "  error: %s\n", provider->error);
     }

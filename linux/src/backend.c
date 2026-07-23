@@ -1,5 +1,6 @@
 #include "backend.h"
 
+#include "aiand.h"
 #include "config.h"
 #include "codebuff.h"
 #include "claude.h"
@@ -142,6 +143,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_COPILOT:
     case CODEXBAR_NATIVE_CLINEPASS:
     case CODEXBAR_NATIVE_DEEPINFRA:
+    case CODEXBAR_NATIVE_AIAND:
     case CODEXBAR_NATIVE_ZAI:
     case CODEXBAR_NATIVE_OPENAI:
     case CODEXBAR_NATIVE_CODEBUFF:
@@ -191,6 +193,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_DEEPINFRA:
         provider = codexbar_deepinfra_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_AIAND:
+        provider = codexbar_aiand_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_ZAI:
         provider = codexbar_zai_fetch(config, &error);

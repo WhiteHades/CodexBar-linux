@@ -71,7 +71,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"sub2api", "sub2api", "sub2api", "sub-2-api", A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"wayfinder", "Wayfinder", "wayfinder", "wayfinder-router", A | P, FALSE, "http://127.0.0.1:8088/router", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"zenmux", "ZenMux", "zenmux", "zen-mux", A | P, FALSE, "https://zenmux.ai/platform/management", NULL, CODEXBAR_NATIVE_SIMPLE},
-    {"aiand", "ai&", "aiand", "ai&,ai-and", A | P, FALSE, "https://console.aiand.com", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"aiand", "ai&", "aiand", "ai&,ai-and", A | P, FALSE, "https://console.aiand.com", NULL, CODEXBAR_NATIVE_AIAND},
 };
 
 #undef A

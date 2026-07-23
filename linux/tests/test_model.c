@@ -1403,6 +1403,7 @@ static void test_provider_registry(void) {
     g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("long-cat"), "web"));
     g_assert_false(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("longcat")));
     g_assert_true(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("ai&")));
+    g_assert_cmpint(codexbar_provider_registry_find("ai&")->native_provider, ==, CODEXBAR_NATIVE_AIAND);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }

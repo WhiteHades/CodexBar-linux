@@ -1,5 +1,6 @@
 #include "diagnose.h"
 
+#include "aiand.h"
 #include "backend.h"
 #include "model.h"
 #include "version.h"
@@ -118,7 +119,10 @@ static json_object *auth_summary(const CodexBarProviderDescriptor *descriptor,
                                  const CodexBarProviderConfig *config,
                                  const CodexBarProvider *provider) {
     json_object *modes = json_object_new_array();
-    gboolean api = config && (valid_api_credential(config->api_key) || valid_api_credential(config->secret_key));
+    gboolean api = g_str_equal(descriptor->id, "aiand")
+                       ? codexbar_aiand_has_api_key(config)
+                       : config && (valid_api_credential(config->api_key) ||
+                                    valid_api_credential(config->secret_key));
     if (g_str_equal(descriptor->id, "bedrock")) {
         api = config && valid_api_credential(config->api_key) && valid_api_credential(config->secret_key);
     }
@@ -155,7 +159,8 @@ static const char *error_category(const char *description, gboolean auth_configu
     } else if (strstr(lower, "parse") || strstr(lower, "format") || strstr(lower, "decode") ||
                strstr(lower, "json")) {
         category = "parse";
-    } else if (strstr(lower, "api") || strstr(lower, "http") || strstr(lower, "404")) {
+    } else if (strstr(lower, "api") || strstr(lower, "http") || strstr(lower, "404") ||
+               strstr(lower, "rate limit") || strstr(lower, "out of credits")) {
         category = "api";
     } else if (!auth_configured) {
         category = "auth";

@@ -75,6 +75,12 @@ output=$(env "DEEPINFRA_API_KEY=invalid$(printf '\177')key" CODEXBAR_BACKEND="$c
   "$binary" diagnose --provider deepinfra --format json)
 printf '%s\n' "$output" | grep -q '"configured":false'
 
+sed 's/deepinfra/aiand/' "$credential_backend" >"$work/aiand-credential-backend.sh"
+chmod +x "$work/aiand-credential-backend.sh"
+output=$(env "AIAND_API_KEY=$(printf '\342\200\203')" CODEXBAR_BACKEND="$work/aiand-credential-backend.sh" \
+  "$binary" diagnose --provider aiand --format json)
+printf '%s\n' "$output" | grep -q '"configured":false'
+
 output=$(CODEXBAR_BACKEND="$fake_backend" "$binary" diagnose --provider antigravity --format json)
 printf '%s\n' "$output" | grep -q '"provider":"antigravity"'
 printf '%s\n' "$output" | grep -q '"source":"failed"'

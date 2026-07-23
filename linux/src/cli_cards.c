@@ -95,11 +95,13 @@ static char *safe_text(const char *text, gsize limit) {
     if (!text) return g_strdup("");
     GString *output = g_string_sized_new(MIN(strlen(text), limit));
     const char *cursor = text;
-    while (*cursor != '\0' && output->len < limit) {
+    gsize characters = 0;
+    while (*cursor != '\0' && characters < limit) {
         gunichar character = g_utf8_get_char_validated(cursor, -1);
         if (character == (gunichar)-1 || character == (gunichar)-2) {
             g_string_append_c(output, '?');
             cursor++;
+            characters++;
             continue;
         }
         if (g_unichar_iscntrl(character)) {
@@ -107,10 +109,10 @@ static char *safe_text(const char *text, gsize limit) {
         } else {
             char encoded[6];
             int length = g_unichar_to_utf8(character, encoded);
-            if (output->len + (gsize)length > limit) break;
             g_string_append_len(output, encoded, length);
         }
         cursor = g_utf8_next_char(cursor);
+        characters++;
     }
     return g_string_free(output, FALSE);
 }
@@ -165,6 +167,18 @@ static void add_quota_lines(GPtrArray *lines, const CodexBarQuotaWindow *window)
     }
 }
 
+static char *provider_cost_text(const CodexBarProviderCost *cost) {
+    GString *text = g_string_new(NULL);
+    g_string_printf(text,
+                    "%s: %.2f %s",
+                    cost->limit > 0 ? "Extra usage" : "API spend",
+                    cost->used,
+                    cost->currency);
+    if (cost->limit > 0) g_string_append_printf(text, " / %.2f %s", cost->limit, cost->currency);
+    if (cost->period) g_string_append_printf(text, " · %s", cost->period);
+    return g_string_free(text, FALSE);
+}
+
 static GPtrArray *make_card(const CodexBarProvider *provider, gboolean include_credits) {
     GPtrArray *lines = g_ptr_array_new_with_free_func(g_free);
     g_ptr_array_add(lines, g_strdup("+------------------------------------+"));
@@ -184,6 +198,11 @@ static GPtrArray *make_card(const CodexBarProvider *provider, gboolean include_c
 
     for (guint index = 0; index < provider->quota_windows->len; index++) {
         add_quota_lines(lines, g_ptr_array_index(provider->quota_windows, index));
+    }
+    if (provider->provider_cost) {
+        char *line = provider_cost_text(provider->provider_cost);
+        card_line(lines, line);
+        g_free(line);
     }
     if (include_credits) {
         for (guint index = 0; index < provider->balances->len; index++) {
@@ -260,7 +279,7 @@ static void render_brief(const CodexBarSnapshot *snapshot) {
             : 0.0;
         char *usage = window && window->usage_known
             ? g_strdup_printf("%s %.0f%% used", window->title ? window->title : "Usage", display_percent)
-            : g_strdup("Usage unavailable");
+            : provider->provider_cost ? provider_cost_text(provider->provider_cost) : g_strdup("Usage unavailable");
         const char *reset_text = window
             ? (window->reset_description ? window->reset_description : window->detail)
             : NULL;

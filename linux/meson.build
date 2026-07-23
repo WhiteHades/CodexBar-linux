@@ -11,6 +11,7 @@ version_config.set_quoted('CODEXBAR_LINUX_VERSION', meson.project_version())
 configure_file(output: 'version.h', configuration: version_config)
 
 core_sources = files(
+  'src/aiand.c',
   'src/backend.c',
   'src/cli_cache.c',
   'src/cli_cards.c',
@@ -187,6 +188,14 @@ deepinfra_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-deepinfra', deepinfra_test)
+
+aiand_test = executable(
+  'codexbar-linux-aiand-tests',
+  files('tests/test_aiand.c', 'src/aiand.c', 'src/http.c', 'src/model.c', 'src/render.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-aiand', aiand_test)
 
 zai_test = executable(
   'codexbar-linux-zai-tests',
