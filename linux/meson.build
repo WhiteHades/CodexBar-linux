@@ -49,6 +49,7 @@ core_sources = files(
   'src/serve.c',
   'src/simple_providers.c',
   'src/tui_actions.c',
+  'src/wayfinder.c',
   'src/zai.c',
 )
 
@@ -214,6 +215,21 @@ azure_openai_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-azure-openai', azure_openai_test)
+
+wayfinder_test = executable(
+  'codexbar-linux-wayfinder-tests',
+  files(
+    'tests/test_wayfinder.c',
+    'src/wayfinder.c',
+    'src/http.c',
+    'src/model.c',
+    'src/provider_registry.c',
+    'src/render.c',
+  ),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-wayfinder', wayfinder_test)
 
 zai_test = executable(
   'codexbar-linux-zai-tests',

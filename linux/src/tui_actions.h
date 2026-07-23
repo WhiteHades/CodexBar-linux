@@ -24,7 +24,9 @@ typedef struct {
 
 typedef gboolean (*CodexBarTuiUriLauncher)(const char *uri, GError **error, gpointer user_data);
 
-GPtrArray *codexbar_tui_actions_new(const char *provider_id, const char *config_path);
+GPtrArray *codexbar_tui_actions_new(const char *provider_id,
+                                    const char *config_path,
+                                    const char *dashboard_override);
 void codexbar_tui_action_free(CodexBarTuiAction *action);
 gboolean codexbar_tui_uri_is_allowed(const char *uri, gboolean allow_file);
 gboolean codexbar_tui_action_execute(const CodexBarTuiAction *action,

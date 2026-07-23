@@ -30,7 +30,7 @@ static CodexBarTuiAction *action_of_kind(GPtrArray *actions, CodexBarTuiActionKi
 }
 
 static void test_action_availability(void) {
-    GPtrArray *actions = codexbar_tui_actions_new("codex", "/home/test/config.json");
+    GPtrArray *actions = codexbar_tui_actions_new("codex", "/home/test/config.json", NULL);
     g_assert_cmpuint(actions->len, ==, 5);
     g_assert_cmpstr(action_of_kind(actions, CODEXBAR_TUI_ACTION_DASHBOARD)->target,
                     ==,
@@ -41,34 +41,44 @@ static void test_action_availability(void) {
     g_assert_true(g_str_has_prefix(action_of_kind(actions, CODEXBAR_TUI_ACTION_SETTINGS)->target, "file:///"));
     g_ptr_array_unref(actions);
 
-    actions = codexbar_tui_actions_new("moonshot", "/home/test/config.json");
+    actions = codexbar_tui_actions_new("moonshot", "/home/test/config.json", NULL);
     g_assert_cmpuint(actions->len, ==, 4);
     g_assert_nonnull(action_of_kind(actions, CODEXBAR_TUI_ACTION_DASHBOARD));
     g_assert_null(action_of_kind(actions, CODEXBAR_TUI_ACTION_STATUS));
     g_ptr_array_unref(actions);
 
-    actions = codexbar_tui_actions_new("unknown", "/home/test/config.json");
+    actions = codexbar_tui_actions_new("unknown", "/home/test/config.json", NULL);
     g_assert_cmpuint(actions->len, ==, 3);
     g_assert_null(action_of_kind(actions, CODEXBAR_TUI_ACTION_DASHBOARD));
     g_assert_null(action_of_kind(actions, CODEXBAR_TUI_ACTION_STATUS));
+    g_ptr_array_unref(actions);
+
+    actions = codexbar_tui_actions_new(
+        "wayfinder", "/home/test/config.json", "http://127.42.0.7:9099/base/router");
+    g_assert_cmpstr(action_of_kind(actions, CODEXBAR_TUI_ACTION_DASHBOARD)->target,
+                    ==,
+                    "http://127.42.0.7:9099/base/router");
     g_ptr_array_unref(actions);
 }
 
 static void test_uri_policy(void) {
     g_assert_true(codexbar_tui_uri_is_allowed("https://status.openai.com/", FALSE));
     g_assert_true(codexbar_tui_uri_is_allowed("http://127.0.0.1:8088/router", FALSE));
+    g_assert_true(codexbar_tui_uri_is_allowed("http://127.42.0.7:8088/router", FALSE));
     g_assert_true(codexbar_tui_uri_is_allowed("file:///home/test/config.json", TRUE));
     g_assert_false(codexbar_tui_uri_is_allowed("file:///home/test/config.json", FALSE));
     g_assert_false(codexbar_tui_uri_is_allowed("file://remote-host/home/test/config.json", TRUE));
     g_assert_false(codexbar_tui_uri_is_allowed("file:///home/test/config.json?remote=true", TRUE));
     g_assert_false(codexbar_tui_uri_is_allowed("http://example.com", FALSE));
+    g_assert_false(codexbar_tui_uri_is_allowed("http://127.0.0.+1:8088/router", FALSE));
+    g_assert_false(codexbar_tui_uri_is_allowed("http://127.0.0.1.attacker.test/router", FALSE));
     g_assert_false(codexbar_tui_uri_is_allowed("javascript:alert(1)", FALSE));
     g_assert_false(codexbar_tui_uri_is_allowed("https://user:secret@example.com/", FALSE));
     g_assert_false(codexbar_tui_uri_is_allowed("https:///missing-host", FALSE));
 }
 
 static void test_action_execution(void) {
-    GPtrArray *actions = codexbar_tui_actions_new("openrouter", "/home/test/config.json");
+    GPtrArray *actions = codexbar_tui_actions_new("openrouter", "/home/test/config.json", NULL);
     RecordingLauncher launcher = {.succeeds = TRUE};
     CodexBarTuiEffect effect = CODEXBAR_TUI_EFFECT_QUIT;
     GError *error = NULL;

@@ -225,7 +225,7 @@ static json_object *provider_specific_data(const CodexBarProvider *provider) {
         "kiroUsage",          "ampUsage",          "zaiUsage",       "minimaxUsage",
         "deepseekUsage",      "openRouterUsage",   "sakanaPayAsYouGo",
         "openAIAPIUsage",     "claudeAdminAPIUsage", "mistralUsage", "deepgramUsage",
-        "cursorRequests",
+        "cursorRequests",     "wayfinderUsage",
     };
     json_object *array = json_object_new_array();
     if (!provider->usage_extensions || !json_object_is_type(provider->usage_extensions, json_type_object)) {

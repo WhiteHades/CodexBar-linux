@@ -2,7 +2,9 @@
 
 #include "backend.h"
 #include "config.h"
+#include "render.h"
 #include "tui_actions.h"
+#include "wayfinder.h"
 #include "version.h"
 
 #include <locale.h>
@@ -428,6 +430,9 @@ static int draw_provider_overview(int y, int x, int width, const CodexBarProvide
     return y + 1;
 }
 
+static int wayfinder_height(const CodexBarProvider *provider);
+static int draw_wayfinder(int y, int x, int width, const CodexBarProvider *provider);
+
 static int provider_content_height(const CodexBarProvider *provider) {
     int height = provider_overview_height(provider) + (provider->error ? 1 : 0);
     for (guint index = 0; index < provider->quota_windows->len; index++) {
@@ -438,6 +443,7 @@ static int provider_content_height(const CodexBarProvider *provider) {
     }
     if (provider->provider_cost) height += provider_cost_height(provider->provider_cost);
     if (provider->token_cost) height += token_cost_height(provider->token_cost);
+    height += wayfinder_height(provider);
     if (provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE) {
         height += service_status_height(provider->status);
     }
@@ -445,9 +451,37 @@ static int provider_content_height(const CodexBarProvider *provider) {
 }
 
 static guint provider_metric_count(const CodexBarProvider *provider) {
+    char *wayfinder = codexbar_render_wayfinder_usage(provider);
+    gboolean has_wayfinder = wayfinder && wayfinder[0] != '\0';
+    g_free(wayfinder);
     return (provider_overview_height(provider) > 0 ? 1 : 0) + provider->quota_windows->len +
-           provider->balances->len + (provider->provider_cost ? 1 : 0) + (provider->token_cost ? 1 : 0) +
-           ((provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE) ? 1 : 0);
+            provider->balances->len + (provider->provider_cost ? 1 : 0) + (provider->token_cost ? 1 : 0) +
+            (has_wayfinder ? 1 : 0) +
+            ((provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE) ? 1 : 0);
+}
+
+static int wayfinder_height(const CodexBarProvider *provider) {
+    char *text = codexbar_render_wayfinder_usage(provider);
+    if (!text || text[0] == '\0') {
+        g_free(text);
+        return 0;
+    }
+    char **lines = g_strsplit(text, "\n", -1);
+    int height = (int)g_strv_length(lines);
+    g_strfreev(lines);
+    g_free(text);
+    return height;
+}
+
+static int draw_wayfinder(int y, int x, int width, const CodexBarProvider *provider) {
+    char *text = codexbar_render_wayfinder_usage(provider);
+    char **lines = g_strsplit(text ? text : "", "\n", -1);
+    attron(COLOR_PAIR(COLOR_NORMAL));
+    for (guint index = 0; lines[index] && lines[index][0] != '\0'; index++) draw_text(y++, x, width, lines[index]);
+    attroff(COLOR_PAIR(COLOR_NORMAL));
+    g_strfreev(lines);
+    g_free(text);
+    return y + 1;
 }
 
 static int provider_metric_height(const CodexBarProvider *provider, guint index) {
@@ -468,6 +502,11 @@ static int provider_metric_height(const CodexBarProvider *provider, guint index)
     }
     if (provider->token_cost) {
         if (index == 0) return token_cost_height(provider->token_cost);
+        index--;
+    }
+    int wayfinder = wayfinder_height(provider);
+    if (wayfinder > 0) {
+        if (index == 0) return wayfinder;
         index--;
     }
     if (provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE && index == 0) {
@@ -495,6 +534,10 @@ static int draw_provider_metric(const CodexBarProvider *provider, guint index, i
     }
     if (provider->token_cost) {
         if (index == 0) return draw_token_cost(y, x, width, provider->token_cost);
+        index--;
+    }
+    if (wayfinder_height(provider) > 0) {
+        if (index == 0) return draw_wayfinder(y, x, width, provider);
         index--;
     }
     if (provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE && index == 0) {
@@ -616,8 +659,9 @@ static void draw_screen(const CodexBarSnapshot *snapshot,
         }
         double highest = codexbar_usage_percent_display(
             codexbar_usage_percent_from_raw(codexbar_provider_highest_used(provider)));
-        char *tab = provider->error ? g_strdup_printf("%s !", provider->provider)
-                                    : g_strdup_printf("%s %.0f%%", provider->provider, highest);
+        char *tab = provider->error                  ? g_strdup_printf("%s !", provider->provider)
+                    : provider->quota_windows->len > 0 ? g_strdup_printf("%s %.0f%%", provider->provider, highest)
+                                                       : g_strdup(provider->provider);
         if (index == selected) {
             attron(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
         } else {
@@ -729,6 +773,16 @@ static void execute_action(const GPtrArray *actions,
         *running = FALSE;
         break;
     }
+}
+
+static char *dashboard_override(const CodexBarProvider *provider) {
+    if (provider->dashboard_url) return g_strdup(provider->dashboard_url);
+    if (!g_str_equal(provider->provider, "wayfinder")) return NULL;
+    CodexBarConfig *config = codexbar_config_load(NULL);
+    CodexBarProviderConfig *wayfinder = config ? codexbar_config_provider(config, "wayfinder") : NULL;
+    char *url = codexbar_wayfinder_dashboard_url_for_testing(wayfinder, NULL);
+    codexbar_config_free(config);
+    return url;
 }
 
 int codexbar_tui_run(void) {
@@ -852,11 +906,13 @@ int codexbar_tui_run(void) {
             if (snapshot->providers->len > 0) {
                 const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, selected);
                 char *path = codexbar_config_resolve_path();
-                actions = codexbar_tui_actions_new(provider->provider, path);
+                char *dashboard = dashboard_override(provider);
+                actions = codexbar_tui_actions_new(provider->provider, path, dashboard);
+                g_free(dashboard);
                 g_free(path);
             } else {
                 char *path = codexbar_config_resolve_path();
-                actions = codexbar_tui_actions_new(NULL, path);
+                actions = codexbar_tui_actions_new(NULL, path, NULL);
                 g_free(path);
             }
             selected_action = 0;

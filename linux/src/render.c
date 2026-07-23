@@ -1,6 +1,8 @@
 #include "render.h"
 
 #include <json-c/json.h>
+#include <math.h>
+#include <string.h>
 
 static char *format_timestamp(gint64 timestamp_ms, const char *prefix) {
     GDateTime *utc = g_date_time_new_from_unix_utc(timestamp_ms / 1000);
@@ -28,6 +30,125 @@ static char *format_count(gint64 value) {
     if (value >= 1000000) return g_strdup_printf("%.2fM", value / 1000000.0);
     if (value >= 1000) return g_strdup_printf("%.0fK", value / 1000.0);
     return g_strdup_printf("%" G_GINT64_FORMAT, value);
+}
+
+static char *format_wayfinder_count(gint64 value) {
+    guint64 magnitude = value < 0 ? (guint64)(-(value + 1)) + 1 : (guint64)value;
+    const char *suffix = NULL;
+    double divisor = 1;
+    if (magnitude >= 1000000000) {
+        suffix = "B";
+        divisor = 1000000000.0;
+    } else if (magnitude >= 1000000) {
+        suffix = "M";
+        divisor = 1000000.0;
+    } else if (magnitude >= 1000) {
+        suffix = "K";
+        divisor = 1000.0;
+    }
+    if (!suffix) return g_strdup_printf("%" G_GINT64_FORMAT, value);
+    double scaled = (double)magnitude / divisor;
+    char *number = scaled >= 10 ? g_strdup_printf("%.0f", scaled) : g_strdup_printf("%.1f", scaled);
+    size_t length = strlen(number);
+    if (length >= 2 && g_str_has_suffix(number, ".0")) number[length - 2] = '\0';
+    char *result = g_strdup_printf("%s%s%s", value < 0 ? "-" : "", number, suffix);
+    g_free(number);
+    return result;
+}
+
+static json_object *wayfinder_usage(const CodexBarProvider *provider) {
+    json_object *usage = NULL;
+    if (!provider->usage_extensions ||
+        !json_object_object_get_ex(provider->usage_extensions, "wayfinderUsage", &usage) ||
+        !json_object_is_type(usage, json_type_object)) {
+        return NULL;
+    }
+    return usage;
+}
+
+static void append_wayfinder_usage(GString *output, const CodexBarProvider *provider, const char *prefix) {
+    json_object *usage = wayfinder_usage(provider);
+    if (!usage) return;
+    json_object *status = NULL;
+    json_object *models = NULL;
+    if (!json_object_object_get_ex(usage, "gatewayStatus", &status) ||
+        !json_object_is_type(status, json_type_string) ||
+        !json_object_object_get_ex(usage, "modelCount", &models) || !json_object_is_type(models, json_type_int)) {
+        return;
+    }
+    gint64 model_count = json_object_get_int64(models);
+    g_string_append_printf(output,
+                           "%sGateway: %s · %" G_GINT64_FORMAT " model%s",
+                           prefix,
+                           json_object_get_string(status),
+                           model_count,
+                           model_count == 1 ? "" : "s");
+    json_object *offline = NULL;
+    if (json_object_object_get_ex(usage, "offline", &offline) && json_object_get_boolean(offline)) {
+        g_string_append(output, " · offline");
+    }
+    json_object *dry_run = NULL;
+    if (json_object_object_get_ex(usage, "dryRun", &dry_run) && json_object_get_boolean(dry_run)) {
+        g_string_append(output, " · dry run");
+    }
+    g_string_append_c(output, '\n');
+
+    json_object *requests_value = NULL;
+    gint64 requests = json_object_object_get_ex(usage, "requests", &requests_value)
+                           ? json_object_get_int64(requests_value)
+                           : 0;
+    json_object *routes = NULL;
+    if (requests > 0 && json_object_object_get_ex(usage, "routes", &routes) &&
+        json_object_is_type(routes, json_type_array) && json_object_array_length(routes) > 0) {
+        g_string_append_printf(output, "%sRouted: ", prefix);
+        size_t limit = MIN(json_object_array_length(routes), 5);
+        for (size_t index = 0; index < limit; index++) {
+            json_object *route = json_object_array_get_idx(routes, index);
+            json_object *name = NULL;
+            json_object *route_requests = NULL;
+            if (!json_object_is_type(route, json_type_object) ||
+                !json_object_object_get_ex(route, "name", &name) || !json_object_is_type(name, json_type_string) ||
+                !json_object_object_get_ex(route, "requests", &route_requests)) {
+                continue;
+            }
+            if (index > 0) g_string_append(output, " · ");
+            char *count = format_wayfinder_count(json_object_get_int64(route_requests));
+            g_string_append_printf(output, "%s: %s", json_object_get_string(name), count);
+            g_free(count);
+        }
+        g_string_append_c(output, '\n');
+    }
+
+    json_object *saved_value = NULL;
+    double saved = json_object_object_get_ex(usage, "saved", &saved_value) ? json_object_get_double(saved_value) : 0;
+    if (requests > 0 && saved > 0) {
+        json_object *percent_value = NULL;
+        json_object *priced_value = NULL;
+        double percent = json_object_object_get_ex(usage, "savedPct", &percent_value)
+                             ? json_object_get_double(percent_value)
+                             : 0;
+        gboolean priced = json_object_object_get_ex(usage, "priced", &priced_value) &&
+                          json_object_get_boolean(priced_value);
+        g_string_append_printf(output, "%sSaved: ", prefix);
+        if (priced) g_string_append_printf(output, saved < 0.01 ? "<$0.01 · " : "$%.2f · ", saved);
+        if (percent == round(percent)) {
+            g_string_append_printf(output, "%.0f%% vs highest-cost route\n", percent);
+        } else {
+            g_string_append_printf(output, "%.1f%% vs highest-cost route\n", percent);
+        }
+    }
+    json_object *average = NULL;
+    if (json_object_object_get_ex(usage, "avgDecisionMs", &average) &&
+        (json_object_is_type(average, json_type_double) || json_object_is_type(average, json_type_int))) {
+        g_string_append_printf(output, "%sAvg decision: %.1f ms\n", prefix, json_object_get_double(average));
+    }
+}
+
+char *codexbar_render_wayfinder_usage(const CodexBarProvider *provider) {
+    g_return_val_if_fail(provider != NULL, NULL);
+    GString *output = g_string_new(NULL);
+    append_wayfinder_usage(output, provider, "");
+    return g_string_free(output, FALSE);
 }
 
 static char *format_money(double value, const char *currency) {
@@ -216,16 +337,23 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
     int percentage = (int)(highest + 0.5);
     gboolean has_error = FALSE;
     gboolean has_usage = FALSE;
+    gboolean has_percentage = FALSE;
     for (guint index = 0; index < snapshot->providers->len; index++) {
         const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
         has_error = has_error || provider->error != NULL;
         has_usage = has_usage || provider->quota_windows->len > 0 || provider->balances->len > 0 ||
-                    provider->provider_cost != NULL || provider->token_cost != NULL;
+                     provider->provider_cost != NULL || provider->token_cost != NULL ||
+                     wayfinder_usage(provider) != NULL;
+        for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
+            has_percentage = has_percentage || codexbar_provider_quota_window(provider, window_index)->usage_known;
+        }
     }
     const char *class_name = has_error ? (has_usage ? "stale" : "error")
                                        : percentage >= 90 ? "critical"
                                                           : percentage >= 70 ? "warning" : "ok";
-    char *text = has_error && !has_usage ? g_strdup("󰚩 !") : g_strdup_printf("󰚩 %d%%", percentage);
+    char *text = has_error && !has_usage ? g_strdup("󰚩 !")
+                 : has_percentage       ? g_strdup_printf("󰚩 %d%%", percentage)
+                                        : g_strdup("󰚩");
     GString *tooltip = g_string_new(NULL);
 
     if (snapshot->providers->len == 0) {
@@ -291,6 +419,7 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
         }
         if (provider->provider_cost) append_provider_cost(tooltip, provider->provider_cost);
         if (provider->token_cost) append_token_cost(tooltip, provider->token_cost);
+        append_wayfinder_usage(tooltip, provider, "\n  ");
         if (provider->status && provider->status->indicator != CODEXBAR_STATUS_NONE) {
             g_string_append_printf(tooltip, "\n  status    %s", status_label(provider->status->indicator));
             if (provider->status->description) {
@@ -651,6 +780,7 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
             }
             g_string_append_c(text, '\n');
         }
+        append_wayfinder_usage(text, provider, "  ");
         if (provider->error) g_string_append_printf(text, "  error: %s\n", provider->error);
     }
     return g_string_free(text, FALSE);

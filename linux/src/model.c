@@ -493,6 +493,7 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     g_free(provider->account);
     g_free(provider->plan);
     g_free(provider->source);
+    g_free(provider->dashboard_url);
     g_free(provider->note);
     g_free(provider->error);
     g_free(provider->error_kind);
@@ -631,6 +632,12 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
                     json_object_object_add(
                         provider->usage_extensions, "dataConfidence", json_object_new_string(candidate));
                 }
+            }
+            json_object *wayfinder_usage = NULL;
+            if (json_object_object_get_ex(usage, "wayfinderUsage", &wayfinder_usage) &&
+                json_object_is_type(wayfinder_usage, json_type_object)) {
+                if (!provider->usage_extensions) provider->usage_extensions = json_object_new_object();
+                json_object_object_add(provider->usage_extensions, "wayfinderUsage", json_object_get(wayfinder_usage));
             }
         }
         gint64 top_level_updated_at = 0;

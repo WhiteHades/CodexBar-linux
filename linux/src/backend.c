@@ -20,6 +20,7 @@
 #include "provider_registry.h"
 #include "proxy_providers.h"
 #include "simple_providers.h"
+#include "wayfinder.h"
 #include "zai.h"
 
 #include <gio/gio.h>
@@ -110,6 +111,7 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
         g_free(provider->error_kind);
         provider->error_kind = g_strdup("binaryNotFound");
     } else if (error && (strstr(error->message, "malformed") || strstr(error->message, "Failed to parse") ||
+                         strstr(error->message, "Could not parse Wayfinder gateway response") ||
                          strstr(error->message, "Invalid backend JSON") ||
                          strstr(error->message, "response parse error"))) {
         provider->error_code = 3;
@@ -150,6 +152,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_DEEPINFRA:
     case CODEXBAR_NATIVE_AIAND:
     case CODEXBAR_NATIVE_NEURALWATT:
+    case CODEXBAR_NATIVE_WAYFINDER:
     case CODEXBAR_NATIVE_ZAI:
     case CODEXBAR_NATIVE_OPENAI:
     case CODEXBAR_NATIVE_CODEBUFF:
@@ -208,6 +211,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_NEURALWATT:
         provider = codexbar_neuralwatt_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_WAYFINDER:
+        provider = codexbar_wayfinder_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_ZAI:
         provider = codexbar_zai_fetch(config, &error);

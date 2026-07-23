@@ -16,11 +16,16 @@ static void add_action(GPtrArray *actions, CodexBarTuiActionKind kind, const cha
     g_ptr_array_add(actions, action);
 }
 
-GPtrArray *codexbar_tui_actions_new(const char *provider_id, const char *config_path) {
+GPtrArray *codexbar_tui_actions_new(const char *provider_id,
+                                    const char *config_path,
+                                    const char *dashboard_override) {
     GPtrArray *actions = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_tui_action_free);
     const CodexBarProviderDescriptor *provider = codexbar_provider_registry_find(provider_id);
-    if (provider && provider->dashboard_url) {
-        add_action(actions, CODEXBAR_TUI_ACTION_DASHBOARD, "Usage Dashboard", provider->dashboard_url);
+    if (provider && (dashboard_override || provider->dashboard_url)) {
+        add_action(actions,
+                   CODEXBAR_TUI_ACTION_DASHBOARD,
+                   "Usage Dashboard",
+                   dashboard_override ? dashboard_override : provider->dashboard_url);
     }
     if (provider && provider->status_url) {
         add_action(actions, CODEXBAR_TUI_ACTION_STATUS, "Status Page", provider->status_url);
@@ -40,6 +45,14 @@ void codexbar_tui_action_free(CodexBarTuiAction *action) {
     g_free(action);
 }
 
+static gboolean exact_loopback(const char *host) {
+    if (g_ascii_strcasecmp(host, "localhost") == 0) return TRUE;
+    GInetAddress *address = g_inet_address_new_from_string(host);
+    gboolean loopback = address && g_inet_address_get_is_loopback(address);
+    g_clear_object(&address);
+    return loopback;
+}
+
 gboolean codexbar_tui_uri_is_allowed(const char *uri, gboolean allow_file) {
     if (!uri) return FALSE;
     GError *error = NULL;
@@ -56,8 +69,7 @@ gboolean codexbar_tui_uri_is_allowed(const char *uri, gboolean allow_file) {
                   g_uri_get_fragment(parsed) == NULL;
     } else if (g_strcmp0(scheme, "https") == 0 && host && host[0] != '\0') {
         allowed = g_uri_get_userinfo(parsed) == NULL;
-    } else if (g_strcmp0(scheme, "http") == 0 && host &&
-               (g_str_equal(host, "localhost") || g_str_equal(host, "127.0.0.1") || g_str_equal(host, "::1"))) {
+    } else if (g_strcmp0(scheme, "http") == 0 && host && exact_loopback(host)) {
         allowed = g_uri_get_userinfo(parsed) == NULL;
     }
     g_uri_unref(parsed);

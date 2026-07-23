@@ -131,6 +131,7 @@ typedef struct {
     char *account;
     char *plan;
     char *source;
+    char *dashboard_url;
     char *note;
     char *error;
     int error_code;

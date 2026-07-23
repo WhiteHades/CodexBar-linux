@@ -69,7 +69,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"clawrouter", "ClawRouter", "clawrouter", "claw-router", A | P, FALSE, "https://clawrouter.openclaw.ai/dashboard/access", NULL, CODEXBAR_NATIVE_PROXY},
     {"longcat", "LongCat", "longcat", "long-cat,lc", A | W, FALSE, "https://longcat.chat/platform/", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"sub2api", "sub2api", "sub2api", "sub-2-api", A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_UNAVAILABLE},
-    {"wayfinder", "Wayfinder", "wayfinder", "wayfinder-router", A | P, FALSE, "http://127.0.0.1:8088/router", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"wayfinder", "Wayfinder", "wayfinder", "wayfinder-router", A | P, FALSE, "http://127.0.0.1:8088/router", NULL, CODEXBAR_NATIVE_WAYFINDER},
     {"zenmux", "ZenMux", "zenmux", "zen-mux", A | P, FALSE, "https://zenmux.ai/platform/management", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"aiand", "ai&", "aiand", "ai&,ai-and", A | P, FALSE, "https://console.aiand.com", NULL, CODEXBAR_NATIVE_AIAND},
 };
