@@ -25,7 +25,10 @@ typedef struct {
 typedef struct {
     GSocketListener *listener;
     guint16 port;
+    int status;
     gboolean invalid_target;
+    char *first_request;
+    char *second_request;
 } RedirectTestServer;
 
 typedef struct {
@@ -35,7 +38,7 @@ typedef struct {
     gboolean request_received;
 } CancellationTestServer;
 
-static GSocketConnection *accept_http_connection(GSocketListener *listener) {
+static GSocketConnection *accept_http_connection(GSocketListener *listener, char **request) {
     GError *error = NULL;
     GSocketConnection *connection = g_socket_listener_accept(listener, NULL, NULL, &error);
     g_assert_no_error(error);
@@ -44,6 +47,7 @@ static GSocketConnection *accept_http_connection(GSocketListener *listener) {
     gssize bytes = g_input_stream_read(input, buffer, sizeof(buffer), NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpint(bytes, >, 0);
+    if (request) *request = g_strndup(buffer, (gsize)bytes);
     return connection;
 }
 
@@ -59,17 +63,25 @@ static void write_http_response(GSocketConnection *connection, const char *respo
 
 static gpointer serve_redirect_test(gpointer data) {
     RedirectTestServer *server = data;
-    GSocketConnection *connection = accept_http_connection(server->listener);
-    char *response = server->invalid_target
-                         ? g_strdup_printf("HTTP/1.1 302 Found\r\nLocation: http://user:secret@127.0.0.1:%u/final\r\n"
-                                           "Content-Length: 0\r\nConnection: close\r\n\r\n",
-                                           server->port)
-                         : g_strdup("HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n"
-                                    "Connection: close\r\n\r\n");
+    GSocketConnection *connection = accept_http_connection(server->listener, &server->first_request);
+    const char *reason = server->status == 301   ? "Moved Permanently"
+                         : server->status == 302 ? "Found"
+                         : server->status == 303 ? "See Other"
+                         : server->status == 307 ? "Temporary Redirect"
+                                                 : "Permanent Redirect";
+    char *location = server->invalid_target
+                         ? g_strdup_printf("http://user:secret@127.0.0.1:%u/final", server->port)
+                         : g_strdup("/final");
+    char *response = g_strdup_printf("HTTP/1.1 %d %s\r\nLocation: %s\r\nContent-Length: 0\r\n"
+                                     "Connection: close\r\n\r\n",
+                                     server->status,
+                                     reason,
+                                     location);
     write_http_response(connection, response);
+    g_free(location);
     g_free(response);
     if (!server->invalid_target) {
-        connection = accept_http_connection(server->listener);
+        connection = accept_http_connection(server->listener, &server->second_request);
         write_http_response(connection,
                             "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK");
     }
@@ -111,7 +123,7 @@ static gpointer serve_http_test(gpointer data) {
 
 static gpointer serve_cancellation_test(gpointer data) {
     CancellationTestServer *server = data;
-    GSocketConnection *connection = accept_http_connection(server->listener);
+    GSocketConnection *connection = accept_http_connection(server->listener, NULL);
     g_mutex_lock(&server->mutex);
     server->request_received = TRUE;
     g_cond_signal(&server->condition);
@@ -490,39 +502,94 @@ static void test_http_rejects_malformed_requests(void) {
 }
 
 static void test_http_redirect_policy(void) {
-    for (int invalid = 0; invalid < 2; invalid++) {
-        GError *error = NULL;
-        RedirectTestServer server = {
-            .listener = g_socket_listener_new(),
-            .invalid_target = invalid == 1,
-        };
-        server.port = g_socket_listener_add_any_inet_port(server.listener, NULL, &error);
-        g_assert_no_error(error);
-        GThread *thread = g_thread_new("redirect-test-server", serve_redirect_test, &server);
-        char *url = g_strdup_printf("http://127.0.0.1:%u/start", server.port);
-        const CodexBarHttpRequest request = {
-            .url = url,
-            .method = "GET",
-            .timeout_seconds = 2,
-            .protocol_policy = CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP,
-            .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
-        };
-        CodexBarHttpResponse *response = codexbar_http_send(&request, &error);
-        if (server.invalid_target) {
-            g_assert_null(response);
-            g_assert_nonnull(error);
-            g_clear_error(&error);
-        } else {
+    const char *methods[] = {"GET", "POST", "HEAD"};
+    const int statuses[] = {301, 302, 303, 307, 308};
+    const CodexBarHttpRequestHeader headers[] = {
+        {"api-key", "secret"},
+        {"Content-Type", "application/json"},
+        {"Content-Encoding", "identity"},
+        {"Content-Language", "en"},
+        {"Content-Length", "10"},
+        {"Content-Location", "/start"},
+        {"Transfer-Encoding", "chunked"},
+    };
+    for (guint method_index = 0; method_index < G_N_ELEMENTS(methods); method_index++) {
+        for (guint status_index = 0; status_index < G_N_ELEMENTS(statuses); status_index++) {
+            GError *error = NULL;
+            RedirectTestServer server = {
+                .listener = g_socket_listener_new(),
+                .status = statuses[status_index],
+            };
+            server.port = g_socket_listener_add_any_inet_port(server.listener, NULL, &error);
+            g_assert_no_error(error);
+            GThread *thread = g_thread_new("redirect-test-server", serve_redirect_test, &server);
+            char *url = g_strdup_printf("http://127.0.0.1:%u/start", server.port);
+            const char body[] = "{\"ping\":1}";
+            const CodexBarHttpRequest request = {
+                .url = url,
+                .method = methods[method_index],
+                .headers = headers,
+                .header_count = G_N_ELEMENTS(headers),
+                .body = method_index == 1 ? body : NULL,
+                .body_length = method_index == 1 ? sizeof(body) - 1 : 0,
+                .timeout_seconds = 2,
+                .protocol_policy = CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP,
+                .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+            };
+            CodexBarHttpResponse *response = codexbar_http_send(&request, &error);
             g_assert_no_error(error);
             g_assert_nonnull(response);
             g_assert_cmpint(response->status, ==, 200);
-            g_assert_cmpstr(response->body, ==, "OK");
+            g_assert_cmpstr(response->body, ==, method_index == 2 ? "" : "OK");
             codexbar_http_response_free(response);
+            g_thread_join(thread);
+            gboolean rewrites_post = method_index == 1 &&
+                                     (statuses[status_index] == 301 || statuses[status_index] == 302 ||
+                                      statuses[status_index] == 303);
+            g_assert_nonnull(server.first_request);
+            g_assert_nonnull(server.second_request);
+            g_assert_true(g_str_has_prefix(server.first_request, methods[method_index]));
+            g_assert_true(g_str_has_prefix(server.second_request, rewrites_post ? "GET " : methods[method_index]));
+            g_assert_true((strstr(server.second_request, body) != NULL) == (method_index == 1 && !rewrites_post));
+            g_assert_nonnull(strstr(server.second_request, "api-key: secret"));
+            g_assert_true((strstr(server.second_request, "Content-Type: application/json") != NULL) ==
+                          !rewrites_post);
+            g_assert_true((strstr(server.second_request, "Content-Encoding: identity") != NULL) == !rewrites_post);
+            g_assert_true((strstr(server.second_request, "Content-Language: en") != NULL) == !rewrites_post);
+            g_assert_true((strstr(server.second_request, "Content-Length: 10") != NULL) == !rewrites_post);
+            g_assert_true((strstr(server.second_request, "Content-Location: /start") != NULL) == !rewrites_post);
+            g_assert_true((strstr(server.second_request, "Transfer-Encoding: chunked") != NULL) == !rewrites_post);
+            g_free(server.first_request);
+            g_free(server.second_request);
+            g_free(url);
+            g_object_unref(server.listener);
         }
-        g_thread_join(thread);
-        g_free(url);
-        g_object_unref(server.listener);
     }
+
+    GError *error = NULL;
+    RedirectTestServer server = {
+        .listener = g_socket_listener_new(),
+        .status = 307,
+        .invalid_target = TRUE,
+    };
+    server.port = g_socket_listener_add_any_inet_port(server.listener, NULL, &error);
+    g_assert_no_error(error);
+    GThread *thread = g_thread_new("redirect-origin-test-server", serve_redirect_test, &server);
+    char *url = g_strdup_printf("http://127.0.0.1:%u/start", server.port);
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "POST",
+        .timeout_seconds = 2,
+        .protocol_policy = CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+    };
+    g_assert_null(codexbar_http_send(&request, &error));
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    g_thread_join(thread);
+    g_free(server.first_request);
+    g_free(url);
+    g_object_unref(server.listener);
 }
 
 static void test_http_cancellation(void) {
@@ -1367,6 +1434,7 @@ static void test_provider_registry(void) {
     g_assert_null(codexbar_provider_registry_at(G_N_ELEMENTS(expected_ids)));
     g_assert_null(codexbar_provider_registry_find("unknown"));
     g_assert_cmpstr(codexbar_provider_registry_find("aoai")->id, ==, "azureopenai");
+    g_assert_cmpint(codexbar_provider_registry_find("aoai")->native_provider, ==, CODEXBAR_NATIVE_AZURE_OPENAI);
     g_assert_cmpstr(codexbar_provider_registry_find("or")->id, ==, "openrouter");
     g_assert_cmpstr(codexbar_provider_registry_find("groq")->id, ==, "groq");
     g_assert_null(codexbar_provider_registry_find("kimiK2"));

@@ -12,6 +12,7 @@ configure_file(output: 'version.h', configuration: version_config)
 
 core_sources = files(
   'src/aiand.c',
+  'src/azure_openai.c',
   'src/backend.c',
   'src/cli_cache.c',
   'src/cli_cards.c',
@@ -205,6 +206,14 @@ neuralwatt_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-neuralwatt', neuralwatt_test)
+
+azure_openai_test = executable(
+  'codexbar-linux-azure-openai-tests',
+  files('tests/test_azure_openai.c', 'src/azure_openai.c', 'src/http.c', 'src/model.c', 'src/render.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-azure-openai', azure_openai_test)
 
 zai_test = executable(
   'codexbar-linux-zai-tests',

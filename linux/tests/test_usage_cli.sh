@@ -255,6 +255,27 @@ case "$output" in
     ;;
 esac
 
+output=$(env -u CODEXBAR_BACKEND -u AZURE_OPENAI_API_KEY -u AZURE_OPENAI_ENDPOINT \
+  -u AZURE_OPENAI_DEPLOYMENT_NAME -u AZURE_OPENAI_API_VERSION CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider aoai --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"azureopenai","source":"auto","error":{"message":"Azure OpenAI API key not configured.'*'"code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected native Azure OpenAI missing-key output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider azure-openai --source web --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"azureopenai","source":"web","error":{"message":"Source '\''web'\'' is not supported for azure-openai.","code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected native Azure OpenAI web-source output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
 output=$(env -u CODEXBAR_BACKEND -u NEURALWATT_API_KEY -u NEURALWATT_API_URL CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider nw --json 2>/dev/null || true)
 case "$output" in

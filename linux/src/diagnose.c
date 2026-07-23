@@ -1,6 +1,7 @@
 #include "diagnose.h"
 
 #include "aiand.h"
+#include "azure_openai.h"
 #include "backend.h"
 #include "model.h"
 #include "neuralwatt.h"
@@ -34,6 +35,8 @@ static const char *safe_source(const char *source) {
     } else if (strstr(lower, "web")) {
         safe = "web";
     } else if (strstr(lower, "api")) {
+        safe = "api";
+    } else if (strstr(lower, "deployment")) {
         safe = "api";
     } else if (strstr(lower, "cli")) {
         safe = "cli";
@@ -123,6 +126,8 @@ static json_object *auth_summary(const CodexBarProviderDescriptor *descriptor,
     gboolean api = FALSE;
     if (g_str_equal(descriptor->id, "aiand")) {
         api = codexbar_aiand_has_api_key(config);
+    } else if (g_str_equal(descriptor->id, "azureopenai")) {
+        api = codexbar_azure_openai_has_api_key(config);
     } else if (g_str_equal(descriptor->id, "neuralwatt")) {
         api = codexbar_neuralwatt_has_api_key(config);
     } else {

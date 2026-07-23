@@ -209,6 +209,16 @@ static gboolean supported_method(const char *method) {
     return FALSE;
 }
 
+static gboolean body_specific_header(const char *name) {
+    const char *headers[] = {
+        "Content-Encoding", "Content-Language", "Content-Length", "Content-Location", "Content-Type", "Transfer-Encoding",
+    };
+    for (size_t index = 0; index < G_N_ELEMENTS(headers); index++) {
+        if (g_ascii_strcasecmp(name, headers[index]) == 0) return TRUE;
+    }
+    return FALSE;
+}
+
 static gboolean validate_request(const CodexBarHttpRequest *request, GError **error) {
     const char *method = request->method && request->method[0] != '\0' ? request->method : "GET";
     if (!request->url || !supported_method(method) || (request->header_count > 0 && !request->headers) ||
@@ -364,25 +374,21 @@ CodexBarHttpResponse *codexbar_http_send(const CodexBarHttpRequest *request, GEr
     }
     char *current_url = codexbar_http_normalize_endpoint(request->url, request->protocol_policy, error);
     if (!current_url) return NULL;
+    CodexBarHttpRequest redirected_request = *request;
+    g_autofree CodexBarHttpRequestHeader *redirected_headers = NULL;
 
     for (int redirects = 0; redirects <= MAXIMUM_REDIRECTS; redirects++) {
-        CodexBarHttpResponse *response = send_once(request, current_url, error);
+        CodexBarHttpResponse *response = send_once(&redirected_request, current_url, error);
         if (!response) {
             g_free(current_url);
             return NULL;
         }
-        gboolean redirect = response->status == 301 || response->status == 302 || response->status == 307 ||
-                            response->status == 308;
+        gboolean redirect = response->status == 301 || response->status == 302 || response->status == 303 ||
+                             response->status == 307 || response->status == 308;
         const char *location = redirect ? codexbar_http_response_header_first(response, "Location") : NULL;
         if (!location || request->redirect_policy == CODEXBAR_HTTP_REDIRECT_DENY) {
             g_free(current_url);
             return response;
-        }
-        if (g_ascii_strcasecmp(request->method ? request->method : "GET", "GET") != 0) {
-            codexbar_http_response_free(response);
-            g_free(current_url);
-            g_set_error_literal(error, http_error_quark(), 4, "HTTP redirects are only supported for GET requests");
-            return NULL;
         }
         char *resolved_url = g_uri_resolve_relative(current_url, location, G_URI_FLAGS_NONE, error);
         char *next_url = resolved_url
@@ -397,6 +403,25 @@ CodexBarHttpResponse *codexbar_http_send(const CodexBarHttpRequest *request, GEr
                 g_set_error_literal(error, http_error_quark(), 4, "HTTP redirect changed origin");
             }
             return NULL;
+        }
+        const char *method = redirected_request.method ? redirected_request.method : "GET";
+        gboolean rewrite_to_get = (response->status == 303 && g_ascii_strcasecmp(method, "GET") != 0 &&
+                                   g_ascii_strcasecmp(method, "HEAD") != 0) ||
+                                  ((response->status == 301 || response->status == 302) &&
+                                   g_ascii_strcasecmp(method, "POST") == 0);
+        if (rewrite_to_get) {
+            redirected_request.method = "GET";
+            redirected_request.body = NULL;
+            redirected_request.body_length = 0;
+            redirected_headers = g_new0(CodexBarHttpRequestHeader, redirected_request.header_count);
+            size_t count = 0;
+            for (size_t index = 0; index < redirected_request.header_count; index++) {
+                if (!body_specific_header(redirected_request.headers[index].name)) {
+                    redirected_headers[count++] = redirected_request.headers[index];
+                }
+            }
+            redirected_request.headers = redirected_headers;
+            redirected_request.header_count = count;
         }
         codexbar_http_response_free(response);
         g_free(current_url);

@@ -1,6 +1,7 @@
 #include "backend.h"
 
 #include "aiand.h"
+#include "azure_openai.h"
 #include "config.h"
 #include "codebuff.h"
 #include "claude.h"
@@ -109,7 +110,8 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
         g_free(provider->error_kind);
         provider->error_kind = g_strdup("binaryNotFound");
     } else if (error && (strstr(error->message, "malformed") || strstr(error->message, "Failed to parse") ||
-                         strstr(error->message, "Invalid backend JSON"))) {
+                         strstr(error->message, "Invalid backend JSON") ||
+                         strstr(error->message, "response parse error"))) {
         provider->error_code = 3;
         g_free(provider->error_kind);
         provider->error_kind = g_strdup("parse");
@@ -143,6 +145,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         native_source = "auto";
         break;
     case CODEXBAR_NATIVE_COPILOT:
+    case CODEXBAR_NATIVE_AZURE_OPENAI:
     case CODEXBAR_NATIVE_CLINEPASS:
     case CODEXBAR_NATIVE_DEEPINFRA:
     case CODEXBAR_NATIVE_AIAND:
@@ -182,6 +185,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     GError *error = NULL;
     CodexBarProvider *provider = NULL;
     switch (descriptor->native_provider) {
+    case CODEXBAR_NATIVE_AZURE_OPENAI:
+        provider = codexbar_azure_openai_fetch_with_cancellable(config, cancellable, &error);
+        break;
     case CODEXBAR_NATIVE_CODEX:
         provider = codexbar_codex_fetch(&error);
         break;
@@ -239,7 +245,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     }
     const char *error_source = descriptor->native_provider == CODEXBAR_NATIVE_JETBRAINS ||
-                                       descriptor->native_provider == CODEXBAR_NATIVE_KILO
+                                        descriptor->native_provider == CODEXBAR_NATIVE_KILO ||
+                                        descriptor->native_provider == CODEXBAR_NATIVE_AZURE_OPENAI
                                    ? configured_source
                                    : native_source ? native_source : configured_source;
     return provider ? provider : provider_error(config, error_source, error);
