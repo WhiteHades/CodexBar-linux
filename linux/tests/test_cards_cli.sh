@@ -36,7 +36,7 @@ esac
 aiand_backend=$work/aiand-backend.sh
 cat >"$aiand_backend" <<'EOF'
 #!/bin/sh
-printf '%s\n' '[{"provider":"aiand","source":"api","usage":{"primary":null,"secondary":null,"tertiary":null,"providerCost":{"used":8.12344,"limit":0,"currencyCode":"JPY","period":"Last 30 days"},"updatedAt":"2026-01-01T00:00:00Z","dataConfidence":"exact"}},{"provider":"deepinfra","source":"api","usage":{"primary":{"usedPercent":0},"providerCost":{"used":3.94,"limit":20,"currencyCode":"USD","period":"Billing cycle"},"updatedAt":"2026-01-01T00:00:00Z"}}]'
+printf '%s\n' '[{"provider":"aiand","source":"api","usage":{"primary":null,"secondary":null,"tertiary":null,"providerCost":{"used":8.12344,"limit":0,"currencyCode":"JPY","period":"Last 30 days"},"updatedAt":"2026-01-01T00:00:00Z","dataConfidence":"exact"}},{"provider":"deepinfra","source":"api","usage":{"primary":{"usedPercent":0},"providerCost":{"used":3.94,"limit":20,"currencyCode":"USD","period":"Billing cycle"},"updatedAt":"2026-01-01T00:00:00Z"}},{"provider":"neuralwatt","source":"api","usage":{"primary":{"usedPercent":25,"resetDescription":"2.50 / 10 kWh"},"secondary":null,"tertiary":null,"identity":{"providerID":"neuralwatt","loginMethod":"Pro plan"},"providerCost":{"used":0,"limit":0,"currencyCode":"USD","period":"Neuralwatt prepaid balance"},"updatedAt":"2026-01-01T00:00:00Z","dataConfidence":"exact"}}]'
 EOF
 chmod +x "$aiand_backend"
 output=$(CODEXBAR_BACKEND="$aiand_backend" "$binary" cards --provider aiand)
@@ -45,6 +45,13 @@ output=$(CODEXBAR_BACKEND="$aiand_backend" "$binary" cards --provider aiand --br
 printf '%s\n' "$output" | grep -q 'API spend: 8.12 JPY · Last 30 days'
 output=$(CODEXBAR_BACKEND="$aiand_backend" "$binary" cards --provider deepinfra)
 printf '%s\n' "$output" | grep -q 'Extra usage: 3.94 USD / 20.00 USD'
+output=$(CODEXBAR_BACKEND="$aiand_backend" "$binary" cards --provider neural)
+printf '%s\n' "$output" | grep -q 'Pay-as-you-go: Balance: 0.00 USD'
+printf '%s\n' "$output" | grep -q 'PLAN Pro plan'
+if printf '%s\n' "$output" | grep -q 'API spend'; then
+    printf 'Neuralwatt prepaid balance was rendered as spend\n' >&2
+    exit 1
+fi
 
 if CODEXBAR_BACKEND="$backend" "$binary" cards --provider unknown >"$work/output" 2>"$work/error"; then
     printf 'unknown provider unexpectedly succeeded\n' >&2

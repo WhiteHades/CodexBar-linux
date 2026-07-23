@@ -75,6 +75,24 @@ output=$(env "DEEPINFRA_API_KEY=invalid$(printf '\177')key" CODEXBAR_BACKEND="$c
   "$binary" diagnose --provider deepinfra --format json)
 printf '%s\n' "$output" | grep -q '"configured":false'
 
+sed 's/deepinfra/neuralwatt/' "$credential_backend" >"$work/neuralwatt-credential-backend.sh"
+chmod +x "$work/neuralwatt-credential-backend.sh"
+output=$(env "NEURALWATT_API_KEY=$(printf '\342\200\203')" \
+  CODEXBAR_BACKEND="$work/neuralwatt-credential-backend.sh" \
+  "$binary" diagnose --provider neural --format json)
+printf '%s\n' "$output" | grep -q '"configured":false'
+
+neuralwatt_backend=$work/neuralwatt-backend.sh
+cat >"$neuralwatt_backend" <<'EOF'
+#!/bin/sh
+printf '%s\n' '[{"provider":"neuralwatt","source":"api","usage":{"primary":{"usedPercent":25,"resetDescription":"2.50 / 10 kWh"},"secondary":null,"tertiary":null,"extraRateWindows":[{"id":"key-allowance","title":"Key Monthly","window":{"usedPercent":25}}],"providerCost":{"used":5,"limit":0,"currencyCode":"USD","period":"Neuralwatt prepaid balance"},"updatedAt":"2026-01-01T00:00:00Z","dataConfidence":"exact"}}]'
+EOF
+chmod +x "$neuralwatt_backend"
+output=$(CODEXBAR_BACKEND="$neuralwatt_backend" "$binary" diagnose --provider nw --format json)
+printf '%s\n' "$output" | grep -q '"label":"primary"[^}]*"hasResetDescription":true'
+printf '%s\n' "$output" | grep -q '"label":"Key allowance"'
+printf '%s\n' "$output" | grep -q '"extraWindowCount":1'
+
 sed 's/deepinfra/aiand/' "$credential_backend" >"$work/aiand-credential-backend.sh"
 chmod +x "$work/aiand-credential-backend.sh"
 output=$(env "AIAND_API_KEY=$(printf '\342\200\203')" CODEXBAR_BACKEND="$work/aiand-credential-backend.sh" \

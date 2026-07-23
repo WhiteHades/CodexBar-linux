@@ -36,6 +36,7 @@ core_sources = files(
   'src/kilo.c',
   'src/kimi.c',
   'src/model.c',
+  'src/neuralwatt.c',
   'src/openai_api.c',
   'src/opencode_go.c',
   'src/openrouter.c',
@@ -196,6 +197,14 @@ aiand_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-aiand', aiand_test)
+
+neuralwatt_test = executable(
+  'codexbar-linux-neuralwatt-tests',
+  files('tests/test_neuralwatt.c', 'src/neuralwatt.c', 'src/http.c', 'src/model.c', 'src/render.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-neuralwatt', neuralwatt_test)
 
 zai_test = executable(
   'codexbar-linux-zai-tests',

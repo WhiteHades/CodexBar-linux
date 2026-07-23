@@ -65,7 +65,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"deepgram", "Deepgram", "deepgram", "dg", A | P, FALSE, "https://console.deepgram.com/project/", "https://status.deepgram.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"poe", "Poe", "poe", NULL, A | P, FALSE, "https://poe.com/api/keys", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"chutes", "Chutes", "chutes", "chutes.ai", A | P, FALSE, "https://chutes.ai", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
-    {"neuralwatt", "Neuralwatt", "neuralwatt", "nw,neural", A | P, FALSE, "https://portal.neuralwatt.com/dashboard", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"neuralwatt", "Neuralwatt", "neuralwatt", "nw,neural", A | P, FALSE, "https://portal.neuralwatt.com/dashboard", NULL, CODEXBAR_NATIVE_NEURALWATT},
     {"clawrouter", "ClawRouter", "clawrouter", "claw-router", A | P, FALSE, "https://clawrouter.openclaw.ai/dashboard/access", NULL, CODEXBAR_NATIVE_PROXY},
     {"longcat", "LongCat", "longcat", "long-cat,lc", A | W, FALSE, "https://longcat.chat/platform/", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
     {"sub2api", "sub2api", "sub2api", "sub-2-api", A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_UNAVAILABLE},

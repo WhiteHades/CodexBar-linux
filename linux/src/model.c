@@ -560,6 +560,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         gboolean has_canonical_windows = json_object_object_get_ex(payload, "quotaWindows", &windows) &&
                                          json_object_is_type(windows, json_type_array);
         if (has_canonical_windows) {
+            provider->explicit_quota_slots = TRUE;
             size_t window_count = json_object_array_length(windows);
             for (size_t window_index = 0; window_index < window_count; window_index++) {
                 CodexBarQuotaWindow *window = parse_quota_window(
@@ -571,6 +572,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
         json_object *usage = NULL;
         if (provider->quota_windows->len == 0 && json_object_object_get_ex(payload, "usage", &usage) &&
             json_object_is_type(usage, json_type_object)) {
+            provider->explicit_quota_slots = TRUE;
             const char *ids[] = {"primary", "secondary", "tertiary"};
             const char *titles[] = {"session", "weekly", "extra"};
             for (size_t window_index = 0; window_index < G_N_ELEMENTS(ids); window_index++) {

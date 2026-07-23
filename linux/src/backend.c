@@ -11,6 +11,7 @@
 #include "jetbrains.h"
 #include "kilo.h"
 #include "kimi.h"
+#include "neuralwatt.h"
 #include "openai_api.h"
 #include "opencode_go.h"
 #include "openrouter.h"
@@ -107,7 +108,8 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
         provider->error_code = 2;
         g_free(provider->error_kind);
         provider->error_kind = g_strdup("binaryNotFound");
-    } else if (error && (strstr(error->message, "malformed") || strstr(error->message, "Invalid backend JSON"))) {
+    } else if (error && (strstr(error->message, "malformed") || strstr(error->message, "Failed to parse") ||
+                         strstr(error->message, "Invalid backend JSON"))) {
         provider->error_code = 3;
         g_free(provider->error_kind);
         provider->error_kind = g_strdup("parse");
@@ -144,6 +146,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_CLINEPASS:
     case CODEXBAR_NATIVE_DEEPINFRA:
     case CODEXBAR_NATIVE_AIAND:
+    case CODEXBAR_NATIVE_NEURALWATT:
     case CODEXBAR_NATIVE_ZAI:
     case CODEXBAR_NATIVE_OPENAI:
     case CODEXBAR_NATIVE_CODEBUFF:
@@ -196,6 +199,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_AIAND:
         provider = codexbar_aiand_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_NEURALWATT:
+        provider = codexbar_neuralwatt_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_ZAI:
         provider = codexbar_zai_fetch(config, &error);

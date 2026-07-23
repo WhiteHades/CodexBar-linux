@@ -254,3 +254,23 @@ case "$output" in
     exit 1
     ;;
 esac
+
+output=$(env -u CODEXBAR_BACKEND -u NEURALWATT_API_KEY -u NEURALWATT_API_URL CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider nw --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"neuralwatt","source":"api","error":{"message":"Missing Neuralwatt API key. Set apiKey in the CodexBar config file or NEURALWATT_API_KEY.","code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected native Neuralwatt missing-key output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider neural --source web --json 2>/dev/null || true)
+case "$output" in
+  '[{"provider":"neuralwatt","source":"web","error":{"message":"Source '\''web'\'' is not supported for neuralwatt.","code":1,"kind":"provider"}}]') ;;
+  *)
+    printf 'unexpected native Neuralwatt web-source output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac

@@ -236,11 +236,16 @@ static int draw_provider_cost(int y, int x, int width, const CodexBarProviderCos
     GString *summary = g_string_new(NULL);
     char *used = format_money(cost->used, cost->currency);
     char *limit = format_money(cost->limit, cost->currency);
-    g_string_append_printf(summary, "%s  %s", cost->limit > 0 ? "Extra usage" : "API spend", used);
+    gboolean prepaid_balance = cost->period && g_str_equal(cost->period, "Neuralwatt prepaid balance");
+    g_string_append_printf(summary,
+                           "%s  %s%s",
+                           prepaid_balance ? "Pay-as-you-go" : cost->limit > 0 ? "Extra usage" : "API spend",
+                           prepaid_balance ? "Balance: " : "",
+                           used);
     if (cost->limit > 0) g_string_append_printf(summary, " / %s", limit);
     g_free(used);
     g_free(limit);
-    if (cost->period) g_string_append_printf(summary, " · %s", cost->period);
+    if (cost->period && !prepaid_balance) g_string_append_printf(summary, " · %s", cost->period);
     draw_text(y++, x, width, summary->str);
     g_string_free(summary, TRUE);
     if (cost->has_personal_used) {

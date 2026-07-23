@@ -3,6 +3,7 @@
 #include "aiand.h"
 #include "backend.h"
 #include "model.h"
+#include "neuralwatt.h"
 #include "version.h"
 
 #include <glib.h>
@@ -119,10 +120,14 @@ static json_object *auth_summary(const CodexBarProviderDescriptor *descriptor,
                                  const CodexBarProviderConfig *config,
                                  const CodexBarProvider *provider) {
     json_object *modes = json_object_new_array();
-    gboolean api = g_str_equal(descriptor->id, "aiand")
-                       ? codexbar_aiand_has_api_key(config)
-                       : config && (valid_api_credential(config->api_key) ||
-                                    valid_api_credential(config->secret_key));
+    gboolean api = FALSE;
+    if (g_str_equal(descriptor->id, "aiand")) {
+        api = codexbar_aiand_has_api_key(config);
+    } else if (g_str_equal(descriptor->id, "neuralwatt")) {
+        api = codexbar_neuralwatt_has_api_key(config);
+    } else {
+        api = config && (valid_api_credential(config->api_key) || valid_api_credential(config->secret_key));
+    }
     if (g_str_equal(descriptor->id, "bedrock")) {
         api = config && valid_api_credential(config->api_key) && valid_api_credential(config->secret_key);
     }
@@ -203,7 +208,9 @@ static json_object *diagnostic_window(const CodexBarQuotaWindow *window, const c
     add_optional_time(object, "resetsAt", window->has_resets_at, window->resets_at_ms);
     json_object_object_add(object,
                            "hasResetDescription",
-                           json_object_new_boolean(window->reset_description && window->reset_description[0] != '\0'));
+                           json_object_new_boolean((window->detail && window->detail[0] != '\0') ||
+                                                   (window->reset_description &&
+                                                    window->reset_description[0] != '\0')));
     if (!window->usage_known) json_object_object_add(object, "usageKnown", json_object_new_boolean(FALSE));
     return object;
 }
@@ -249,17 +256,26 @@ static json_object *usage_summary(const CodexBarProvider *provider) {
     json_object_object_add(object, "dataConfidence", json_object_new_string(confidence));
     json_object *windows = json_object_new_array();
     guint count = provider->quota_windows ? provider->quota_windows->len : 0;
+    guint extra_count = 0;
     for (guint index = 0; index < count; index++) {
         const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
-        const char *label = index == 0 ? "primary" : index == 1 ? "secondary" : index == 2 ? "tertiary" : "extra";
-        if (g_str_equal(window->id, "primary") || g_str_equal(window->id, "secondary") ||
-            g_str_equal(window->id, "tertiary")) {
-            label = window->id;
+        gboolean canonical = g_str_equal(window->id, "primary") || g_str_equal(window->id, "secondary") ||
+                             g_str_equal(window->id, "tertiary");
+        const char *extra_label = g_str_equal(provider->provider, "neuralwatt") &&
+                                          g_str_equal(window->id, "key-allowance")
+                                      ? "Key allowance"
+                                      : "extra";
+        const char *label = canonical ? window->id
+                            : provider->explicit_quota_slots
+                                ? extra_label
+                                : index == 0 ? "primary" : index == 1 ? "secondary" : index == 2 ? "tertiary" : "extra";
+        if ((provider->explicit_quota_slots && !canonical) || (!provider->explicit_quota_slots && index >= 3)) {
+            extra_count++;
         }
         json_object_array_add(windows, diagnostic_window(window, label));
     }
     json_object_object_add(object, "windows", windows);
-    json_object_object_add(object, "extraWindowCount", json_object_new_int64(count > 3 ? count - 3 : 0));
+    json_object_object_add(object, "extraWindowCount", json_object_new_int64(extra_count));
     json_object_object_add(object, "providerCostPresent", json_object_new_boolean(provider->provider_cost != NULL));
     json_object_object_add(object, "providerSpecificData", provider_specific_data(provider));
     return object;

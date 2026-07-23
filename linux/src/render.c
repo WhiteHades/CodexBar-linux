@@ -111,11 +111,16 @@ static void append_balance(GString *tooltip, const CodexBarBalance *balance) {
 static void append_provider_cost(GString *tooltip, const CodexBarProviderCost *cost) {
     char *used = format_money(cost->used, cost->currency);
     char *limit = format_money(cost->limit, cost->currency);
-    g_string_append_printf(tooltip, "\n  %s  %s", cost->limit > 0 ? "Extra usage" : "API spend", used);
+    gboolean prepaid_balance = cost->period && g_str_equal(cost->period, "Neuralwatt prepaid balance");
+    g_string_append_printf(tooltip,
+                           "\n  %s  %s%s",
+                           prepaid_balance ? "Pay-as-you-go" : cost->limit > 0 ? "Extra usage" : "API spend",
+                           prepaid_balance ? "Balance: " : "",
+                           used);
     if (cost->limit > 0) g_string_append_printf(tooltip, " / %s", limit);
     g_free(used);
     g_free(limit);
-    if (cost->period) g_string_append_printf(tooltip, " · %s", cost->period);
+    if (cost->period && !prepaid_balance) g_string_append_printf(tooltip, " · %s", cost->period);
     if (cost->has_personal_used) {
         char *personal = format_money(cost->personal_used, cost->currency);
         g_string_append_printf(tooltip, "\n              %s personal used", personal);
@@ -602,7 +607,9 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
         if (index > 0) g_string_append_c(text, '\n');
         g_string_append(text, provider->provider);
         if (provider->account) g_string_append_printf(text, " · %s", provider->account);
-        if (provider->plan) g_string_append_printf(text, " · %s", provider->plan);
+        const char *plan = provider->plan ? provider->plan
+                                          : provider->identity ? provider->identity->login_method : NULL;
+        if (plan) g_string_append_printf(text, " · %s", plan);
         if (provider->source) g_string_append_printf(text, " [%s]", provider->source);
         g_string_append_c(text, '\n');
         for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
@@ -624,9 +631,14 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
         }
         if (provider->provider_cost) {
             char *used = format_money(provider->provider_cost->used, provider->provider_cost->currency);
+            gboolean prepaid_balance = provider->provider_cost->period &&
+                                       g_str_equal(provider->provider_cost->period, "Neuralwatt prepaid balance");
             g_string_append_printf(text,
-                                   "  %s: %s",
-                                   provider->provider_cost->limit > 0 ? "Extra usage" : "API spend",
+                                   "  %s: %s%s",
+                                   prepaid_balance
+                                       ? "Pay-as-you-go"
+                                       : provider->provider_cost->limit > 0 ? "Extra usage" : "API spend",
+                                   prepaid_balance ? "Balance: " : "",
                                    used);
             g_free(used);
             if (provider->provider_cost->limit > 0) {
@@ -634,7 +646,7 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
                 g_string_append_printf(text, " / %s", limit);
                 g_free(limit);
             }
-            if (provider->provider_cost->period) {
+            if (provider->provider_cost->period && !prepaid_balance) {
                 g_string_append_printf(text, " · %s", provider->provider_cost->period);
             }
             g_string_append_c(text, '\n');

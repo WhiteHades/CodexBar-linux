@@ -168,14 +168,16 @@ static void add_quota_lines(GPtrArray *lines, const CodexBarQuotaWindow *window)
 }
 
 static char *provider_cost_text(const CodexBarProviderCost *cost) {
+    gboolean prepaid_balance = cost->period && g_str_equal(cost->period, "Neuralwatt prepaid balance");
     GString *text = g_string_new(NULL);
     g_string_printf(text,
-                    "%s: %.2f %s",
-                    cost->limit > 0 ? "Extra usage" : "API spend",
+                    "%s: %s%.2f %s",
+                    prepaid_balance ? "Pay-as-you-go" : cost->limit > 0 ? "Extra usage" : "API spend",
+                    prepaid_balance ? "Balance: " : "",
                     cost->used,
                     cost->currency);
     if (cost->limit > 0) g_string_append_printf(text, " / %.2f %s", cost->limit, cost->currency);
-    if (cost->period) g_string_append_printf(text, " · %s", cost->period);
+    if (cost->period && !prepaid_balance) g_string_append_printf(text, " · %s", cost->period);
     return g_string_free(text, FALSE);
 }
 
@@ -185,7 +187,9 @@ static GPtrArray *make_card(const CodexBarProvider *provider, gboolean include_c
 
     GString *heading = g_string_new(provider_name(provider));
     if (provider->source && provider->source[0] != '\0') g_string_append_printf(heading, " [%s]", provider->source);
-    if (provider->plan && provider->plan[0] != '\0') g_string_append_printf(heading, " PLAN %s", provider->plan);
+    const char *plan = provider->plan ? provider->plan
+                                      : provider->identity ? provider->identity->login_method : NULL;
+    if (plan && plan[0] != '\0') g_string_append_printf(heading, " PLAN %s", plan);
     card_line(lines, heading->str);
     g_string_free(heading, TRUE);
 
