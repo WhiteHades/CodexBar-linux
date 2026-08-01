@@ -1569,6 +1569,9 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("manus")->native_provider, ==, CODEXBAR_NATIVE_MANUS);
     g_assert_cmpint(codexbar_provider_registry_find("amp")->native_provider, ==, CODEXBAR_NATIVE_AMP);
     g_assert_cmpint(codexbar_provider_registry_find("t3-chat")->native_provider, ==, CODEXBAR_NATIVE_T3CHAT);
+    g_assert_cmpint(codexbar_provider_registry_find("sakana-ai")->native_provider, ==, CODEXBAR_NATIVE_SAKANA);
+    g_assert_cmpint(codexbar_provider_registry_find("abacus-ai")->native_provider, ==, CODEXBAR_NATIVE_ABACUS);
+    g_assert_cmpint(codexbar_provider_registry_find("mistral-ai")->native_provider, ==, CODEXBAR_NATIVE_MISTRAL);
     g_assert_cmpint(codexbar_provider_registry_find("litellm-proxy")->native_provider, ==, CODEXBAR_NATIVE_LITELLM);
     g_assert_cmpint(codexbar_provider_registry_find("sub-2-api")->native_provider, ==, CODEXBAR_NATIVE_SUB2API);
     g_assert_cmpint(codexbar_provider_registry_find("aws-bedrock")->native_provider, ==, CODEXBAR_NATIVE_BEDROCK);

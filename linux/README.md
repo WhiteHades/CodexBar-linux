@@ -47,7 +47,7 @@ the native engine currently owns Codex, OpenAI, Claude, ClinePass, Copilot, z.ai
 OpenCode Go, Kimi, OpenRouter, ClawRouter, LLM Proxy, DeepSeek, DeepInfra, ai&, Neuralwatt, Moonshot, ElevenLabs,
 Crof, Venice, ZenMux, Qwen Cloud, ZoomMate, xAI, Deepgram, Poe, Chutes, Synthetic, Warp, Groq, MiniMax, Alibaba,
 Doubao, Factory, Gemini, Ollama, Kiro, Augment, Antigravity, Cursor, OpenCode, Devin, Manus, Amp, T3 Chat,
-LiteLLM, sub2api, and AWS Bedrock. configure
+Sakana AI, Abacus AI, Mistral, LiteLLM, sub2api, and AWS Bedrock. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.
 
