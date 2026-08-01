@@ -1575,6 +1575,14 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("litellm-proxy")->native_provider, ==, CODEXBAR_NATIVE_LITELLM);
     g_assert_cmpint(codexbar_provider_registry_find("sub-2-api")->native_provider, ==, CODEXBAR_NATIVE_SUB2API);
     g_assert_cmpint(codexbar_provider_registry_find("aws-bedrock")->native_provider, ==, CODEXBAR_NATIVE_BEDROCK);
+    g_assert_cmpint(codexbar_provider_registry_find("command-code")->native_provider,
+                    ==,
+                    CODEXBAR_NATIVE_COMMANDCODE);
+    g_assert_cmpint(codexbar_provider_registry_find("qoder")->native_provider, ==, CODEXBAR_NATIVE_QODER);
+    g_assert_cmpint(codexbar_provider_registry_find("perplexity")->native_provider,
+                    ==,
+                    CODEXBAR_NATIVE_PERPLEXITY);
+    g_assert_cmpint(codexbar_provider_registry_find("long-cat")->native_provider, ==, CODEXBAR_NATIVE_LONGCAT);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }
