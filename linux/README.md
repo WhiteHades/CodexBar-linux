@@ -47,7 +47,7 @@ OpenCode Go, Kimi, OpenRouter, ClawRouter, LLM Proxy, DeepSeek, DeepInfra, ai&, 
 Crof, Venice, ZenMux, Qwen Cloud, ZoomMate, xAI, Deepgram, Poe, Chutes, Synthetic, Warp, Groq, MiniMax, Alibaba,
 Doubao, Factory, Gemini, Ollama, Kiro, Augment, Antigravity, Cursor, OpenCode, Devin, Manus, Amp, T3 Chat,
 Sakana AI, Abacus AI, Mistral, Command Code, Qoder, Perplexity, LongCat, Alibaba Token Plan, Xiaomi MiMo, Zed,
-Vertex AI, Windsurf, Grok, LiteLLM,
+Vertex AI, Windsurf, Grok, StepFun, LiteLLM,
 sub2api, and AWS Bedrock. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.

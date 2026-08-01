@@ -57,7 +57,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"venice", "Venice", "venice", "ven", A | P, FALSE, "https://venice.ai/settings/api", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"commandcode", "Command Code", "commandcode", "command-code", A | W, FALSE, "https://commandcode.ai/studio", NULL, CODEXBAR_NATIVE_COMMANDCODE},
     {"qoder", "Qoder", "qoder", NULL, A | W, FALSE, "https://qoder.com/account/usage", NULL, CODEXBAR_NATIVE_QODER},
-    {"stepfun", "StepFun", "stepfun", "step-fun,sf", A | W, FALSE, "https://platform.stepfun.com/plan-usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"stepfun", "StepFun", "stepfun", "step-fun,sf", A | W, FALSE, "https://platform.stepfun.com/plan-usage", NULL, CODEXBAR_NATIVE_STEPFUN},
     {"bedrock", "AWS Bedrock", "bedrock", "aws-bedrock", A | P, FALSE, "https://console.aws.amazon.com/bedrock", "https://health.aws.amazon.com/health/status", CODEXBAR_NATIVE_BEDROCK},
     {"grok", "Grok", "grok", NULL, A | C | W, FALSE, "https://grok.com/?_s=usage", "https://status.x.ai", CODEXBAR_NATIVE_GROK},
     {"groq", "Groq", "groqcloud", "groq,groq-api", A | W | P, FALSE, "https://console.groq.com/dashboard/usage", "https://status.groq.com", CODEXBAR_NATIVE_GROQ},

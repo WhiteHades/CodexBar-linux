@@ -28,6 +28,7 @@
 #include "proxy_providers.h"
 #include "qwen_cloud.h"
 #include "simple_providers.h"
+#include "stepfun.h"
 #include "vertex.h"
 #include "wayfinder.h"
 #include "web_providers.h"
@@ -200,6 +201,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN:
     case CODEXBAR_NATIVE_MIMO:
     case CODEXBAR_NATIVE_WINDSURF:
+    case CODEXBAR_NATIVE_STEPFUN:
         native_source = "web";
         break;
     case CODEXBAR_NATIVE_COPILOT:
@@ -421,6 +423,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_GROK:
         provider = codexbar_grok_fetch_with_cancellable(config, configured_source, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_STEPFUN:
+        provider = codexbar_stepfun_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_LITELLM:
         provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);

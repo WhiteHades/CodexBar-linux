@@ -58,6 +58,7 @@ core_sources = files(
   'src/sessions.c',
   'src/serve.c',
   'src/simple_providers.c',
+  'src/stepfun.c',
   'src/tui_actions.c',
   'src/vertex.c',
   'src/wayfinder.c',
@@ -349,6 +350,14 @@ grok_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-grok', grok_test, env: normalized_test_env, depends: process_supervisor)
+
+stepfun_test = executable(
+  'codexbar-linux-stepfun-tests',
+  files('tests/test_stepfun.c', 'src/stepfun.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-stepfun', stepfun_test, env: normalized_test_env)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',
