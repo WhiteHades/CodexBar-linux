@@ -35,6 +35,7 @@
 #include "web_providers5.h"
 #include "xai.h"
 #include "zai.h"
+#include "zed.h"
 #include "zoommate.h"
 
 #include <gio/gio.h>
@@ -226,6 +227,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_LITELLM:
     case CODEXBAR_NATIVE_SUB2API:
     case CODEXBAR_NATIVE_BEDROCK:
+    case CODEXBAR_NATIVE_ZED:
         native_source = "api";
         break;
     case CODEXBAR_NATIVE_KILO:
@@ -401,6 +403,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_MIMO:
         provider = codexbar_mimo_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_ZED:
+        provider = codexbar_zed_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_LITELLM:
         provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);
