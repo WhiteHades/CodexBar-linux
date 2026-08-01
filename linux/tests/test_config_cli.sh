@@ -88,15 +88,15 @@ case "$output" in
 esac
 
 cat >"$config" <<'EOF'
-{"version":1,"providers":[{"id":"zai","apiKey":"fixture-api","secretKey":"fixture-secret","cookieHeader":"fixture-cookie","oauthToken":"fixture-oauth","tokenAccounts":{"version":1,"accounts":[{"id":"account-1","token":"fixture-token"}],"activeIndex":0}}]}
+{"version":1,"providers":[{"id":"zai","apiKey":"fixture-api","secretKey":"fixture-secret","cookieHeader":"fixture-cookie","oauthToken":"fixture-oauth","bearerToken":"fixture-bearer","tokenAccounts":{"version":1,"accounts":[{"id":"account-1","token":"fixture-token"}],"activeIndex":0}}]}
 EOF
 output=$(CODEXBAR_CONFIG="$config" "$binary" config dump)
 case "$output" in
-  *'fixture-api'*|*'fixture-secret'*|*'fixture-cookie'*|*'fixture-oauth'*|*'fixture-token'*)
+  *'fixture-api'*|*'fixture-secret'*|*'fixture-cookie'*|*'fixture-oauth'*|*'fixture-bearer'*|*'fixture-token'*)
     printf 'default config dump exposed nested credentials\n' >&2
     exit 1
     ;;
-  *'"apiKey":"[REDACTED]"'*'"secretKey":"[REDACTED]"'*'"cookieHeader":"[REDACTED]"'*'"oauthToken":"[REDACTED]"'*'"token":"[REDACTED]"'*) ;;
+  *'"apiKey":"[REDACTED]"'*'"secretKey":"[REDACTED]"'*'"cookieHeader":"[REDACTED]"'*'"oauthToken":"[REDACTED]"'*'"bearerToken":"[REDACTED]"'*'"token":"[REDACTED]"'*) ;;
   *)
     printf 'default config dump did not redact all credential fields\n' >&2
     exit 1
@@ -104,7 +104,7 @@ case "$output" in
 esac
 output=$(CODEXBAR_CONFIG="$config" "$binary" config dump --show-secrets)
 case "$output" in
-  *'fixture-api'*'fixture-secret'*'fixture-cookie'*'fixture-oauth'*'fixture-token'*) ;;
+  *'fixture-api'*'fixture-secret'*'fixture-cookie'*'fixture-oauth'*'fixture-bearer'*'fixture-token'*) ;;
   *)
     printf 'show-secrets config dump did not preserve nested credentials\n' >&2
     exit 1

@@ -27,6 +27,7 @@
 #include "qwen_cloud.h"
 #include "simple_providers.h"
 #include "wayfinder.h"
+#include "web_providers.h"
 #include "xai.h"
 #include "zai.h"
 #include "zoommate.h"
@@ -174,6 +175,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_QWEN_CLOUD:
     case CODEXBAR_NATIVE_ZOOMMATE:
+    case CODEXBAR_NATIVE_CURSOR:
+    case CODEXBAR_NATIVE_OPENCODE:
+    case CODEXBAR_NATIVE_DEVIN:
         native_source = "web";
         break;
     case CODEXBAR_NATIVE_COPILOT:
@@ -332,6 +336,15 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_ANTIGRAVITY:
         provider = codexbar_antigravity_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_CURSOR:
+        provider = codexbar_cursor_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_OPENCODE:
+        provider = codexbar_opencode_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_DEVIN:
+        provider = codexbar_devin_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_OPENROUTER:
         provider = codexbar_openrouter_fetch(config, &error);

@@ -59,6 +59,7 @@ core_sources = files(
   'src/simple_providers.c',
   'src/tui_actions.c',
   'src/wayfinder.c',
+  'src/web_providers.c',
   'src/xai.c',
   'src/zai.c',
   'src/zoommate.c',
@@ -250,6 +251,14 @@ local_providers_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-local-providers', local_providers_test, env: normalized_test_env, depends: process_supervisor)
+
+web_providers_test = executable(
+  'codexbar-linux-web-providers-tests',
+  files('tests/test_web_providers.c', 'src/web_providers.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-web-providers', web_providers_test, env: normalized_test_env)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',

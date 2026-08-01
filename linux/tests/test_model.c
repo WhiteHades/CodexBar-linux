@@ -1563,6 +1563,9 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("antigravity")->native_provider,
                     ==,
                     CODEXBAR_NATIVE_ANTIGRAVITY);
+    g_assert_cmpint(codexbar_provider_registry_find("cursor")->native_provider, ==, CODEXBAR_NATIVE_CURSOR);
+    g_assert_cmpint(codexbar_provider_registry_find("opencode")->native_provider, ==, CODEXBAR_NATIVE_OPENCODE);
+    g_assert_cmpint(codexbar_provider_registry_find("devin")->native_provider, ==, CODEXBAR_NATIVE_DEVIN);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }

@@ -98,6 +98,7 @@ static void redact_provider_secrets(json_object *provider) {
     redact_string_member(provider, "secretKey");
     redact_string_member(provider, "cookieHeader");
     redact_string_member(provider, "oauthToken");
+    redact_string_member(provider, "bearerToken");
 
     json_object *token_accounts = NULL;
     json_object *accounts = NULL;
