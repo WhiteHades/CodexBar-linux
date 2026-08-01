@@ -96,11 +96,28 @@ static void redact_string_member(json_object *object, const char *key) {
 }
 
 static void redact_provider_secrets(json_object *provider) {
-    redact_string_member(provider, "apiKey");
-    redact_string_member(provider, "secretKey");
-    redact_string_member(provider, "cookieHeader");
-    redact_string_member(provider, "oauthToken");
-    redact_string_member(provider, "bearerToken");
+    static const char *const secret_fields[] = {
+        "apiKey",
+        "secretKey",
+        "cookieHeader",
+        "oauthToken",
+        "bearerToken",
+        "manualToken",
+        "token",
+        "password",
+        "accessToken",
+        "refreshToken",
+        "session",
+        "sessionToken",
+        "auth1Token",
+        "devin_session_token",
+        "devinSessionToken",
+        "devin_auth1_token",
+        "devinAuth1Token",
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(secret_fields); index++) {
+        redact_string_member(provider, secret_fields[index]);
+    }
 
     json_object *token_accounts = NULL;
     json_object *accounts = NULL;

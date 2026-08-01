@@ -121,6 +121,36 @@ case "$output" in
     ;;
 esac
 
+cat >"$config" <<'JSON'
+{"version":1,"providers":[
+{"id":"stepfun","manualToken":"manual-secret","token":"token-secret","password":"password-secret"},
+{"id":"grok","accessToken":"access-secret"},
+{"id":"windsurf","session":"bundle-secret","sessionToken":"session-secret","auth1Token":"auth-secret",
+"devin_session_token":"snake-session-secret","devinSessionToken":"camel-session-secret",
+"devin_auth1_token":"snake-auth-secret","devinAuth1Token":"camel-auth-secret"}
+]}
+JSON
+output=$(CODEXBAR_CONFIG="$config" "$binary" config dump)
+case "$output" in
+  *manual-secret*|*token-secret*|*password-secret*|*access-secret*|*bundle-secret*|*session-secret*|*auth-secret*)
+    printf 'default config dump exposed provider-specific credentials\n' >&2
+    exit 1
+    ;;
+esac
+redacted_count=$(printf '%s' "$output" | grep -o '\[REDACTED\]' | wc -l)
+[ "$redacted_count" -eq 11 ] || {
+  printf 'default config dump did not redact every provider-specific credential\n' >&2
+  exit 1
+}
+output=$(CODEXBAR_CONFIG="$config" "$binary" config dump --show-secrets)
+case "$output" in
+  *manual-secret*token-secret*password-secret*access-secret*bundle-secret*session-secret*auth-secret*) ;;
+  *)
+    printf 'show-secrets config dump did not preserve provider-specific credentials\n' >&2
+    exit 1
+    ;;
+esac
+
 cat >"$config" <<'EOF'
 {"version":1,"providers":[{"id":"zai","apiKey":"fixture-api","secretKey":"fixture-secret","cookieHeader":"fixture-cookie","oauthToken":"fixture-oauth","bearerToken":"fixture-bearer","tokenAccounts":{"version":1,"accounts":[{"id":"account-1","token":"fixture-token"}],"activeIndex":0}}]}
 EOF

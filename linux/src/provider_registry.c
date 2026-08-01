@@ -128,13 +128,30 @@ gboolean codexbar_provider_supports_source(const CodexBarProviderDescriptor *pro
     return mode != 0 && (provider->source_modes & mode) != 0;
 }
 
-gboolean codexbar_provider_status_is_pollable(const CodexBarProviderDescriptor *provider) {
-    if (!provider) return FALSE;
-    const char *pollable[] = {"codex", "openai", "claude", "cursor", "factory", "copilot", "augment"};
-    for (guint index = 0; index < G_N_ELEMENTS(pollable); index++) {
-        if (g_str_equal(provider->id, pollable[index])) return TRUE;
+CodexBarProviderStatusSource codexbar_provider_status_source(const CodexBarProviderDescriptor *provider) {
+    if (!provider) return CODEXBAR_PROVIDER_STATUS_NONE;
+    const char *statuspage[] = {
+        "codex", "openai", "claude", "cursor", "factory", "copilot", "augment", "zoommate"};
+    for (guint index = 0; index < G_N_ELEMENTS(statuspage); index++) {
+        if (g_str_equal(provider->id, statuspage[index])) return CODEXBAR_PROVIDER_STATUS_STATUSPAGE;
     }
-    return FALSE;
+    if (g_str_equal(provider->id, "gemini") || g_str_equal(provider->id, "antigravity")) {
+        return CODEXBAR_PROVIDER_STATUS_GOOGLE_WORKSPACE;
+    }
+    return CODEXBAR_PROVIDER_STATUS_NONE;
+}
+
+const char *codexbar_provider_status_source_value(const CodexBarProviderDescriptor *provider) {
+    switch (codexbar_provider_status_source(provider)) {
+    case CODEXBAR_PROVIDER_STATUS_STATUSPAGE: return provider->status_url;
+    case CODEXBAR_PROVIDER_STATUS_GOOGLE_WORKSPACE: return "npdyhgECDJ6tB66MxXyo";
+    case CODEXBAR_PROVIDER_STATUS_NONE: return NULL;
+    }
+    return NULL;
+}
+
+gboolean codexbar_provider_status_is_pollable(const CodexBarProviderDescriptor *provider) {
+    return codexbar_provider_status_source(provider) != CODEXBAR_PROVIDER_STATUS_NONE;
 }
 
 gboolean codexbar_provider_supports_config_api_key(const CodexBarProviderDescriptor *provider) {

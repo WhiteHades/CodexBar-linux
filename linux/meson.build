@@ -42,6 +42,7 @@ core_sources = files(
   'src/diagnose.c',
   'src/desktop.c',
   'src/http.c',
+  'src/hooks.c',
   'src/jetbrains.c',
   'src/kilo.c',
   'src/kimi.c',
@@ -62,8 +63,10 @@ core_sources = files(
   'src/sessions.c',
   'src/serve.c',
   'src/simple_providers.c',
+  'src/status.c',
   'src/stepfun.c',
   'src/token_accounts.c',
+  'src/transitions.c',
   'src/tui_actions.c',
   'src/vertex.c',
   'src/wayfinder.c',
@@ -123,6 +126,22 @@ refresh_test = executable(
   dependencies: [glib_dep],
 )
 test('codexbar-linux-refresh', refresh_test, env: normalized_test_env)
+
+status_test = executable(
+  'codexbar-linux-status-tests',
+  files('tests/test_status.c', 'src/status.c', 'src/http.c', 'src/model.c', 'src/provider_registry.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep, json_dep, curl_dep, math_dep],
+)
+test('codexbar-linux-status', status_test, env: normalized_test_env)
+
+transitions_test = executable(
+  'codexbar-linux-transitions-tests',
+  files('tests/test_transitions.c', 'src/transitions.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep],
+)
+test('codexbar-linux-transitions', transitions_test, env: normalized_test_env)
 
 managed_codex_test = executable(
   'codexbar-linux-managed-codex-tests',
@@ -507,6 +526,14 @@ test(
   args: [codexbar_linux],
   depends: process_supervisor,
 )
+
+hooks_test = executable(
+  'codexbar-linux-hooks-tests',
+  files('tests/test_hooks.c', 'src/hooks.c', 'src/process.c', 'src/provider_registry.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep, json_dep, math_dep],
+)
+test('codexbar-linux-hooks', hooks_test, env: normalized_test_env, depends: process_supervisor)
 
 serve_cli_test = find_program('tests/test_serve_cli.sh')
 test(

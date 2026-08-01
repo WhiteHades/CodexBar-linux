@@ -46,7 +46,7 @@ fi
 
 output=$(CODEXBAR_CONFIG="$config" "$binary" hooks test quota_low --provider codex --json)
 case "$output" in
-  *'"ruleID":"cat-rule"'*'"success":true'*'\"event\":\"quota_low\"'*'\"usagePercent\":1.0'*'\"window\":\"session\"'*) ;;
+  *'"ruleID":"cat-rule"'*'"success":true'*'\"event\":\"quota_low\"'*'\"account\":\"test@example.com\"'*'\"usagePercent\":1.0'*'\"window\":\"session\"'*'\"used\":1.0'*'\"limit\":1.0'*'\"resetAt\"'*) ;;
   *) printf 'unexpected hook test output: %s\n' "$output" >&2; exit 1 ;;
 esac
 
@@ -77,7 +77,7 @@ output=$(OPENAI_API_KEY=private-marker CODEXBAR_CONFIG="$config" \
   "$binary" hooks test refresh_failed --provider codex --json)
 case "$output" in
   *private-marker*) printf 'hook inherited provider secret\n' >&2; exit 1 ;;
-  *'CODEXBAR_EVENT=refresh_failed'*'CODEXBAR_PROVIDER=codex'*) ;;
+  *'CODEXBAR_EVENT=refresh_failed'*'CODEXBAR_PROVIDER=codex'*'CODEXBAR_ACCOUNT=test@example.com'*) ;;
   *) printf 'hook event environment missing: %s\n' "$output" >&2; exit 1 ;;
 esac
 

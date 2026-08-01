@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include "hooks.h"
 #include "provider_registry.h"
 #include "token_accounts.h"
 
@@ -464,13 +465,6 @@ static gboolean hook_string(json_object *object, const char *key, const char **v
 }
 
 static void validate_hooks(const CodexBarConfig *config, GPtrArray *issues) {
-    enum {
-        MAX_RULES = 32,
-        MAX_ID_BYTES = 128,
-        MAX_ARGUMENTS = 32,
-        MAX_STRING_BYTES = 4096,
-        MAX_COMMAND_BYTES = 32 * 1024,
-    };
     json_object *hooks = NULL;
     if (!config->raw || !json_object_object_get_ex(config->raw, "hooks", &hooks)) return;
     if (!json_object_is_type(hooks, json_type_object)) {
@@ -484,18 +478,16 @@ static void validate_hooks(const CodexBarConfig *config, GPtrArray *issues) {
         return;
     }
     size_t count = json_object_array_length(events);
-    if (count > MAX_RULES) {
+    if (count > CODEXBAR_MAX_HOOK_RULES) {
         add_issue(issues,
                   TRUE,
                   NULL,
                   "hooks.events",
                   "too_many_hook_rules",
                   "Hooks support at most %d rules.",
-                  MAX_RULES);
+                  CODEXBAR_MAX_HOOK_RULES);
     }
     GHashTable *ids = g_hash_table_new(g_str_hash, g_str_equal);
-    const char *valid_events =
-        "quota_low,quota_reached,quota_reset,provider_unavailable,provider_recovered,refresh_failed";
     for (size_t index = 0; index < count; index++) {
         json_object *rule = json_object_array_get_idx(events, index);
         char *field = g_strdup_printf("hooks.events[%zu]", index);
@@ -508,7 +500,8 @@ static void validate_hooks(const CodexBarConfig *config, GPtrArray *issues) {
         size_t id_length = 0;
         json_object *id_value = NULL;
         if (json_object_object_get_ex(rule, "id", &id_value)) {
-            if (!hook_string(rule, "id", &id, &id_length) || id_length == 0 || id_length > MAX_ID_BYTES) {
+            if (!hook_string(rule, "id", &id, &id_length) || id_length == 0 ||
+                id_length > CODEXBAR_MAX_HOOK_ID_BYTES) {
                 add_issue(issues,
                           TRUE,
                           NULL,
@@ -524,7 +517,7 @@ static void validate_hooks(const CodexBarConfig *config, GPtrArray *issues) {
         const char *event = NULL;
         size_t unused = 0;
         char *event_field = g_strdup_printf("%s.event", field);
-        if (!hook_string(rule, "event", &event, &unused) || !value_in_csv(valid_events, event)) {
+        if (!hook_string(rule, "event", &event, &unused) || !codexbar_hook_event_is_known(event)) {
             add_issue(issues, TRUE, NULL, event_field, "invalid_hook_event", "Hook event is not recognized.");
         }
         g_free(event_field);
@@ -532,7 +525,7 @@ static void validate_hooks(const CodexBarConfig *config, GPtrArray *issues) {
         size_t executable_length = 0;
         char *executable_field = g_strdup_printf("%s.executable", field);
         if (!hook_string(rule, "executable", &executable, &executable_length) || executable_length == 0 ||
-            executable_length > MAX_STRING_BYTES || !g_path_is_absolute(executable)) {
+            executable_length > CODEXBAR_MAX_HOOK_STRING_BYTES || !g_path_is_absolute(executable)) {
             add_issue(issues,
                       TRUE,
                       NULL,
@@ -599,22 +592,23 @@ static void validate_hooks(const CodexBarConfig *config, GPtrArray *issues) {
         gboolean invalid_shape = FALSE;
         if (json_object_object_get_ex(rule, "arguments", &arguments)) {
             invalid_shape = !json_object_is_type(arguments, json_type_array) ||
-                            json_object_array_length(arguments) > MAX_ARGUMENTS;
+                            json_object_array_length(arguments) > CODEXBAR_MAX_HOOK_ARGUMENTS;
             for (size_t argument_index = 0;
                  !invalid_shape && argument_index < json_object_array_length(arguments);
                  argument_index++) {
                 json_object *argument = json_object_array_get_idx(arguments, argument_index);
                 size_t length = json_object_is_type(argument, json_type_string)
                                     ? (size_t)json_object_get_string_len(argument)
-                                    : MAX_STRING_BYTES + 1;
-                invalid_shape = length > MAX_STRING_BYTES ||
+                                    : CODEXBAR_MAX_HOOK_STRING_BYTES + 1;
+                invalid_shape = length > CODEXBAR_MAX_HOOK_STRING_BYTES ||
                                 (json_object_is_type(argument, json_type_string) &&
                                  strlen(json_object_get_string(argument)) != length) ||
-                                length > MAX_COMMAND_BYTES - MIN((size_t)MAX_COMMAND_BYTES, command_bytes);
-                command_bytes += MIN(length, (size_t)MAX_COMMAND_BYTES);
+                                length > CODEXBAR_MAX_HOOK_COMMAND_BYTES -
+                                             MIN((size_t)CODEXBAR_MAX_HOOK_COMMAND_BYTES, command_bytes);
+                command_bytes += MIN(length, (size_t)CODEXBAR_MAX_HOOK_COMMAND_BYTES);
             }
         }
-        if (invalid_shape || command_bytes > MAX_COMMAND_BYTES) {
+        if (invalid_shape || command_bytes > CODEXBAR_MAX_HOOK_COMMAND_BYTES) {
             add_issue(issues,
                       TRUE,
                       NULL,
