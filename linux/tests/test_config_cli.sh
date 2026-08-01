@@ -65,9 +65,48 @@ output=$(CODEXBAR_CONFIG="$config" "$binary" config validate)
 
 output=$(CODEXBAR_CONFIG="$config" "$binary" config dump)
 case "$output" in
+  *'"version":1'*'"id":"openrouter"'*'"apiKey":"[REDACTED]"'*) ;;
+  *)
+    printf 'unexpected redacted config dump\n' >&2
+    exit 1
+    ;;
+esac
+case "$output" in
+  *'secret-value'*)
+    printf 'default config dump exposed API key\n' >&2
+    exit 1
+    ;;
+esac
+
+output=$(CODEXBAR_CONFIG="$config" "$binary" config dump --show-secrets)
+case "$output" in
   *'"version":1'*'"id":"openrouter"'*'"apiKey":"secret-value"'*) ;;
   *)
-    printf 'unexpected config dump\n' >&2
+    printf 'show-secrets config dump did not include API key\n' >&2
+    exit 1
+    ;;
+esac
+
+cat >"$config" <<'EOF'
+{"version":1,"providers":[{"id":"zai","apiKey":"fixture-api","secretKey":"fixture-secret","cookieHeader":"fixture-cookie","tokenAccounts":{"version":1,"accounts":[{"id":"account-1","token":"fixture-token"}],"activeIndex":0}}]}
+EOF
+output=$(CODEXBAR_CONFIG="$config" "$binary" config dump)
+case "$output" in
+  *'fixture-api'*|*'fixture-secret'*|*'fixture-cookie'*|*'fixture-token'*)
+    printf 'default config dump exposed nested credentials\n' >&2
+    exit 1
+    ;;
+  *'"apiKey":"[REDACTED]"'*'"secretKey":"[REDACTED]"'*'"cookieHeader":"[REDACTED]"'*'"token":"[REDACTED]"'*) ;;
+  *)
+    printf 'default config dump did not redact all credential fields\n' >&2
+    exit 1
+    ;;
+esac
+output=$(CODEXBAR_CONFIG="$config" "$binary" config dump --show-secrets)
+case "$output" in
+  *'fixture-api'*'fixture-secret'*'fixture-cookie'*'fixture-token'*) ;;
+  *)
+    printf 'show-secrets config dump did not preserve nested credentials\n' >&2
     exit 1
     ;;
 esac

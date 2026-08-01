@@ -86,6 +86,53 @@ static CodexBarConfig *load_config_for_update(GError **error) {
     return codexbar_config_load_for_update(error);
 }
 
+static void redact_string_member(json_object *object, const char *key) {
+    json_object *value = NULL;
+    if (json_object_object_get_ex(object, key, &value) && !json_object_is_type(value, json_type_null)) {
+        json_object_object_add(object, key, json_object_new_string("[REDACTED]"));
+    }
+}
+
+static void redact_provider_secrets(json_object *provider) {
+    redact_string_member(provider, "apiKey");
+    redact_string_member(provider, "secretKey");
+    redact_string_member(provider, "cookieHeader");
+
+    json_object *token_accounts = NULL;
+    json_object *accounts = NULL;
+    if (!json_object_object_get_ex(provider, "tokenAccounts", &token_accounts) ||
+        !json_object_is_type(token_accounts, json_type_object) ||
+        !json_object_object_get_ex(token_accounts, "accounts", &accounts) ||
+        !json_object_is_type(accounts, json_type_array)) {
+        return;
+    }
+    for (size_t index = 0; index < json_object_array_length(accounts); index++) {
+        json_object *account = json_object_array_get_idx(accounts, index);
+        if (json_object_is_type(account, json_type_object)) redact_string_member(account, "token");
+    }
+}
+
+static char *redacted_config_json(char *json, gboolean pretty) {
+    json_object *root = json_tokener_parse(json);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        return json;
+    }
+    json_object *providers = NULL;
+    if (json_object_object_get_ex(root, "providers", &providers) &&
+        json_object_is_type(providers, json_type_array)) {
+        for (size_t index = 0; index < json_object_array_length(providers); index++) {
+            json_object *provider = json_object_array_get_idx(providers, index);
+            if (json_object_is_type(provider, json_type_object)) redact_provider_secrets(provider);
+        }
+    }
+    char *result = g_strdup(json_object_to_json_string_ext(
+        root, pretty ? JSON_C_TO_STRING_PRETTY : JSON_C_TO_STRING_PLAIN));
+    json_object_put(root);
+    g_free(json);
+    return result;
+}
+
 static int run_validate(int argc, char **argv) {
     const char *values[] = {"--format"};
     const char *flags[] = {"--json", "--json-only", "--pretty"};
@@ -143,7 +190,7 @@ static int run_validate(int argc, char **argv) {
 
 static int run_dump(int argc, char **argv) {
     const char *values[] = {"--format"};
-    const char *flags[] = {"--json", "--json-only", "--pretty"};
+    const char *flags[] = {"--json", "--json-only", "--pretty", "--show-secrets"};
     char *argument_error = validate_arguments(argc, argv, values, G_N_ELEMENTS(values), flags, G_N_ELEMENTS(flags));
     if (argument_error) {
         int result = print_message_error(argc, argv, argument_error);
@@ -153,7 +200,9 @@ static int run_dump(int argc, char **argv) {
     GError *error = NULL;
     CodexBarConfig *config = load_config(&error);
     if (!config) return print_error(argc, argv, error);
-    char *json = codexbar_config_render_json(config, has_flag(argc, argv, "--pretty"));
+    gboolean pretty = has_flag(argc, argv, "--pretty");
+    char *json = codexbar_config_render_json(config, pretty);
+    if (!has_flag(argc, argv, "--show-secrets")) json = redacted_config_json(json, pretty);
     puts(json);
     g_free(json);
     codexbar_config_free(config);
