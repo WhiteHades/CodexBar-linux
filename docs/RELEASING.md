@@ -6,20 +6,17 @@ Releases are Linux C23 artifacts for `x86_64` and `aarch64`.
 
 1. Fetch and audit upstream with `./Scripts/check-upstream.sh`.
 2. Update `UPSTREAM_REVISION`, the Meson project version, and `CHANGELOG.md` together.
-3. Run `make check` with GCC and Clang.
+3. Run `make check` with GCC and Clang locally.
 4. Run `make sanitize` with leak detection enabled.
 5. Run `make release` and stage an install with a non-system `DESTDIR`.
-6. Run `make package`; inspect the tar listing and validate its SHA-256 file.
+6. Run `make package` on x86-64 and aarch64 Linux hosts; inspect each tar listing and validate its SHA-256 file.
 7. Run the packaged binary’s `--version`, fixture-backed `usage`, and TUI/status-item smoke tests.
 
 ## Tag
 
-Use a signed or annotated `vMAJOR.MINOR.PATCH` tag that exactly matches `meson.build`. Push the verified commit, then
-the tag. Publishing a GitHub release triggers `.github/workflows/release.yml`, which builds both architectures,
-re-runs tests, packages the Meson install tree, verifies architecture/version/checksum, and uploads tarballs plus
-checksums.
-
-Manual workflow runs build artifacts without publishing them.
+Use a signed or annotated `vMAJOR.MINOR.PATCH` tag that exactly matches `meson.build`. Push the verified commit and tag,
+then create the GitHub release with the four locally verified x86-64/aarch64 archives and checksum files. GitHub
+Actions are not required for building, testing, packaging, or publishing a release.
 
 ## Artifact contract
 

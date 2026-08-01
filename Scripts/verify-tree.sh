@@ -20,10 +20,10 @@ if git ls-files | grep -E '(^|/)(build|build-[^/]*|\.build|\.tmp)/' >/dev/null; 
 fi
 
 if git grep -n -I -E 'CodexBar\.app|swift build|swift test|SwiftPM|Xcode|Sparkle|notari[sz]' -- \
-    .github Makefile meson.build linux >/dev/null; then
+    Makefile meson.build linux >/dev/null; then
     printf '%s\n' 'obsolete non-Linux build or release references remain' >&2
     git grep -n -I -E 'CodexBar\.app|swift build|swift test|SwiftPM|Xcode|Sparkle|notari[sz]' -- \
-        .github Makefile meson.build linux >&2
+        Makefile meson.build linux >&2
     exit 1
 fi
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.46.0 — 2026-08-01
+## 0.4.1 — 2026-08-01
 
 ### Added
 
@@ -16,8 +16,8 @@
 ### Changed
 
 - Replaced the inherited cross-platform repository with a focused Linux-only Meson project.
-- Replaced application-bundle, website, and non-Linux release tooling with native build, install, package, CI, and
-  release flows.
+- Replaced application-bundle, website, and non-Linux release tooling with native local build, install, package, and
+  verification flows.
 
 ### Removed
 
