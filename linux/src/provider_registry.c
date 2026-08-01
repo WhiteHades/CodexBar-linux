@@ -19,6 +19,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"opencodego", "OpenCode Go", "opencodego", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_OPENCODE_GO},
     {"alibaba", "Alibaba", "alibaba-coding-plan", "alibaba,bailian", A | W | P, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan#/efm/coding_plan", "https://status.aliyun.com", CODEXBAR_NATIVE_UNAVAILABLE},
     {"alibabatokenplan", "Alibaba Token Plan", "alibaba-token-plan", "alibaba-token,bailian-token-plan", A | W, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=plan#/efm/subscription/token-plan", "https://status.aliyun.com", CODEXBAR_NATIVE_UNAVAILABLE},
+    {"qwencloud", "Qwen Cloud", "qwen-cloud", "qwencloud,qwen,qwen-token-plan", A | W, FALSE, "https://home.qwencloud.com/billing/subscription/token-plan-individual", "https://status.alibabacloud.com", CODEXBAR_NATIVE_QWEN_CLOUD},
     {"factory", "Droid", "factory", NULL, A | P | W | C, FALSE, "https://app.factory.ai/settings/billing", "https://status.factory.ai", CODEXBAR_NATIVE_UNAVAILABLE},
     {"gemini", "Gemini", "gemini", NULL, A | P, FALSE, "https://gemini.google.com", "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_UNAVAILABLE},
     {"antigravity", "Antigravity", "antigravity", NULL, A | C | O, FALSE, NULL, "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_UNAVAILABLE},
@@ -72,6 +73,8 @@ static const CodexBarProviderDescriptor providers[] = {
     {"wayfinder", "Wayfinder", "wayfinder", "wayfinder-router", A | P, FALSE, "http://127.0.0.1:8088/router", NULL, CODEXBAR_NATIVE_WAYFINDER},
     {"zenmux", "ZenMux", "zenmux", "zen-mux", A | P, FALSE, "https://zenmux.ai/platform/management", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"aiand", "ai&", "aiand", "ai&,ai-and", A | P, FALSE, "https://console.aiand.com", NULL, CODEXBAR_NATIVE_AIAND},
+    {"zoommate", "ZoomMate", "zoommate", NULL, A | W, FALSE, "https://zoommate.zoom.us/#/?settings=credit-usage", "https://www.zoomstatus.com/", CODEXBAR_NATIVE_ZOOMMATE},
+    {"xai", "xAI", "xai", NULL, A | P, FALSE, "https://console.x.ai", "https://status.x.ai", CODEXBAR_NATIVE_XAI},
 };
 
 #undef A
@@ -142,7 +145,7 @@ gboolean codexbar_provider_supports_config_api_key(const CodexBarProviderDescrip
         "moonshot",  "kimi",      "ollama",      "venice",     "deepgram",   "groq",
         "llmproxy",  "chutes",    "poe",         "litellm",    "clawrouter", "factory",
         "sub2api",   "zenmux",    "copilot",     "warp",       "codebuff",   "crof",
-        "doubao",    "deepinfra", "neuralwatt",  "aiand",
+        "doubao",    "deepinfra", "neuralwatt",  "aiand",      "xai",
     };
     for (guint index = 0; index < G_N_ELEMENTS(supported); index++) {
         if (g_str_equal(provider->id, supported[index])) return TRUE;

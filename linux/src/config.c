@@ -446,7 +446,8 @@ static gboolean value_in_csv(const char *values, const char *value) {
 GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
     g_return_val_if_fail(config != NULL, NULL);
     GPtrArray *issues = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_config_issue_free);
-    const char *workspace_providers[] = {"azureopenai", "openai", "opencode", "opencodego", "devin", "deepgram"};
+    const char *workspace_providers[] = {
+        "azureopenai", "openai", "opencode", "opencodego", "devin", "deepgram", "xai"};
     const char *host_providers[] = {
         "azureopenai", "clawrouter", "copilot", "kimi", "litellm", "llmproxy", "sub2api", "wayfinder"};
     if (config->version != CODEXBAR_CONFIG_VERSION) {

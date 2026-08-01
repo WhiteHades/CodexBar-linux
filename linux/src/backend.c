@@ -19,9 +19,12 @@
 #include "process.h"
 #include "provider_registry.h"
 #include "proxy_providers.h"
+#include "qwen_cloud.h"
 #include "simple_providers.h"
 #include "wayfinder.h"
+#include "xai.h"
 #include "zai.h"
+#include "zoommate.h"
 
 #include <gio/gio.h>
 #include <string.h>
@@ -146,6 +149,10 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_OPENCODE_GO:
         native_source = "auto";
         break;
+    case CODEXBAR_NATIVE_QWEN_CLOUD:
+    case CODEXBAR_NATIVE_ZOOMMATE:
+        native_source = "web";
+        break;
     case CODEXBAR_NATIVE_COPILOT:
     case CODEXBAR_NATIVE_AZURE_OPENAI:
     case CODEXBAR_NATIVE_CLINEPASS:
@@ -160,6 +167,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_OPENROUTER:
     case CODEXBAR_NATIVE_PROXY:
     case CODEXBAR_NATIVE_SIMPLE:
+    case CODEXBAR_NATIVE_XAI:
         native_source = "api";
         break;
     case CODEXBAR_NATIVE_KILO:
@@ -235,6 +243,15 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_KIMI:
         provider = codexbar_kimi_fetch(config, &error);
+        break;
+    case CODEXBAR_NATIVE_QWEN_CLOUD:
+        provider = codexbar_qwen_cloud_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_ZOOMMATE:
+        provider = codexbar_zoommate_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_XAI:
+        provider = codexbar_xai_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_OPENROUTER:
         provider = codexbar_openrouter_fetch(config, &error);

@@ -39,11 +39,11 @@ aliases; `--provider both` selects Codex and Claude, while explicit `--provider 
 
 the native engine currently owns Codex, OpenAI, Claude, ClinePass, Copilot, z.ai, Kilo, Codebuff, JetBrains,
 OpenCode Go, Kimi, OpenRouter, ClawRouter, LLM Proxy, DeepSeek, DeepInfra, ai&, Neuralwatt, Moonshot, ElevenLabs,
-Crof, Venice, and ZenMux. configure
+Crof, Venice, ZenMux, Qwen Cloud, ZoomMate, and xAI. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.
 
-the native config commands normalize all 63 stable providers while preserving provider-specific fields that are not
+the native config commands normalize all 66 stable providers while preserving provider-specific fields that are not
 native yet. writes are atomic, reject concurrent changes, and keep the config file at mode `0600`.
 
 ```bash

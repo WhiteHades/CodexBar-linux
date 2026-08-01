@@ -44,13 +44,16 @@ core_sources = files(
   'src/process.c',
   'src/provider_registry.c',
   'src/proxy_providers.c',
+  'src/qwen_cloud.c',
   'src/render.c',
   'src/sessions.c',
   'src/serve.c',
   'src/simple_providers.c',
   'src/tui_actions.c',
   'src/wayfinder.c',
+  'src/xai.c',
   'src/zai.c',
+  'src/zoommate.c',
 )
 
 core_deps = [glib_dep, gio_dep, json_dep, curl_dep, sqlite_dep, math_dep]
@@ -200,6 +203,14 @@ aiand_test = executable(
 )
 test('codexbar-linux-aiand', aiand_test)
 
+xai_test = executable(
+  'codexbar-linux-xai-tests',
+  files('tests/test_xai.c', 'src/xai.c', 'src/http.c', 'src/model.c', 'src/render.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-xai', xai_test, env: normalized_test_env)
+
 neuralwatt_test = executable(
   'codexbar-linux-neuralwatt-tests',
   files('tests/test_neuralwatt.c', 'src/neuralwatt.c', 'src/http.c', 'src/model.c', 'src/render.c'),
@@ -239,6 +250,14 @@ zai_test = executable(
 )
 test('codexbar-linux-zai', zai_test)
 
+zoommate_test = executable(
+  'codexbar-linux-zoommate-tests',
+  files('tests/test_zoommate.c', 'src/zoommate.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-zoommate', zoommate_test, env: normalized_test_env)
+
 zai_cli_test = find_program('tests/test_zai_cli.sh')
 test('codexbar-linux-zai-cli', zai_cli_test, args: [codexbar_linux])
 
@@ -260,6 +279,14 @@ kilo_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-kilo', kilo_test)
+
+qwen_cloud_test = executable(
+  'codexbar-linux-qwen-cloud-tests',
+  files('tests/test_qwen_cloud.c', 'src/qwen_cloud.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-qwen-cloud', qwen_cloud_test, env: normalized_test_env)
 
 opencode_go_test = executable(
   'codexbar-linux-opencode-go-tests',

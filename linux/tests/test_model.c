@@ -1469,13 +1469,13 @@ static void test_codex_rate_limits(void) {
 static void test_provider_registry(void) {
     const char *expected_ids[] = {
         "codex", "openai", "azureopenai", "claude", "clinepass", "cursor", "opencode", "opencodego",
-        "alibaba", "alibabatokenplan", "factory", "gemini", "antigravity", "copilot", "devin", "zai",
+        "alibaba", "alibabatokenplan", "qwencloud", "factory", "gemini", "antigravity", "copilot", "devin", "zai",
         "minimax", "manus", "kimi", "kilo", "kiro", "vertexai", "augment", "jetbrains", "moonshot",
         "amp", "t3chat", "ollama", "synthetic", "warp", "openrouter", "elevenlabs", "windsurf", "zed",
         "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek", "deepinfra",
         "codebuff", "crof", "venice", "commandcode", "qoder", "stepfun", "bedrock", "grok", "groq",
         "llmproxy", "litellm", "deepgram", "poe", "chutes", "neuralwatt", "clawrouter", "longcat",
-        "sub2api", "wayfinder", "zenmux", "aiand",
+        "sub2api", "wayfinder", "zenmux", "aiand", "zoommate", "xai",
     };
     g_assert_cmpuint(codexbar_provider_registry_count(), ==, G_N_ELEMENTS(expected_ids));
     for (guint index = 0; index < G_N_ELEMENTS(expected_ids); index++) {
@@ -1538,6 +1538,12 @@ static void test_provider_registry(void) {
     g_assert_false(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("longcat")));
     g_assert_true(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("ai&")));
     g_assert_cmpint(codexbar_provider_registry_find("ai&")->native_provider, ==, CODEXBAR_NATIVE_AIAND);
+    g_assert_cmpint(codexbar_provider_registry_find("qwen")->native_provider, ==, CODEXBAR_NATIVE_QWEN_CLOUD);
+    g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("qwen"), "web"));
+    g_assert_cmpint(codexbar_provider_registry_find("zoommate")->native_provider, ==, CODEXBAR_NATIVE_ZOOMMATE);
+    g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("zoommate"), "web"));
+    g_assert_cmpint(codexbar_provider_registry_find("xai")->native_provider, ==, CODEXBAR_NATIVE_XAI);
+    g_assert_true(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("xai")));
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }
