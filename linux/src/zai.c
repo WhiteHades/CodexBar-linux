@@ -1,6 +1,7 @@
 #include "zai.h"
 
 #include "http.h"
+#include "token_accounts.h"
 
 #include <gio/gio.h>
 #include <json-c/json.h>
@@ -233,6 +234,10 @@ static char *string_member_copy(json_object *object, const char *name) {
     return text;
 }
 
+static char *config_string(const CodexBarProviderConfig *config, const char *name) {
+    return string_member_copy(config ? config->raw : NULL, name);
+}
+
 static char *plan_name(json_object *data) {
     static const char *const names[] = {"planName", "plan", "plan_type", "packageName", "level"};
     for (size_t index = 0; index < G_N_ELEMENTS(names); index++) {
@@ -385,21 +390,44 @@ static char *api_host_url(const char *raw, GError **error) {
 }
 
 char *codexbar_zai_quota_url(const CodexBarProviderConfig *config, GError **error) {
+    char *url = NULL;
     const char *quota_override = g_getenv("Z_AI_QUOTA_URL");
     if (quota_override && quota_override[0] != '\0') {
-        return codexbar_http_normalize_endpoint(quota_override, CODEXBAR_HTTP_HTTPS_ONLY, error);
+        url = codexbar_http_normalize_endpoint(quota_override, CODEXBAR_HTTP_HTTPS_ONLY, error);
+    } else {
+        const char *host_override = g_getenv("Z_AI_API_HOST");
+        if (host_override && host_override[0] != '\0') {
+            url = api_host_url(host_override, error);
+        } else {
+            url = g_strdup(config && g_strcmp0(config->region, "bigmodel-cn") == 0 ? ZAI_BIGMODEL_URL : ZAI_GLOBAL_URL);
+        }
     }
-    const char *host_override = g_getenv("Z_AI_API_HOST");
-    if (host_override && host_override[0] != '\0') {
-        return api_host_url(host_override, error);
+    if (!url) return NULL;
+    char *scope = config_string(config, "usageScope");
+    if (!scope || !g_str_equal(scope, "team")) {
+        g_free(scope);
+        return url;
     }
-    return g_strdup(config && g_strcmp0(config->region, "bigmodel-cn") == 0 ? ZAI_BIGMODEL_URL : ZAI_GLOBAL_URL);
+    g_free(scope);
+    GUri *uri = g_uri_parse(url, G_URI_FLAGS_NONE, error);
+    if (!uri) {
+        g_free(url);
+        return NULL;
+    }
+    char *team_url = g_uri_join(G_URI_FLAGS_NONE, g_uri_get_scheme(uri), g_uri_get_userinfo(uri),
+                                g_uri_get_host(uri), g_uri_get_port(uri), g_uri_get_path(uri), "type=2", NULL);
+    g_uri_unref(uri);
+    g_free(url);
+    return team_url;
 }
 
 CodexBarProvider *codexbar_zai_fetch(const CodexBarProviderConfig *config, GError **error) {
     const char *environment_token = g_getenv("Z_AI_API_KEY");
     const char *configured_token = config ? config->api_key : NULL;
-    const char *selected_token = environment_token && environment_token[0] != '\0' ? environment_token : configured_token;
+    const char *selected_token = codexbar_token_account_is_selected(config) && configured_token && configured_token[0]
+                                     ? configured_token
+                                     : environment_token && environment_token[0] != '\0' ? environment_token
+                                                                                          : configured_token;
     char *token = g_strdup(selected_token ? selected_token : "");
     g_strstrip(token);
     if (token[0] == '\0') {
@@ -418,21 +446,44 @@ CodexBarProvider *codexbar_zai_fetch(const CodexBarProviderConfig *config, GErro
     }
     char *authorization = g_strdup_printf("Bearer %s", token);
     g_free(token);
+    char *scope = config_string(config, "usageScope");
+    gboolean team = scope && g_str_equal(scope, "team");
+    char *organization = config_string(config, "organizationId");
+    char *project = config_string(config, "workspaceID");
+    if (!organization) organization = g_strdup(g_getenv("Z_AI_BIGMODEL_ORGANIZATION"));
+    if (!project) project = g_strdup(g_getenv("Z_AI_BIGMODEL_PROJECT"));
+    if (organization) g_strstrip(organization);
+    if (project) g_strstrip(project);
+    if (team && ((!organization || !organization[0]) || (!project || !project[0]))) {
+        g_free(scope);
+        g_free(organization);
+        g_free(project);
+        g_free(authorization);
+        g_free(url);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                            "Z.ai team usage requires organizationId and workspaceID");
+        return NULL;
+    }
     const CodexBarHttpRequestHeader headers[] = {
         {"Accept", "application/json"},
         {"Authorization", authorization},
+        {"Bigmodel-Organization", organization},
+        {"Bigmodel-Project", project},
     };
     const CodexBarHttpRequest request = {
         .url = url,
         .method = "GET",
         .headers = headers,
-        .header_count = G_N_ELEMENTS(headers),
+        .header_count = team ? G_N_ELEMENTS(headers) : 2,
         .timeout_seconds = ZAI_TIMEOUT_SECONDS,
         .maximum_response_bytes = ZAI_MAXIMUM_RESPONSE_BYTES,
         .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
         .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
     };
     CodexBarHttpResponse *response = codexbar_http_send(&request, error);
+    g_free(scope);
+    g_free(organization);
+    g_free(project);
     g_free(authorization);
     g_free(url);
     if (!response) {

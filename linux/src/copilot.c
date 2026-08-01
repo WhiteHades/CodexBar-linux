@@ -1,6 +1,7 @@
 #include "copilot.h"
 
 #include "http.h"
+#include "token_accounts.h"
 
 #include <errno.h>
 #include <gio/gio.h>
@@ -382,7 +383,10 @@ char *codexbar_copilot_usage_url(const char *enterprise_host, GError **error) {
 CodexBarProvider *codexbar_copilot_fetch(const CodexBarProviderConfig *config, GError **error) {
     const char *environment_token = g_getenv("COPILOT_API_TOKEN");
     const char *configured_token = config ? config->api_key : NULL;
-    const char *selected_token = environment_token && environment_token[0] != '\0' ? environment_token : configured_token;
+    const char *selected_token = codexbar_token_account_is_selected(config) && configured_token && configured_token[0]
+                                     ? configured_token
+                                     : environment_token && environment_token[0] != '\0' ? environment_token
+                                                                                          : configured_token;
     char *token = g_strdup(selected_token ? selected_token : "");
     g_strstrip(token);
     if (token[0] == '\0') {

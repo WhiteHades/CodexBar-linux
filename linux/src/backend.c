@@ -29,6 +29,7 @@
 #include "qwen_cloud.h"
 #include "simple_providers.h"
 #include "stepfun.h"
+#include "token_accounts.h"
 #include "vertex.h"
 #include "wayfinder.h"
 #include "web_providers.h"
@@ -560,80 +561,13 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     return result;
 }
 
-static gboolean provider_uses_cookie_accounts(const char *provider) {
-    static const char *const providers[] = {
-        "claude", "cursor", "opencode", "opencodego", "factory", "minimax", "manus", "windsurf",
-        "augment", "ollama", "abacus", "mistral", "qoder", "stepfun",
-    };
-    for (guint index = 0; index < G_N_ELEMENTS(providers); index++) {
-        if (g_str_equal(provider, providers[index])) return TRUE;
-    }
-    return FALSE;
-}
-
-static gboolean provider_supports_token_accounts(const char *provider) {
-    static const char *const providers[] = {
-        "openai",      "openrouter", "claude",     "deepseek", "deepinfra", "antigravity",
-        "zai",         "cursor",     "opencode",   "opencodego", "factory", "minimax",
-        "manus",       "augment",    "ollama",     "abacus",   "mistral",   "qoder",
-        "copilot",     "venice",     "elevenlabs", "neuralwatt", "groq",   "llmproxy",
-        "litellm",     "sub2api",    "stepfun",     "windsurf",
-    };
-    for (guint index = 0; index < G_N_ELEMENTS(providers); index++) {
-        if (g_str_equal(provider, providers[index])) return TRUE;
-    }
-    return FALSE;
-}
-
-static char *account_string(json_object *account, const char *key) {
-    json_object *value = NULL;
-    if (!account || !json_object_object_get_ex(account, key, &value) ||
-        !json_object_is_type(value, json_type_string)) {
-        return NULL;
-    }
-    const char *text = json_object_get_string(value);
-    size_t length = (size_t)json_object_get_string_len(value);
-    if (length == 0 || length > 65536 || memchr(text, '\0', length) || !g_utf8_validate(text, (gssize)length, NULL)) {
-        return NULL;
-    }
-    char *clean = g_strstrip(g_strdup(text));
-    if (clean[0] != '\0') return clean;
-    g_free(clean);
-    return NULL;
-}
-
-static gboolean account_token_is_safe(const char *token) {
-    for (const unsigned char *cursor = (const unsigned char *)token; *cursor; cursor++) {
-        if (g_ascii_iscntrl(*cursor)) return FALSE;
-    }
-    return TRUE;
-}
-
-static json_object *provider_token_accounts(const CodexBarProviderConfig *config, int *active_index) {
-    json_object *data = NULL;
-    json_object *accounts = NULL;
-    if (!config || !config->raw ||
-        !json_object_object_get_ex(config->raw, "tokenAccounts", &data) ||
-        !json_object_is_type(data, json_type_object) ||
-        !json_object_object_get_ex(data, "accounts", &accounts) ||
-        !json_object_is_type(accounts, json_type_array)) {
-        return NULL;
-    }
-    json_object *active = NULL;
-    *active_index = json_object_object_get_ex(data, "activeIndex", &active) &&
-                            json_object_is_type(active, json_type_int)
-                        ? json_object_get_int(active)
-                        : 0;
-    return accounts;
-}
-
 static CodexBarProvider *fetch_token_account(const CodexBarProviderConfig *stored,
                                              json_object *account,
                                              const char *source,
                                              GError **error) {
-    char *label = account_string(account, "label");
-    char *token = account_string(account, "token");
-    if (!label || !token || !account_token_is_safe(token)) {
+    char *label = codexbar_token_account_string(account, "label");
+    char *token = codexbar_token_account_string(account, "token");
+    if (!label || !token || !codexbar_token_account_token_is_safe(token)) {
         g_free(label);
         g_free(token);
         g_set_error_literal(error,
@@ -649,9 +583,19 @@ static CodexBarProvider *fetch_token_account(const CodexBarProviderConfig *store
     selected.raw = stored->raw ? json_tokener_parse(json_object_to_json_string_ext(stored->raw, JSON_C_TO_STRING_PLAIN))
                                : json_object_new_object();
     if (!selected.raw) selected.raw = json_object_new_object();
+    json_object_object_add(selected.raw, "tokenAccountSelected", json_object_new_boolean(TRUE));
 
     char *account_api_key = NULL;
-    if (provider_uses_cookie_accounts(stored->id)) {
+    char *usage_scope = codexbar_token_account_string(account, "usageScope");
+    char *organization_id = codexbar_token_account_string(account, "organizationId");
+    char *workspace_id = codexbar_token_account_string(account, "workspaceID");
+    if (usage_scope) json_object_object_add(selected.raw, "usageScope", json_object_new_string(usage_scope));
+    if (organization_id) {
+        json_object_object_add(selected.raw, "organizationId", json_object_new_string(organization_id));
+    }
+    if (workspace_id) json_object_object_add(selected.raw, "workspaceID", json_object_new_string(workspace_id));
+
+    if (codexbar_token_accounts_use_cookie(stored->id)) {
         char *cookie = NULL;
         if (g_str_equal(stored->id, "manus") && !strchr(token, '=') && !g_str_has_prefix(token, "Cookie:")) {
             cookie = g_strdup_printf("session_id=%s", token);
@@ -682,9 +626,40 @@ static CodexBarProvider *fetch_token_account(const CodexBarProviderConfig *store
     json_object_put(selected.raw);
     g_free(account_api_key);
     g_free(selected.source);
+    g_free(usage_scope);
+    g_free(organization_id);
+    g_free(workspace_id);
     g_free(token);
     g_free(label);
     return provider;
+}
+
+static void mark_token_account_used(const char *provider_id, json_object *selected_account) {
+    char *account_id = codexbar_token_account_string(selected_account, "id");
+    if (!account_id) return;
+    GError *error = NULL;
+    CodexBarConfig *config = codexbar_config_load_for_update(&error);
+    if (!config) {
+        g_clear_error(&error);
+        g_free(account_id);
+        return;
+    }
+    CodexBarProviderConfig *provider = codexbar_config_provider(config, provider_id);
+    int unused = 0;
+    json_object *accounts = codexbar_token_accounts_array(provider, &unused);
+    for (guint index = 0; accounts && index < json_object_array_length(accounts); index++) {
+        json_object *account = json_object_array_get_idx(accounts, index);
+        char *id = codexbar_token_account_string(account, "id");
+        gboolean match = id && g_str_equal(id, account_id);
+        g_free(id);
+        if (!match) continue;
+        json_object_object_add(account, "lastUsed", json_object_new_double((double)g_get_real_time() / G_USEC_PER_SEC));
+        codexbar_config_save(config, &error);
+        break;
+    }
+    codexbar_config_free(config);
+    g_clear_error(&error);
+    g_free(account_id);
 }
 
 CodexBarSnapshot *codexbar_backend_fetch_selected_accounts(const char *provider_name,
@@ -709,7 +684,7 @@ CodexBarSnapshot *codexbar_backend_fetch_selected_accounts(const char *provider_
                             NULL,
                             error);
     }
-    if (!provider_supports_token_accounts(descriptor->id)) {
+    if (!codexbar_token_accounts_supported(descriptor->id)) {
         g_set_error(error,
                     G_IO_ERROR,
                     G_IO_ERROR_NOT_SUPPORTED,
@@ -722,7 +697,7 @@ CodexBarSnapshot *codexbar_backend_fetch_selected_accounts(const char *provider_
     if (!config) return NULL;
     CodexBarProviderConfig *stored = codexbar_config_provider(config, descriptor->id);
     int active_index = 0;
-    json_object *accounts = provider_token_accounts(stored, &active_index);
+    json_object *accounts = codexbar_token_accounts_array(stored, &active_index);
     size_t count = accounts ? json_object_array_length(accounts) : 0;
     if (count == 0) {
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "No token accounts configured for %s.", descriptor->id);
@@ -735,7 +710,7 @@ CodexBarSnapshot *codexbar_backend_fetch_selected_accounts(const char *provider_
         for (size_t index = 0; index < count; index++) g_array_append_val(indices, index);
     } else if (account_label) {
         for (size_t index = 0; index < count; index++) {
-            char *label = account_string(json_object_array_get_idx(accounts, index), "label");
+            char *label = codexbar_token_account_string(json_object_array_get_idx(accounts, index), "label");
             gboolean matches = label && g_ascii_strcasecmp(label, account_label) == 0;
             g_free(label);
             if (matches) {
@@ -783,6 +758,7 @@ CodexBarSnapshot *codexbar_backend_fetch_selected_accounts(const char *provider_
                 break;
             }
             g_ptr_array_add(snapshot->providers, result);
+            mark_token_account_used(descriptor->id, json_object_array_get_idx(accounts, index));
             if (all_accounts && g_str_equal(descriptor->id, "neuralwatt") && position + 1 < indices->len) {
                 g_usleep(G_USEC_PER_SEC);
             }

@@ -2,7 +2,9 @@
 
 #include "config.h"
 #include "provider_registry.h"
+#include "token_accounts.h"
 
+#include <gio/gio.h>
 #include <json-c/json.h>
 #include <stdio.h>
 #include <string.h>
@@ -305,6 +307,220 @@ static char *read_stdin(size_t *length) {
     return g_string_free(input, FALSE);
 }
 
+static json_object *account_summary(json_object *account, guint index, int active_index) {
+    json_object *summary = json_object_new_object();
+    json_object_object_add(summary, "index", json_object_new_int((int)index + 1));
+    json_object_object_add(summary, "active", json_object_new_boolean((int)index == active_index));
+    const char *keys[] = {"id", "label", "addedAt", "lastUsed", "externalIdentifier", "usageScope",
+                          "organizationId", "workspaceID"};
+    for (guint key = 0; key < G_N_ELEMENTS(keys); key++) {
+        json_object *value = NULL;
+        if (json_object_object_get_ex(account, keys[key], &value)) {
+            json_object_object_add(summary, keys[key], json_object_get(value));
+        }
+    }
+    return summary;
+}
+
+static int run_accounts_list(int argc, char **argv) {
+    const char *values[] = {"--format", "--provider"};
+    const char *flags[] = {"--json", "--json-only", "--pretty"};
+    char *argument_error = validate_arguments(argc, argv, values, G_N_ELEMENTS(values), flags, G_N_ELEMENTS(flags));
+    if (argument_error) {
+        int result = print_message_error(argc, argv, argument_error);
+        g_free(argument_error);
+        return result;
+    }
+    const CodexBarProviderDescriptor *provider = selected_provider(argc, argv);
+    if (!provider || !codexbar_token_accounts_supported(provider->id)) {
+        return print_message_error(argc, argv, "Unknown provider or provider does not support token accounts.");
+    }
+    GError *error = NULL;
+    CodexBarConfig *config = load_config(&error);
+    if (!config) return print_error(argc, argv, error);
+    CodexBarProviderConfig *entry = codexbar_config_provider(config, provider->id);
+    int active_index = 0;
+    json_object *accounts = codexbar_token_accounts_array(entry, &active_index);
+    size_t count = accounts ? json_object_array_length(accounts) : 0;
+    if (json_output(argc, argv)) {
+        json_object *output = json_object_new_object();
+        json_object_object_add(output, "provider", json_object_new_string(provider->id));
+        json_object_object_add(output, "activeIndex", json_object_new_int(count ? CLAMP(active_index, 0, (int)count - 1) : 0));
+        json_object *items = json_object_new_array_ext((int)count);
+        for (guint index = 0; index < count; index++) {
+            json_object_array_add(items, account_summary(json_object_array_get_idx(accounts, index), index, active_index));
+        }
+        json_object_object_add(output, "accounts", items);
+        puts(json_object_to_json_string_ext(
+            output, has_flag(argc, argv, "--pretty") ? JSON_C_TO_STRING_PRETTY : JSON_C_TO_STRING_PLAIN));
+        json_object_put(output);
+    } else if (!count) {
+        printf("No token accounts configured for %s.\n", provider->display_name);
+    } else {
+        for (guint index = 0; index < count; index++) {
+            json_object *account = json_object_array_get_idx(accounts, index);
+            char *id = codexbar_token_account_string(account, "id");
+            char *label = codexbar_token_account_string(account, "label");
+            printf("%c %u. %s (%s)\n", (int)index == active_index ? '*' : ' ', index + 1,
+                   label ? label : "Account", id ? id : "no id");
+            g_free(id);
+            g_free(label);
+        }
+    }
+    codexbar_config_free(config);
+    return 0;
+}
+
+static int save_account_change(int argc,
+                               char **argv,
+                               CodexBarConfig *config,
+                               const CodexBarProviderDescriptor *provider,
+                               const char *action,
+                               const char *account_id,
+                               GError *error) {
+    if (error || !codexbar_config_save(config, &error)) {
+        codexbar_config_free(config);
+        return print_error(argc, argv, error);
+    }
+    if (json_output(argc, argv)) {
+        json_object *output = json_object_new_object();
+        json_object_object_add(output, "provider", json_object_new_string(provider->id));
+        json_object_object_add(output, "action", json_object_new_string(action));
+        if (account_id) json_object_object_add(output, "accountId", json_object_new_string(account_id));
+        json_object_object_add(output, "configPath", json_object_new_string(config->path));
+        puts(json_object_to_json_string_ext(
+            output, has_flag(argc, argv, "--pretty") ? JSON_C_TO_STRING_PRETTY : JSON_C_TO_STRING_PLAIN));
+        json_object_put(output);
+    } else {
+        printf("Config: %s token account for %s\n", action, provider->display_name);
+    }
+    codexbar_config_free(config);
+    return 0;
+}
+
+static int run_accounts_add(int argc, char **argv) {
+    const char *values[] = {"--format", "--provider", "--label", "--token", "--external-id", "--usage-scope",
+                            "--organization-id", "--workspace-id"};
+    const char *flags[] = {"--json", "--json-only", "--pretty", "--stdin"};
+    char *argument_error = validate_arguments(argc, argv, values, G_N_ELEMENTS(values), flags, G_N_ELEMENTS(flags));
+    if (argument_error) {
+        int result = print_message_error(argc, argv, argument_error);
+        g_free(argument_error);
+        return result;
+    }
+    const CodexBarProviderDescriptor *provider = selected_provider(argc, argv);
+    if (!provider || !codexbar_token_accounts_supported(provider->id)) {
+        return print_message_error(argc, argv, "Unknown provider or provider does not support token accounts.");
+    }
+    const char *argument = option_value(argc, argv, "--token");
+    gboolean from_stdin = has_flag(argc, argv, "--stdin");
+    if ((argument != NULL) == from_stdin) return print_message_error(argc, argv, "Use exactly one of --token or --stdin.");
+    size_t stdin_length = 0;
+    char *stdin_token = from_stdin ? read_stdin(&stdin_length) : NULL;
+    (void)stdin_length;
+    GError *error = NULL;
+    CodexBarConfig *config = load_config_for_update(&error);
+    if (!config) {
+        g_free(stdin_token);
+        return print_error(argc, argv, error);
+    }
+    char *id = NULL;
+    codexbar_token_accounts_add(codexbar_config_provider(config, provider->id),
+                                option_value(argc, argv, "--label"), stdin_token ? stdin_token : argument,
+                                option_value(argc, argv, "--external-id"), option_value(argc, argv, "--usage-scope"),
+                                option_value(argc, argv, "--organization-id"), option_value(argc, argv, "--workspace-id"),
+                                &id, &error);
+    g_free(stdin_token);
+    int result = save_account_change(argc, argv, config, provider, "added", id, error);
+    g_free(id);
+    return result;
+}
+
+static int run_accounts_update(int argc, char **argv) {
+    const char *values[] = {"--format", "--provider", "--account", "--label", "--token", "--external-id",
+                            "--usage-scope", "--organization-id", "--workspace-id"};
+    const char *flags[] = {"--json", "--json-only", "--pretty", "--stdin"};
+    char *argument_error = validate_arguments(argc, argv, values, G_N_ELEMENTS(values), flags, G_N_ELEMENTS(flags));
+    if (argument_error) {
+        int result = print_message_error(argc, argv, argument_error);
+        g_free(argument_error);
+        return result;
+    }
+    const CodexBarProviderDescriptor *provider = selected_provider(argc, argv);
+    const char *selector = option_value(argc, argv, "--account");
+    if (!provider || !selector || !codexbar_token_accounts_supported(provider->id)) {
+        return print_message_error(argc, argv, "A supported --provider and --account are required.");
+    }
+    const char *token = option_value(argc, argv, "--token");
+    gboolean from_stdin = has_flag(argc, argv, "--stdin");
+    if (token && from_stdin) return print_message_error(argc, argv, "Use only one of --token or --stdin.");
+    size_t stdin_length = 0;
+    char *stdin_token = from_stdin ? read_stdin(&stdin_length) : NULL;
+    (void)stdin_length;
+    GError *error = NULL;
+    CodexBarConfig *config = load_config_for_update(&error);
+    if (!config) {
+        g_free(stdin_token);
+        return print_error(argc, argv, error);
+    }
+    codexbar_token_accounts_update(codexbar_config_provider(config, provider->id), selector,
+                                   option_value(argc, argv, "--label"), stdin_token ? stdin_token : token,
+                                   option_value(argc, argv, "--external-id"), option_value(argc, argv, "--usage-scope"),
+                                   option_value(argc, argv, "--organization-id"), option_value(argc, argv, "--workspace-id"),
+                                   &error);
+    g_free(stdin_token);
+    return save_account_change(argc, argv, config, provider, "updated", NULL, error);
+}
+
+static int run_accounts_simple(int argc, char **argv, const char *action) {
+    const char *values[] = {"--format", "--provider", "--account", "--index"};
+    const char *flags[] = {"--json", "--json-only", "--pretty"};
+    char *argument_error = validate_arguments(argc, argv, values, G_N_ELEMENTS(values), flags, G_N_ELEMENTS(flags));
+    if (argument_error) {
+        int result = print_message_error(argc, argv, argument_error);
+        g_free(argument_error);
+        return result;
+    }
+    const CodexBarProviderDescriptor *provider = selected_provider(argc, argv);
+    const char *selector = option_value(argc, argv, "--account");
+    if (!provider || !selector || !codexbar_token_accounts_supported(provider->id)) {
+        return print_message_error(argc, argv, "A supported --provider and --account are required.");
+    }
+    GError *error = NULL;
+    CodexBarConfig *config = load_config_for_update(&error);
+    if (!config) return print_error(argc, argv, error);
+    CodexBarProviderConfig *entry = codexbar_config_provider(config, provider->id);
+    if (g_str_equal(action, "removed")) codexbar_token_accounts_remove(entry, selector, &error);
+    else if (g_str_equal(action, "selected")) codexbar_token_accounts_select(entry, selector, &error);
+    else {
+        const char *raw_index = option_value(argc, argv, "--index");
+        char *end = NULL;
+        guint64 index = raw_index ? g_ascii_strtoull(raw_index, &end, 10) : 0;
+        if (!raw_index || !end || *end || index == 0 || index > G_MAXUINT) {
+            error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                                        "Move requires a positive one-based --index.");
+        } else {
+            codexbar_token_accounts_move(entry, selector, (guint)index - 1, &error);
+        }
+    }
+    return save_account_change(argc, argv, config, provider, action, NULL, error);
+}
+
+static int run_accounts(int argc, char **argv) {
+    if (argc < 1) {
+        fputs("Usage: codexbar-linux config accounts <list|add|update|remove|select|move>\n", stderr);
+        return 1;
+    }
+    if (g_str_equal(argv[0], "list")) return run_accounts_list(argc - 1, argv + 1);
+    if (g_str_equal(argv[0], "add")) return run_accounts_add(argc - 1, argv + 1);
+    if (g_str_equal(argv[0], "update")) return run_accounts_update(argc - 1, argv + 1);
+    if (g_str_equal(argv[0], "remove")) return run_accounts_simple(argc - 1, argv + 1, "removed");
+    if (g_str_equal(argv[0], "select")) return run_accounts_simple(argc - 1, argv + 1, "selected");
+    if (g_str_equal(argv[0], "move")) return run_accounts_simple(argc - 1, argv + 1, "moved");
+    fprintf(stderr, "Unknown accounts command: %s\n", argv[0]);
+    return 1;
+}
+
 static int run_set_api_key(int argc, char **argv) {
     const char *values[] = {"--format", "--provider", "--api-key"};
     const char *flags[] = {"--json", "--json-only", "--pretty", "--stdin", "--no-enable"};
@@ -366,6 +582,7 @@ int codexbar_cli_config_run(int argc, char **argv) {
     if (g_str_equal(argv[0], "enable")) return run_toggle(argc - 1, argv + 1, TRUE);
     if (g_str_equal(argv[0], "disable")) return run_toggle(argc - 1, argv + 1, FALSE);
     if (g_str_equal(argv[0], "set-api-key")) return run_set_api_key(argc - 1, argv + 1);
+    if (g_str_equal(argv[0], "accounts")) return run_accounts(argc - 1, argv + 1);
     fprintf(stderr, "Unknown config command: %s\n", argv[0]);
     return 1;
 }

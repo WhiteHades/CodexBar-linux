@@ -59,6 +59,7 @@ core_sources = files(
   'src/serve.c',
   'src/simple_providers.c',
   'src/stepfun.c',
+  'src/token_accounts.c',
   'src/tui_actions.c',
   'src/vertex.c',
   'src/wayfinder.c',
@@ -188,7 +189,7 @@ test('codexbar-linux-claude-cli', claude_cli_test, args: [codexbar_linux], depen
 
 copilot_test = executable(
   'codexbar-linux-copilot-tests',
-  files('tests/test_copilot.c', 'src/copilot.c', 'src/http.c', 'src/model.c'),
+  files('tests/test_copilot.c', 'src/copilot.c', 'src/http.c', 'src/model.c', 'src/token_accounts.c'),
   include_directories: source_includes,
   dependencies: core_deps,
 )
@@ -359,6 +360,14 @@ stepfun_test = executable(
 )
 test('codexbar-linux-stepfun', stepfun_test, env: normalized_test_env)
 
+token_accounts_test = executable(
+  'codexbar-linux-token-accounts-tests',
+  files('tests/test_token_accounts.c', 'src/token_accounts.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep, json_dep],
+)
+test('codexbar-linux-token-accounts', token_accounts_test, env: normalized_test_env)
+
 xai_test = executable(
   'codexbar-linux-xai-tests',
   files('tests/test_xai.c', 'src/xai.c', 'src/http.c', 'src/model.c', 'src/render.c'),
@@ -400,7 +409,7 @@ test('codexbar-linux-wayfinder', wayfinder_test)
 
 zai_test = executable(
   'codexbar-linux-zai-tests',
-  files('tests/test_zai.c', 'src/zai.c', 'src/http.c', 'src/model.c'),
+  files('tests/test_zai.c', 'src/zai.c', 'src/http.c', 'src/model.c', 'src/token_accounts.c'),
   include_directories: source_includes,
   dependencies: core_deps,
 )
@@ -419,7 +428,7 @@ test('codexbar-linux-zai-cli', zai_cli_test, args: [codexbar_linux])
 
 openai_api_test = executable(
   'codexbar-linux-openai-api-tests',
-  files('tests/test_openai_api.c', 'src/openai_api.c', 'src/http.c', 'src/model.c'),
+  files('tests/test_openai_api.c', 'src/openai_api.c', 'src/http.c', 'src/model.c', 'src/token_accounts.c'),
   include_directories: source_includes,
   dependencies: core_deps,
 )

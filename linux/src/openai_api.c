@@ -1,6 +1,7 @@
 #include "openai_api.h"
 
 #include "http.h"
+#include "token_accounts.h"
 
 #include <gio/gio.h>
 #include <json-c/json.h>
@@ -487,7 +488,8 @@ static gboolean fetch_pages(const char *endpoint,
 }
 
 CodexBarProvider *codexbar_openai_api_fetch(const CodexBarProviderConfig *config, GError **error) {
-    char *api_key = clean_value(g_getenv("OPENAI_ADMIN_KEY"), 16384);
+    char *api_key = codexbar_token_account_is_selected(config) ? clean_value(config->api_key, 16384) : NULL;
+    if (!api_key) api_key = clean_value(g_getenv("OPENAI_ADMIN_KEY"), 16384);
     if (!api_key) {
         api_key = clean_value(g_getenv("OPENAI_API_KEY"), 16384);
     }

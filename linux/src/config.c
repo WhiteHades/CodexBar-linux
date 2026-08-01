@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include "provider_registry.h"
+#include "token_accounts.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -769,13 +770,7 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
                                 json_object_is_type(token_accounts, json_type_object) &&
                                 json_object_object_get_ex(token_accounts, "accounts", &accounts) &&
                                 json_object_is_type(accounts, json_type_array) && json_object_array_length(accounts) > 0;
-        const char *token_providers[] = {
-            "openai", "openrouter", "claude", "deepseek", "antigravity", "zai", "cursor", "opencode", "opencodego",
-            "factory", "minimax", "manus", "augment", "ollama", "abacus", "mistral", "qoder", "copilot",
-            "venice", "elevenlabs", "groq", "llmproxy", "litellm", "sub2api", "stepfun", "deepinfra",
-            "neuralwatt",
-        };
-        if (has_accounts && !id_in(provider->id, token_providers, G_N_ELEMENTS(token_providers))) {
+        if (has_accounts && !codexbar_token_accounts_supported(provider->id)) {
             add_issue(issues,
                       FALSE,
                       provider->id,
@@ -797,7 +792,7 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
                 }
                 json_object *organization = NULL;
                 json_object *workspace = NULL;
-                gboolean has_organization = json_object_object_get_ex(account, "organizationID", &organization) &&
+                gboolean has_organization = json_object_object_get_ex(account, "organizationId", &organization) &&
                                             json_object_is_type(organization, json_type_string) &&
                                             json_object_get_string(organization)[0] != '\0';
                 gboolean has_workspace = json_object_object_get_ex(account, "workspaceID", &workspace) &&
@@ -809,7 +804,7 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
                               provider->id,
                               "tokenAccounts",
                               "zai_team_context_missing",
-                              "z.ai Team mode requires both organizationID and workspaceID.");
+                              "z.ai Team mode requires both organizationId and workspaceID.");
                     break;
                 }
             }

@@ -1,6 +1,7 @@
 #include "zai.h"
 
 #include <gio/gio.h>
+#include <json-c/json.h>
 #include <math.h>
 #include <string.h>
 
@@ -88,6 +89,13 @@ static void test_quota_urls(void) {
     g_assert_nonnull(error);
     g_clear_error(&error);
     g_unsetenv("Z_AI_QUOTA_URL");
+
+    config.raw = json_tokener_parse("{\"usageScope\":\"team\"}");
+    url = codexbar_zai_quota_url(&config, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(url, ==, "https://open.bigmodel.cn/api/monitor/usage/quota/limit?type=2");
+    g_free(url);
+    json_object_put(config.raw);
 }
 
 int main(int argc, char **argv) {

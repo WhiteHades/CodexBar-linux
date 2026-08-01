@@ -63,6 +63,28 @@ fi
 output=$(CODEXBAR_CONFIG="$config" "$binary" config validate)
 [ "$output" = 'Config: OK' ]
 
+output=$(printf 'team-token' | CODEXBAR_CONFIG="$config" "$binary" config accounts add \
+  --provider zai --label Team --usage-scope team --organization-id org-1 --workspace-id project-1 --stdin)
+[ "$output" = 'Config: added token account for z.ai' ]
+output=$(CODEXBAR_CONFIG="$config" "$binary" config accounts list --provider zai --json)
+case "$output" in
+  *'"activeIndex":0'*'"label":"Team"'*'"usageScope":"team"'*'"organizationId":"org-1"'*'"workspaceID":"project-1"'*) ;;
+  *) printf 'unexpected token account list: %s\n' "$output" >&2; exit 1 ;;
+esac
+case "$output" in
+  *'team-token'*) printf 'token account list exposed token\n' >&2; exit 1 ;;
+esac
+CODEXBAR_CONFIG="$config" "$binary" config accounts update --provider zai --account Team --label Primary >/dev/null
+CODEXBAR_CONFIG="$config" "$binary" config accounts select --provider zai --account Primary >/dev/null
+output=$(CODEXBAR_CONFIG="$config" "$binary" config accounts list --provider zai)
+case "$output" in
+  '* 1. Primary ('*) ;;
+  *) printf 'token account selection was not persisted: %s\n' "$output" >&2; exit 1 ;;
+esac
+CODEXBAR_CONFIG="$config" "$binary" config accounts remove --provider zai --account Primary >/dev/null
+output=$(CODEXBAR_CONFIG="$config" "$binary" config accounts list --provider zai)
+[ "$output" = 'No token accounts configured for z.ai.' ]
+
 output=$(CODEXBAR_CONFIG="$config" "$binary" config dump)
 case "$output" in
   *'"version":1'*'"id":"openrouter"'*'"apiKey":"[REDACTED]"'*) ;;

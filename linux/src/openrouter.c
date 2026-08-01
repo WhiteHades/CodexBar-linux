@@ -1,6 +1,7 @@
 #include "openrouter.h"
 
 #include "http.h"
+#include "token_accounts.h"
 
 #include <json-c/json.h>
 
@@ -66,7 +67,7 @@ CodexBarProvider *codexbar_openrouter_parse_credits(const char *json, GError **e
 }
 
 CodexBarProvider *codexbar_openrouter_fetch(const CodexBarProviderConfig *config, GError **error) {
-    const char *token = g_getenv("OPENROUTER_API_KEY");
+    const char *token = codexbar_token_account_is_selected(config) ? config->api_key : g_getenv("OPENROUTER_API_KEY");
     if (!token || token[0] == '\0') {
         token = config->api_key;
     }
