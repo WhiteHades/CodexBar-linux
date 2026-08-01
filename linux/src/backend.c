@@ -1,6 +1,8 @@
 #include "backend.h"
 
 #include "aiand.h"
+#include "api_providers.h"
+#include "api_providers2.h"
 #include "azure_openai.h"
 #include "config.h"
 #include "codebuff.h"
@@ -168,6 +170,12 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_PROXY:
     case CODEXBAR_NATIVE_SIMPLE:
     case CODEXBAR_NATIVE_XAI:
+    case CODEXBAR_NATIVE_DEEPGRAM:
+    case CODEXBAR_NATIVE_POE:
+    case CODEXBAR_NATIVE_CHUTES:
+    case CODEXBAR_NATIVE_SYNTHETIC:
+    case CODEXBAR_NATIVE_WARP:
+    case CODEXBAR_NATIVE_GROQ:
         native_source = "api";
         break;
     case CODEXBAR_NATIVE_KILO:
@@ -252,6 +260,24 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_XAI:
         provider = codexbar_xai_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_DEEPGRAM:
+        provider = codexbar_deepgram_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_POE:
+        provider = codexbar_poe_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_CHUTES:
+        provider = codexbar_chutes_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_SYNTHETIC:
+        provider = codexbar_synthetic_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_WARP:
+        provider = codexbar_warp_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_GROQ:
+        provider = codexbar_groq_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_OPENROUTER:
         provider = codexbar_openrouter_fetch(config, &error);

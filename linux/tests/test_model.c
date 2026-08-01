@@ -1544,6 +1544,14 @@ static void test_provider_registry(void) {
     g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("zoommate"), "web"));
     g_assert_cmpint(codexbar_provider_registry_find("xai")->native_provider, ==, CODEXBAR_NATIVE_XAI);
     g_assert_true(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("xai")));
+    g_assert_cmpint(codexbar_provider_registry_find("dg")->native_provider, ==, CODEXBAR_NATIVE_DEEPGRAM);
+    g_assert_cmpint(codexbar_provider_registry_find("poe")->native_provider, ==, CODEXBAR_NATIVE_POE);
+    g_assert_cmpint(codexbar_provider_registry_find("chutes.ai")->native_provider, ==, CODEXBAR_NATIVE_CHUTES);
+    g_assert_cmpint(codexbar_provider_registry_find("synthetic.new")->native_provider,
+                    ==,
+                    CODEXBAR_NATIVE_SYNTHETIC);
+    g_assert_cmpint(codexbar_provider_registry_find("warp-ai")->native_provider, ==, CODEXBAR_NATIVE_WARP);
+    g_assert_cmpint(codexbar_provider_registry_find("groq-api")->native_provider, ==, CODEXBAR_NATIVE_GROQ);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }

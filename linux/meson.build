@@ -12,6 +12,8 @@ configure_file(output: 'version.h', configuration: version_config)
 
 core_sources = files(
   'src/aiand.c',
+  'src/api_providers.c',
+  'src/api_providers2.c',
   'src/azure_openai.c',
   'src/backend.c',
   'src/cli_cache.c',
@@ -203,6 +205,22 @@ aiand_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-aiand', aiand_test)
+
+api_providers_test = executable(
+  'codexbar-linux-api-providers-tests',
+  files('tests/test_api_providers.c', 'src/api_providers.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-api-providers', api_providers_test, env: normalized_test_env)
+
+api_providers2_test = executable(
+  'codexbar-linux-api-providers2-tests',
+  files('tests/test_api_providers2.c', 'src/api_providers2.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-api-providers2', api_providers2_test, env: normalized_test_env)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',
