@@ -42,7 +42,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"warp", "Warp", "warp", "warp-ai,warp-terminal", A | P, FALSE, "https://docs.warp.dev/reference/cli/api-keys", NULL, CODEXBAR_NATIVE_WARP},
     {"openrouter", "OpenRouter", "openrouter", "or", A | P, FALSE, "https://openrouter.ai/settings/credits", "https://status.openrouter.ai", CODEXBAR_NATIVE_OPENROUTER},
     {"elevenlabs", "ElevenLabs", "elevenlabs", "11labs,eleven", A | P, FALSE, "https://elevenlabs.io/app/developers/usage", "https://status.elevenlabs.io", CODEXBAR_NATIVE_SIMPLE},
-    {"windsurf", "Windsurf", "windsurf", NULL, A | W | C, FALSE, "https://windsurf.com/subscription/usage", NULL, CODEXBAR_NATIVE_UNAVAILABLE},
+    {"windsurf", "Windsurf", "windsurf", NULL, A | W | C, FALSE, "https://windsurf.com/subscription/usage", NULL, CODEXBAR_NATIVE_WINDSURF},
     {"zed", "Zed", "zed", NULL, A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_ZED},
     {"perplexity", "Perplexity", "perplexity", NULL, A | W, FALSE, "https://www.perplexity.ai/account/usage", "https://status.perplexity.com/", CODEXBAR_NATIVE_PERPLEXITY},
     {"mimo", "Xiaomi MiMo", "mimo", "xiaomi-mimo", A | W, FALSE, "https://platform.xiaomimimo.com/#/console/balance", NULL, CODEXBAR_NATIVE_MIMO},

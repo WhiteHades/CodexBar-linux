@@ -34,6 +34,7 @@
 #include "web_providers3.h"
 #include "web_providers4.h"
 #include "web_providers5.h"
+#include "windsurf.h"
 #include "xai.h"
 #include "zai.h"
 #include "zed.h"
@@ -197,6 +198,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_LONGCAT:
     case CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN:
     case CODEXBAR_NATIVE_MIMO:
+    case CODEXBAR_NATIVE_WINDSURF:
         native_source = "web";
         break;
     case CODEXBAR_NATIVE_COPILOT:
@@ -412,6 +414,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_VERTEX:
         provider = codexbar_vertex_fetch_with_cancellable(config, cancellable, &error);
         break;
+    case CODEXBAR_NATIVE_WINDSURF:
+        provider = codexbar_windsurf_fetch_with_cancellable(config, cancellable, &error);
+        break;
     case CODEXBAR_NATIVE_LITELLM:
         provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);
         break;
@@ -547,7 +552,7 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
 
 static gboolean provider_uses_cookie_accounts(const char *provider) {
     static const char *const providers[] = {
-        "claude", "cursor", "opencode", "opencodego", "factory", "minimax", "manus",
+        "claude", "cursor", "opencode", "opencodego", "factory", "minimax", "manus", "windsurf",
         "augment", "ollama", "abacus", "mistral", "qoder", "stepfun",
     };
     for (guint index = 0; index < G_N_ELEMENTS(providers); index++) {
@@ -562,7 +567,7 @@ static gboolean provider_supports_token_accounts(const char *provider) {
         "zai",         "cursor",     "opencode",   "opencodego", "factory", "minimax",
         "manus",       "augment",    "ollama",     "abacus",   "mistral",   "qoder",
         "copilot",     "venice",     "elevenlabs", "neuralwatt", "groq",   "llmproxy",
-        "litellm",     "sub2api",    "stepfun",
+        "litellm",     "sub2api",    "stepfun",     "windsurf",
     };
     for (guint index = 0; index < G_N_ELEMENTS(providers); index++) {
         if (g_str_equal(provider, providers[index])) return TRUE;

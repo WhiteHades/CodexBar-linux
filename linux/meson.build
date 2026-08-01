@@ -65,6 +65,7 @@ core_sources = files(
   'src/web_providers3.c',
   'src/web_providers4.c',
   'src/web_providers5.c',
+  'src/windsurf.c',
   'src/xai.c',
   'src/zai.c',
   'src/zed.c',
@@ -331,6 +332,14 @@ vertex_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-vertex', vertex_test, env: normalized_test_env, depends: process_supervisor)
+
+windsurf_test = executable(
+  'codexbar-linux-windsurf-tests',
+  files('tests/test_windsurf.c', 'src/windsurf.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-windsurf', windsurf_test, env: normalized_test_env)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',
