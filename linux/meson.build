@@ -16,6 +16,7 @@ core_sources = files(
   'src/api_providers2.c',
   'src/api_providers3.c',
   'src/api_providers4.c',
+  'src/api_providers5.c',
   'src/azure_openai.c',
   'src/backend.c',
   'src/cli_cache.c',
@@ -243,6 +244,19 @@ api_providers4_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-api-providers4', api_providers4_test, env: normalized_test_env)
+
+api_providers5_test = executable(
+  'codexbar-linux-api-providers5-tests',
+  files('tests/test_api_providers5.c', 'src/api_providers5.c', 'src/http.c', 'src/model.c', 'src/process.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test(
+  'codexbar-linux-api-providers5',
+  api_providers5_test,
+  env: normalized_test_env,
+  depends: process_supervisor,
+)
 
 local_providers_test = executable(
   'codexbar-linux-local-providers-tests',

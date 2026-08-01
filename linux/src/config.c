@@ -655,8 +655,12 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
                       "apiKey is set but %s does not support api source.",
                       provider->id);
         }
+        gboolean profile_backed_bedrock =
+            g_str_equal(provider->id, "bedrock") &&
+            ((provider->aws_profile && *provider->aws_profile) ||
+             (provider->aws_auth_mode && g_ascii_strcasecmp(provider->aws_auth_mode, "profile") == 0));
         if (provider->source && g_str_equal(provider->source, "api") && !provider->api_key &&
-            !g_str_equal(provider->id, "wayfinder")) {
+            !g_str_equal(provider->id, "wayfinder") && !profile_backed_bedrock) {
             add_issue(issues,
                       FALSE,
                       provider->id,

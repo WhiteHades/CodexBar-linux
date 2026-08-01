@@ -5,6 +5,7 @@
 #include "api_providers2.h"
 #include "api_providers3.h"
 #include "api_providers4.h"
+#include "api_providers5.h"
 #include "azure_openai.h"
 #include "config.h"
 #include "codebuff.h"
@@ -207,6 +208,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_FACTORY:
     case CODEXBAR_NATIVE_GEMINI:
     case CODEXBAR_NATIVE_OLLAMA:
+    case CODEXBAR_NATIVE_LITELLM:
+    case CODEXBAR_NATIVE_SUB2API:
+    case CODEXBAR_NATIVE_BEDROCK:
         native_source = "api";
         break;
     case CODEXBAR_NATIVE_KILO:
@@ -345,6 +349,15 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_DEVIN:
         provider = codexbar_devin_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_LITELLM:
+        provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_SUB2API:
+        provider = codexbar_sub2api_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_BEDROCK:
+        provider = codexbar_bedrock_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_OPENROUTER:
         provider = codexbar_openrouter_fetch(config, &error);
