@@ -6,6 +6,12 @@
 
 typedef struct json_object json_object;
 
+typedef enum {
+    CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM,
+    CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT,
+    CODEXBAR_CODEX_SOURCE_PROFILE_HOME,
+} CodexBarCodexActiveSourceKind;
+
 typedef struct {
     char *id;
     gboolean enabled;
@@ -20,6 +26,12 @@ typedef struct {
     char *enterprise_host;
     char *aws_profile;
     char *aws_auth_mode;
+    gboolean has_codex_active_source;
+    CodexBarCodexActiveSourceKind codex_active_source;
+    char *codex_active_account_id;
+    char *codex_active_home_path;
+    gboolean has_codex_profile_home_paths;
+    GPtrArray *codex_profile_home_paths;
     json_object *raw;
 } CodexBarProviderConfig;
 
@@ -67,4 +79,8 @@ gboolean codexbar_config_set_api_key(CodexBarConfig *config,
                                       size_t api_key_length,
                                       gboolean enable,
                                       GError **error);
+gboolean codexbar_config_set_codex_active_source(CodexBarConfig *config,
+                                                  CodexBarCodexActiveSourceKind source,
+                                                  const char *value,
+                                                  GError **error);
 void codexbar_config_free(CodexBarConfig *config);

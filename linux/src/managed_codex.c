@@ -499,9 +499,10 @@ gboolean codexbar_managed_codex_discard_home(CodexBarManagedCodexStore *store,
     return remove_tree(path, error);
 }
 
-CodexBarManagedCodexAccount *codexbar_managed_codex_import(CodexBarManagedCodexStore *store,
-                                                           const char *auth_file,
-                                                           GError **error) {
+static CodexBarManagedCodexAccount *import_account(CodexBarManagedCodexStore *store,
+                                                   const char *selector,
+                                                   const char *auth_file,
+                                                   GError **error) {
     g_return_val_if_fail(store != NULL && auth_file != NULL, NULL);
     char *contents = NULL;
     gsize length = 0;
@@ -512,16 +513,43 @@ CodexBarManagedCodexAccount *codexbar_managed_codex_import(CodexBarManagedCodexS
         g_free(contents);
         return NULL;
     }
-    CodexBarManagedCodexAccount *existing = NULL;
-    for (guint index = 0; index < store->accounts->len; index++) {
-        CodexBarManagedCodexAccount *candidate = g_ptr_array_index(store->accounts, index);
-        gboolean match = provider_id && candidate->provider_account_id
-                             ? g_str_equal(candidate->email, email) &&
-                                   g_str_equal(candidate->provider_account_id, provider_id)
-                             : g_str_equal(candidate->email, email) && !candidate->provider_account_id;
-        if (match) {
-            existing = candidate;
-            break;
+    CodexBarManagedCodexAccount *existing = selector ? codexbar_managed_codex_find(store, selector) : NULL;
+    if (selector && !existing) {
+        g_set_error_literal(error, managed_error_quark(), 8,
+                            "Managed Codex account was not found or is ambiguous");
+        g_free(provider_id);
+        g_free(email);
+        g_free(contents);
+        return NULL;
+    }
+    if (existing) {
+        gboolean same_identity = provider_id && existing->provider_account_id
+                                     ? g_str_equal(existing->email, email) &&
+                                           g_str_equal(existing->provider_account_id, provider_id)
+                                     : g_str_equal(existing->email, email);
+        if (!same_identity) {
+            g_set_error(error,
+                        managed_error_quark(),
+                        10,
+                        "Authenticated Codex account %s does not match %s",
+                        email,
+                        existing->email);
+            g_free(provider_id);
+            g_free(email);
+            g_free(contents);
+            return NULL;
+        }
+    } else {
+        for (guint index = 0; index < store->accounts->len; index++) {
+            CodexBarManagedCodexAccount *candidate = g_ptr_array_index(store->accounts, index);
+            gboolean match = provider_id && candidate->provider_account_id
+                                 ? g_str_equal(candidate->email, email) &&
+                                       g_str_equal(candidate->provider_account_id, provider_id)
+                                 : g_str_equal(candidate->email, email) && !candidate->provider_account_id;
+            if (match) {
+                existing = candidate;
+                break;
+            }
         }
     }
     char *id = existing ? g_strdup(existing->id) : g_uuid_string_random();
@@ -584,6 +612,20 @@ CodexBarManagedCodexAccount *codexbar_managed_codex_import(CodexBarManagedCodexS
     if (old_home && !g_str_equal(old_home, home) && safe_home(store->root, old_home)) remove_tree(old_home, NULL);
     g_free(old_home);
     return account;
+}
+
+CodexBarManagedCodexAccount *codexbar_managed_codex_import(CodexBarManagedCodexStore *store,
+                                                           const char *auth_file,
+                                                           GError **error) {
+    return import_account(store, NULL, auth_file, error);
+}
+
+CodexBarManagedCodexAccount *codexbar_managed_codex_reauthenticate(CodexBarManagedCodexStore *store,
+                                                                   const char *selector,
+                                                                   const char *auth_file,
+                                                                   GError **error) {
+    g_return_val_if_fail(selector != NULL, NULL);
+    return import_account(store, selector, auth_file, error);
 }
 
 gboolean codexbar_managed_codex_remove(CodexBarManagedCodexStore *store,

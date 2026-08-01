@@ -1,5 +1,6 @@
 #include "cli_managed_codex.h"
 
+#include "config.h"
 #include "managed_codex.h"
 #include "process.h"
 
@@ -94,22 +95,26 @@ static int import_account(int argc, char **argv) {
     return 0;
 }
 
-static int login_account(int argc, char **argv) {
-    guint timeout_seconds = 120;
-    if (argc == 2 && g_str_equal(argv[0], "--timeout")) {
-        char *end = NULL;
-        guint64 parsed = g_ascii_strtoull(argv[1], &end, 10);
-        if (!end || *end != '\0' || parsed == 0 || parsed > 1800) {
-            fputs("Error: --timeout must be between 1 and 1800 seconds.\n", stderr);
-            return 1;
-        }
-        timeout_seconds = (guint)parsed;
-    } else if (argc != 0) {
-        fputs("Usage: codexbar-linux codex-accounts login [--timeout <seconds>]\n", stderr);
-        return 1;
-    }
+static gboolean parse_timeout(int argc, char **argv, guint *timeout_seconds) {
+    *timeout_seconds = 120;
+    if (argc == 0) return TRUE;
+    if (argc != 2 || !g_str_equal(argv[0], "--timeout")) return FALSE;
+    char *end = NULL;
+    guint64 parsed = g_ascii_strtoull(argv[1], &end, 10);
+    if (!end || *end != '\0' || parsed == 0 || parsed > 1800) return FALSE;
+    *timeout_seconds = (guint)parsed;
+    return TRUE;
+}
+
+static int authenticate_account(const char *selector, guint timeout_seconds) {
     GError *error = NULL;
     CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(TRUE, &error);
+    if (selector && store && !codexbar_managed_codex_find(store, selector)) {
+        codexbar_managed_codex_store_free(store);
+        g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "Managed Codex account was not found or is ambiguous");
+        return print_error(error);
+    }
     char *home = store ? codexbar_managed_codex_create_home(store, &error) : NULL;
     if (!home) {
         codexbar_managed_codex_store_free(store);
@@ -131,9 +136,11 @@ static int login_account(int argc, char **argv) {
     CodexBarProcessResult *result = codexbar_process_run(&request, NULL, &error);
     g_strfreev(environment);
     char *auth_file = g_build_filename(home, "auth.json", NULL);
-    CodexBarManagedCodexAccount *account = result && codexbar_process_result_succeeded(result)
-                                                ? codexbar_managed_codex_import(store, auth_file, &error)
-                                                : NULL;
+    CodexBarManagedCodexAccount *account = NULL;
+    if (result && codexbar_process_result_succeeded(result)) {
+        account = selector ? codexbar_managed_codex_reauthenticate(store, selector, auth_file, &error)
+                           : codexbar_managed_codex_import(store, auth_file, &error);
+    }
     if (!account && result && !error) {
         g_set_error(&error,
                     G_IO_ERROR,
@@ -150,8 +157,71 @@ static int login_account(int argc, char **argv) {
         codexbar_managed_codex_store_free(store);
         return print_error(error);
     }
-    printf("Authenticated managed Codex account %s (%s).\n", account->email, account->id);
+    printf("%s managed Codex account %s (%s).\n",
+           selector ? "Reauthenticated" : "Authenticated",
+           account->email,
+           account->id);
     codexbar_managed_codex_store_free(store);
+    return 0;
+}
+
+static int login_account(int argc, char **argv) {
+    guint timeout_seconds = 120;
+    if (!parse_timeout(argc, argv, &timeout_seconds)) {
+        fputs("Usage: codexbar-linux codex-accounts login [--timeout <seconds>]\n", stderr);
+        return 1;
+    }
+    return authenticate_account(NULL, timeout_seconds);
+}
+
+static int reauthenticate_account(int argc, char **argv) {
+    if (argc < 1 || argv[0][0] == '\0') {
+        fputs("Usage: codexbar-linux codex-accounts reauth <id|email> [--timeout <seconds>]\n", stderr);
+        return 1;
+    }
+    guint timeout_seconds = 120;
+    if (!parse_timeout(argc - 1, argv + 1, &timeout_seconds)) {
+        fputs("Usage: codexbar-linux codex-accounts reauth <id|email> [--timeout <seconds>]\n", stderr);
+        return 1;
+    }
+    return authenticate_account(argv[0], timeout_seconds);
+}
+
+static int select_account(int argc, char **argv) {
+    if (argc < 1 || argc > 2) {
+        fputs("Usage: codexbar-linux codex-accounts select <live|managed|profile> [id|email|path]\n", stderr);
+        return 1;
+    }
+    CodexBarCodexActiveSourceKind source;
+    char *value = NULL;
+    GError *error = NULL;
+    if (g_str_equal(argv[0], "live") && argc == 1) {
+        source = CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM;
+    } else if (g_str_equal(argv[0], "managed") && argc == 2) {
+        CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(FALSE, &error);
+        CodexBarManagedCodexAccount *account = store ? codexbar_managed_codex_find(store, argv[1]) : NULL;
+        if (account) value = g_strdup(account->id);
+        codexbar_managed_codex_store_free(store);
+        if (!value) {
+            if (!error) g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                            "Managed Codex account was not found or is ambiguous");
+            return print_error(error);
+        }
+        source = CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT;
+    } else if (g_str_equal(argv[0], "profile") && argc == 2) {
+        source = CODEXBAR_CODEX_SOURCE_PROFILE_HOME;
+        value = g_canonicalize_filename(argv[1], NULL);
+    } else {
+        fputs("Usage: codexbar-linux codex-accounts select <live|managed|profile> [id|email|path]\n", stderr);
+        return 1;
+    }
+    CodexBarConfig *config = codexbar_config_load_for_update(&error);
+    gboolean saved = config && codexbar_config_set_codex_active_source(config, source, value, &error) &&
+                     codexbar_config_save(config, &error);
+    codexbar_config_free(config);
+    g_free(value);
+    if (!saved) return print_error(error);
+    puts("Selected Codex account source.");
     return 0;
 }
 
@@ -162,12 +232,33 @@ static int remove_account(int argc, char **argv) {
     }
     GError *error = NULL;
     CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(TRUE, &error);
+    CodexBarManagedCodexAccount *selected = store ? codexbar_managed_codex_find(store, argv[0]) : NULL;
+    char *removed_id = selected ? g_strdup(selected->id) : NULL;
     if (!store || !codexbar_managed_codex_remove(store, argv[0], &error)) {
+        g_free(removed_id);
         codexbar_managed_codex_store_free(store);
         return print_error(error);
     }
-    puts("Removed managed Codex account.");
     codexbar_managed_codex_store_free(store);
+    CodexBarConfig *config = codexbar_config_load_for_update(&error);
+    CodexBarProviderConfig *codex = config ? codexbar_config_provider(config, "codex") : NULL;
+    if (codex && codex->has_codex_active_source &&
+        codex->codex_active_source == CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT &&
+        g_strcmp0(codex->codex_active_account_id, removed_id) == 0) {
+        if (!codexbar_config_set_codex_active_source(config,
+                                                     CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM,
+                                                     NULL,
+                                                     &error) ||
+            !codexbar_config_save(config, &error)) {
+            codexbar_config_free(config);
+            g_free(removed_id);
+            return print_error(error);
+        }
+    }
+    codexbar_config_free(config);
+    g_free(removed_id);
+    if (error) return print_error(error);
+    puts("Removed managed Codex account.");
     return 0;
 }
 
@@ -207,12 +298,14 @@ static int execute_account(int argc, char **argv) {
 
 int codexbar_cli_managed_codex_run(int argc, char **argv) {
     if (argc < 1) {
-        fputs("Usage: codexbar-linux codex-accounts <list|login|import|remove|exec>\n", stderr);
+        fputs("Usage: codexbar-linux codex-accounts <list|login|reauth|import|select|remove|exec>\n", stderr);
         return 1;
     }
     if (g_str_equal(argv[0], "list")) return list_accounts(argc - 1, argv + 1);
     if (g_str_equal(argv[0], "login")) return login_account(argc - 1, argv + 1);
+    if (g_str_equal(argv[0], "reauth")) return reauthenticate_account(argc - 1, argv + 1);
     if (g_str_equal(argv[0], "import")) return import_account(argc - 1, argv + 1);
+    if (g_str_equal(argv[0], "select")) return select_account(argc - 1, argv + 1);
     if (g_str_equal(argv[0], "remove")) return remove_account(argc - 1, argv + 1);
     if (g_str_equal(argv[0], "exec")) return execute_account(argc - 1, argv + 1);
     fprintf(stderr, "Unknown codex-accounts command: %s\n", argv[0]);

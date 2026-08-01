@@ -2,6 +2,8 @@
 
 #include <glib.h>
 
+#define CODEXBAR_MANAGED_CODEX_UNREADABLE_HOME "/managed-store-unreadable"
+
 typedef struct {
     char *id;
     char *email;
@@ -34,6 +36,10 @@ CodexBarManagedCodexAccount *codexbar_managed_codex_find(CodexBarManagedCodexSto
 CodexBarManagedCodexAccount *codexbar_managed_codex_import(CodexBarManagedCodexStore *store,
                                                            const char *auth_file,
                                                            GError **error);
+CodexBarManagedCodexAccount *codexbar_managed_codex_reauthenticate(CodexBarManagedCodexStore *store,
+                                                                   const char *selector,
+                                                                   const char *auth_file,
+                                                                   GError **error);
 gboolean codexbar_managed_codex_remove(CodexBarManagedCodexStore *store,
                                        const char *selector,
                                        GError **error);

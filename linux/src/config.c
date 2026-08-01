@@ -60,6 +60,9 @@ static void provider_config_free(gpointer data) {
     g_free(provider->enterprise_host);
     g_free(provider->aws_profile);
     g_free(provider->aws_auth_mode);
+    g_free(provider->codex_active_account_id);
+    g_free(provider->codex_active_home_path);
+    if (provider->codex_profile_home_paths) g_ptr_array_unref(provider->codex_profile_home_paths);
     if (provider->raw) json_object_put(provider->raw);
     g_free(provider);
 }
@@ -103,6 +106,7 @@ static CodexBarProviderConfig *provider_config_new(const CodexBarProviderDescrip
     provider->id = g_strdup(descriptor->id);
     provider->enabled = descriptor->default_enabled;
     provider->has_enabled = TRUE;
+    provider->codex_profile_home_paths = g_ptr_array_new_with_free_func(g_free);
     if (g_str_equal(descriptor->id, "alibabatokenplan")) {
         provider->region = g_strdup(existing_config ? "cn" : "intl");
     }
@@ -122,6 +126,7 @@ static CodexBarProviderConfig *parse_provider(json_object *entry, GError **error
     }
     CodexBarProviderConfig *provider = g_new0(CodexBarProviderConfig, 1);
     provider->id = id;
+    provider->codex_profile_home_paths = g_ptr_array_new_with_free_func(g_free);
     provider->enabled = descriptor->default_enabled;
     json_object *enabled = NULL;
     if (json_object_object_get_ex(entry, "enabled", &enabled) && json_object_is_type(enabled, json_type_boolean)) {
@@ -142,6 +147,77 @@ static CodexBarProviderConfig *parse_provider(json_object *entry, GError **error
     provider->enterprise_host = clean_string(entry, "enterpriseHost");
     provider->aws_profile = clean_string(entry, "awsProfile");
     provider->aws_auth_mode = clean_string(entry, "awsAuthMode");
+    if (g_str_equal(provider->id, "codex")) {
+        json_object *active = NULL;
+        if (json_object_object_get_ex(entry, "codexActiveSource", &active)) {
+            json_object *kind = NULL;
+            json_object *account_id = NULL;
+            if (!json_object_is_type(active, json_type_object) ||
+                !json_object_object_get_ex(active, "kind", &kind) ||
+                !json_object_is_type(kind, json_type_string)) {
+                g_set_error_literal(error, config_error_quark(), 8, "codexActiveSource is malformed");
+                provider_config_free(provider);
+                return NULL;
+            }
+            const char *kind_name = json_object_get_string(kind);
+            provider->has_codex_active_source = TRUE;
+            if (g_str_equal(kind_name, "managedAccount")) {
+                if (!json_object_object_get_ex(active, "accountID", &account_id) ||
+                    !json_object_is_type(account_id, json_type_string) ||
+                    !g_uuid_string_is_valid(json_object_get_string(account_id))) {
+                    g_set_error_literal(error, config_error_quark(), 8,
+                                        "codexActiveSource managedAccount requires a valid accountID");
+                    provider_config_free(provider);
+                    return NULL;
+                }
+                provider->codex_active_source = CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT;
+                provider->codex_active_account_id = g_ascii_strdown(json_object_get_string(account_id), -1);
+            } else if (g_str_equal(kind_name, "liveSystem") || g_str_equal(kind_name, "profileHome")) {
+                char *path = clean_string(active, "homePath");
+                if (path) {
+                    provider->codex_active_source = CODEXBAR_CODEX_SOURCE_PROFILE_HOME;
+                    provider->codex_active_home_path = path;
+                } else {
+                    provider->codex_active_source = CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM;
+                }
+            } else {
+                g_set_error(error, config_error_quark(), 8, "Unknown codexActiveSource kind: %s", kind_name);
+                provider_config_free(provider);
+                return NULL;
+            }
+        }
+        json_object *profile_paths = NULL;
+        if (json_object_object_get_ex(entry, "codexProfileHomePaths", &profile_paths)) {
+            if (!json_object_is_type(profile_paths, json_type_array)) {
+                g_set_error_literal(error, config_error_quark(), 8, "codexProfileHomePaths must be an array");
+                provider_config_free(provider);
+                return NULL;
+            }
+            provider->has_codex_profile_home_paths = TRUE;
+            for (size_t index = 0; index < json_object_array_length(profile_paths); index++) {
+                json_object *path_value = json_object_array_get_idx(profile_paths, index);
+                if (!json_object_is_type(path_value, json_type_string)) {
+                    g_set_error_literal(error, config_error_quark(), 8,
+                                        "codexProfileHomePaths entries must be strings");
+                    provider_config_free(provider);
+                    return NULL;
+                }
+                char *path = g_strstrip(g_strdup(json_object_get_string(path_value)));
+                if (path[0] != '\0' && g_path_is_absolute(path)) {
+                    char *canonical = g_canonicalize_filename(path, NULL);
+                    if (!g_ptr_array_find_with_equal_func(provider->codex_profile_home_paths,
+                                                          canonical,
+                                                          (GEqualFunc)g_str_equal,
+                                                          NULL)) {
+                        g_ptr_array_add(provider->codex_profile_home_paths, canonical);
+                    } else {
+                        g_free(canonical);
+                    }
+                }
+                g_free(path);
+            }
+        }
+    }
     provider->raw = json_object_get(entry);
     return provider;
 }
@@ -377,6 +453,35 @@ static json_object *serialize_provider(const CodexBarProviderConfig *provider) {
     set_optional_string(object, "enterpriseHost", provider->enterprise_host);
     set_optional_string(object, "awsProfile", provider->aws_profile);
     set_optional_string(object, "awsAuthMode", provider->aws_auth_mode);
+    if (g_str_equal(provider->id, "codex") && provider->has_codex_active_source) {
+        json_object *active = json_object_new_object();
+        switch (provider->codex_active_source) {
+        case CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT:
+            json_object_object_add(active, "kind", json_object_new_string("managedAccount"));
+            json_object_object_add(active,
+                                   "accountID",
+                                   json_object_new_string(provider->codex_active_account_id));
+            break;
+        case CODEXBAR_CODEX_SOURCE_PROFILE_HOME:
+            json_object_object_add(active, "kind", json_object_new_string("liveSystem"));
+            json_object_object_add(active,
+                                   "homePath",
+                                   json_object_new_string(provider->codex_active_home_path));
+            break;
+        case CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM:
+            json_object_object_add(active, "kind", json_object_new_string("liveSystem"));
+            break;
+        }
+        json_object_object_add(object, "codexActiveSource", active);
+    }
+    if (g_str_equal(provider->id, "codex") && provider->has_codex_profile_home_paths) {
+        json_object *paths = json_object_new_array_ext((int)provider->codex_profile_home_paths->len);
+        for (guint index = 0; index < provider->codex_profile_home_paths->len; index++) {
+            json_object_array_add(paths,
+                                  json_object_new_string(g_ptr_array_index(provider->codex_profile_home_paths, index)));
+        }
+        json_object_object_add(object, "codexProfileHomePaths", paths);
+    }
     return object;
 }
 
@@ -983,6 +1088,51 @@ gboolean codexbar_config_set_api_key(CodexBarConfig *config,
         provider->enabled = TRUE;
         provider->has_enabled = TRUE;
     }
+    return TRUE;
+}
+
+gboolean codexbar_config_set_codex_active_source(CodexBarConfig *config,
+                                                  CodexBarCodexActiveSourceKind source,
+                                                  const char *value,
+                                                  GError **error) {
+    CodexBarProviderConfig *provider = codexbar_config_provider(config, "codex");
+    if (!provider) {
+        g_set_error_literal(error, config_error_quark(), 9, "Codex provider config is unavailable");
+        return FALSE;
+    }
+    char *clean = value ? g_strstrip(g_strdup(value)) : NULL;
+    if (source == CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT &&
+        (!clean || !g_uuid_string_is_valid(clean))) {
+        g_set_error_literal(error, config_error_quark(), 9, "Managed Codex source requires a valid account ID");
+        g_free(clean);
+        return FALSE;
+    }
+    if (source == CODEXBAR_CODEX_SOURCE_PROFILE_HOME &&
+        (!clean || !g_path_is_absolute(clean))) {
+        g_set_error_literal(error, config_error_quark(), 9, "Codex profile source requires an absolute home path");
+        g_free(clean);
+        return FALSE;
+    }
+    g_free(provider->codex_active_account_id);
+    g_free(provider->codex_active_home_path);
+    provider->codex_active_account_id = NULL;
+    provider->codex_active_home_path = NULL;
+    provider->has_codex_active_source = TRUE;
+    provider->codex_active_source = source;
+    if (source == CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT) {
+        provider->codex_active_account_id = g_ascii_strdown(clean, -1);
+    } else if (source == CODEXBAR_CODEX_SOURCE_PROFILE_HOME) {
+        provider->codex_active_home_path = g_canonicalize_filename(clean, NULL);
+        provider->has_codex_profile_home_paths = TRUE;
+        if (!g_ptr_array_find_with_equal_func(provider->codex_profile_home_paths,
+                                              provider->codex_active_home_path,
+                                              (GEqualFunc)g_str_equal,
+                                              NULL)) {
+            g_ptr_array_add(provider->codex_profile_home_paths,
+                            g_strdup(provider->codex_active_home_path));
+        }
+    }
+    g_free(clean);
     return TRUE;
 }
 

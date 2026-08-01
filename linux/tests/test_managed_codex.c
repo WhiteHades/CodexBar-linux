@@ -123,6 +123,32 @@ static void test_rejects_future_version(void) {
     g_clear_error(&error);
 }
 
+static void test_reauthenticate_rejects_different_identity(void) {
+    char *first = write_auth("first-auth.json", "first@example.com", "workspace-first");
+    char *second = write_auth("second-auth.json", "second@example.com", "workspace-second");
+    GError *error = NULL;
+    CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(TRUE, &error);
+    g_assert_no_error(error);
+    CodexBarManagedCodexAccount *account = codexbar_managed_codex_import(store, first, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(account);
+    char *id = g_strdup(account->id);
+    char *home = g_strdup(account->managed_home_path);
+    account = codexbar_managed_codex_reauthenticate(store, id, second, &error);
+    g_assert_null(account);
+    g_assert_error(error, g_quark_from_static_string("codexbar-managed-codex-error"), 10);
+    g_clear_error(&error);
+    account = codexbar_managed_codex_find(store, id);
+    g_assert_nonnull(account);
+    g_assert_cmpstr(account->managed_home_path, ==, home);
+    g_assert_true(g_file_test(home, G_FILE_TEST_IS_DIR));
+    codexbar_managed_codex_store_free(store);
+    g_free(home);
+    g_free(id);
+    g_free(second);
+    g_free(first);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     char *cwd = g_get_current_dir();
@@ -135,6 +161,7 @@ int main(int argc, char **argv) {
     g_setenv("CODEXBAR_MANAGED_CODEX_ROOT", homes_path, TRUE);
     g_test_add_func("/managed-codex/import-round-trip", test_import_round_trip);
     g_test_add_func("/managed-codex/unmanaged-path", test_remove_does_not_delete_unmanaged_path);
+    g_test_add_func("/managed-codex/reauth-identity", test_reauthenticate_rejects_different_identity);
     g_test_add_func("/managed-codex/future-version", test_rejects_future_version);
     int result = g_test_run();
     char *command[] = {"rm", "-rf", test_root, NULL};

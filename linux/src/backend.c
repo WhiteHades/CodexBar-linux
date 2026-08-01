@@ -383,37 +383,143 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     return provider ? provider : provider_error(config, error_source, error);
 }
 
-static gboolean append_managed_codex_accounts(CodexBarSnapshot *snapshot,
-                                              const CodexBarProviderConfig *config,
-                                              GCancellable *cancellable,
-                                              GError **fatal_error) {
-    GError *error = NULL;
-    CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(FALSE, &error);
-    if (!store) {
-        g_ptr_array_add(snapshot->providers, provider_error(config, "cli", error));
-        return TRUE;
-    }
-    GPtrArray *accounts = codexbar_managed_codex_accounts(store);
-    for (guint index = 0; index < accounts->len; index++) {
-        if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, fatal_error)) {
-            codexbar_managed_codex_store_free(store);
-            return FALSE;
+static gboolean same_codex_account(const CodexBarProvider *left, const CodexBarProvider *right) {
+    if (left->error || right->error) return FALSE;
+    const char *left_id = left->identity ? left->identity->account_id : NULL;
+    const char *right_id = right->identity ? right->identity->account_id : NULL;
+    if (left_id && right_id && g_ascii_strcasecmp(left_id, right_id) == 0) return TRUE;
+    return left->account && right->account && g_ascii_strcasecmp(left->account, right->account) == 0;
+}
+
+static void append_unique_codex(CodexBarSnapshot *snapshot, CodexBarProvider *provider) {
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        CodexBarProvider *existing = g_ptr_array_index(snapshot->providers, index);
+        if (g_str_equal(existing->provider, "codex") && same_codex_account(existing, provider)) {
+            codexbar_provider_free(provider);
+            return;
         }
-        CodexBarManagedCodexAccount *account = g_ptr_array_index(accounts, index);
-        error = NULL;
-        CodexBarProvider *provider = codexbar_codex_fetch_with_home(account->managed_home_path, &error);
-        if (!provider) provider = provider_error(config, "cli", error);
+    }
+    g_ptr_array_add(snapshot->providers, provider);
+}
+
+static CodexBarProvider *fetch_codex_home(const CodexBarProviderConfig *config,
+                                          const char *home,
+                                          const char *login_method,
+                                          const CodexBarManagedCodexAccount *account) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_codex_fetch_with_home(home, &error);
+    if (!provider) provider = provider_error(config, "cli", error);
+    if (account) {
         g_free(provider->account);
         provider->account = g_strdup(account->email);
-        if (!provider->identity) provider->identity = g_new0(CodexBarProviderIdentity, 1);
+    }
+    if (!provider->identity) provider->identity = g_new0(CodexBarProviderIdentity, 1);
+    if (account) {
         g_free(provider->identity->account_id);
         g_free(provider->identity->organization);
-        g_free(provider->identity->login_method);
         provider->identity->account_id = g_strdup(account->provider_account_id);
         provider->identity->organization = g_strdup(account->workspace_label);
-        provider->identity->login_method = g_strdup("Managed Codex account");
-        g_ptr_array_add(snapshot->providers, provider);
     }
+    g_free(provider->identity->login_method);
+    provider->identity->login_method = g_strdup(login_method);
+    return provider;
+}
+
+static gboolean profile_is_configured(const CodexBarProviderConfig *config, const char *path) {
+    return path && config->codex_profile_home_paths &&
+           g_ptr_array_find_with_equal_func(config->codex_profile_home_paths,
+                                            path,
+                                            (GEqualFunc)g_str_equal,
+                                            NULL);
+}
+
+static gboolean append_codex_accounts(CodexBarSnapshot *snapshot,
+                                      const CodexBarProviderConfig *config,
+                                      GCancellable *cancellable,
+                                      GError **fatal_error) {
+    GError *store_error = NULL;
+    CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(FALSE, &store_error);
+    CodexBarCodexActiveSourceKind active = config->has_codex_active_source
+                                              ? config->codex_active_source
+                                              : CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM;
+    CodexBarManagedCodexAccount *selected_managed = NULL;
+    if (active == CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT && store) {
+        selected_managed = codexbar_managed_codex_find(store, config->codex_active_account_id);
+    }
+
+    if (active == CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT) {
+        CodexBarProvider *provider = NULL;
+        if (!store) {
+            GError *error = g_error_new(G_IO_ERROR,
+                                        G_IO_ERROR_INVALID_DATA,
+                                        "Managed Codex store is unreadable; selected home remains fail-closed at %s: %s",
+                                        CODEXBAR_MANAGED_CODEX_UNREADABLE_HOME,
+                                        store_error ? store_error->message : "unknown error");
+            provider = provider_error(config, "cli", error);
+        } else if (!selected_managed) {
+            GError *error = g_error_new_literal(G_IO_ERROR,
+                                                G_IO_ERROR_NOT_FOUND,
+                                                "Selected managed Codex account is unavailable");
+            provider = provider_error(config, "cli", error);
+        } else {
+            provider = fetch_codex_home(config,
+                                        selected_managed->managed_home_path,
+                                        "Managed Codex account",
+                                        selected_managed);
+        }
+        append_unique_codex(snapshot, provider);
+    } else if (active == CODEXBAR_CODEX_SOURCE_PROFILE_HOME) {
+        if (profile_is_configured(config, config->codex_active_home_path)) {
+            append_unique_codex(snapshot,
+                                fetch_codex_home(config,
+                                                 config->codex_active_home_path,
+                                                 "Codex profile",
+                                                 NULL));
+        } else {
+            GError *error = g_error_new_literal(G_IO_ERROR,
+                                                G_IO_ERROR_NOT_FOUND,
+                                                "Selected Codex profile home is not configured");
+            append_unique_codex(snapshot, provider_error(config, "cli", error));
+        }
+    } else {
+        append_unique_codex(snapshot, fetch_provider(config, cancellable));
+    }
+
+    if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, fatal_error)) {
+        g_clear_error(&store_error);
+        codexbar_managed_codex_store_free(store);
+        return FALSE;
+    }
+    if (active != CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM) {
+        append_unique_codex(snapshot, fetch_provider(config, cancellable));
+    }
+    for (guint index = 0; config->codex_profile_home_paths &&
+                          index < config->codex_profile_home_paths->len; index++) {
+        const char *path = g_ptr_array_index(config->codex_profile_home_paths, index);
+        if (active == CODEXBAR_CODEX_SOURCE_PROFILE_HOME &&
+            g_str_equal(path, config->codex_active_home_path)) {
+            continue;
+        }
+        append_unique_codex(snapshot, fetch_codex_home(config, path, "Codex profile", NULL));
+    }
+    if (store) {
+        GPtrArray *accounts = codexbar_managed_codex_accounts(store);
+        for (guint index = 0; index < accounts->len; index++) {
+            if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, fatal_error)) {
+                g_clear_error(&store_error);
+                codexbar_managed_codex_store_free(store);
+                return FALSE;
+            }
+            CodexBarManagedCodexAccount *account = g_ptr_array_index(accounts, index);
+            if (account == selected_managed) continue;
+            append_unique_codex(snapshot,
+                                fetch_codex_home(config,
+                                                 account->managed_home_path,
+                                                 "Managed Codex account",
+                                                 account));
+        }
+    }
+    g_clear_error(&store_error);
     codexbar_managed_codex_store_free(store);
     return TRUE;
 }
@@ -444,6 +550,14 @@ CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancella
         if (!provider_config->enabled) {
             continue;
         }
+        if (g_str_equal(provider_config->id, "codex")) {
+            if (!append_codex_accounts(snapshot, provider_config, cancellable, error)) {
+                codexbar_snapshot_free(snapshot);
+                codexbar_config_free(config);
+                return NULL;
+            }
+            continue;
+        }
         CodexBarProvider *provider = fetch_provider(provider_config, cancellable);
         if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) {
             codexbar_provider_free(provider);
@@ -452,12 +566,6 @@ CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancella
             return NULL;
         }
         g_ptr_array_add(snapshot->providers, provider);
-        if (g_str_equal(provider_config->id, "codex") &&
-            !append_managed_codex_accounts(snapshot, provider_config, cancellable, error)) {
-            codexbar_snapshot_free(snapshot);
-            codexbar_config_free(config);
-            return NULL;
-        }
     }
     codexbar_config_free(config);
     return snapshot;
@@ -473,9 +581,10 @@ CodexBarSnapshot *codexbar_backend_fetch_all(GError **error) {
     for (guint index = 0; index < codexbar_provider_registry_count(); index++) {
         const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_at(index);
         CodexBarProviderConfig *provider_config = codexbar_config_provider(config, descriptor->id);
-        g_ptr_array_add(snapshot->providers, fetch_provider(provider_config, NULL));
         if (g_str_equal(provider_config->id, "codex")) {
-            append_managed_codex_accounts(snapshot, provider_config, NULL, NULL);
+            append_codex_accounts(snapshot, provider_config, NULL, NULL);
+        } else {
+            g_ptr_array_add(snapshot->providers, fetch_provider(provider_config, NULL));
         }
     }
     codexbar_config_free(config);
@@ -517,6 +626,17 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     CodexBarConfig *config = codexbar_config_load(error);
     if (!config) return NULL;
     CodexBarProviderConfig *stored = codexbar_config_provider(config, descriptor->id);
+    if (!source && g_str_equal(descriptor->id, "codex")) {
+        CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
+        snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+        gboolean fetched = append_codex_accounts(snapshot, stored, NULL, error);
+        CodexBarProvider *result = fetched && snapshot->providers->len > 0
+                                       ? g_ptr_array_steal_index(snapshot->providers, 0)
+                                       : NULL;
+        codexbar_snapshot_free(snapshot);
+        codexbar_config_free(config);
+        return result;
+    }
     CodexBarProviderConfig selected = *stored;
     selected.source = g_strdup(source ? source : stored->source);
     CodexBarProvider *result = fetch_provider(&selected, NULL);

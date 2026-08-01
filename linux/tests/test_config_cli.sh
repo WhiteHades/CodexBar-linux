@@ -182,6 +182,23 @@ output=$(CODEXBAR_CONFIG="$config" "$binary" config validate)
 [ "$output" = 'Config: OK' ]
 
 cat >"$config" <<'EOF'
+{"version":1,"providers":[{"id":"codex","codexActiveSource":{"kind":"profileHome","homePath":"   "}}]}
+EOF
+output=$(CODEXBAR_CONFIG="$config" "$binary" config dump --show-secrets)
+case "$output" in
+  *'"codexActiveSource":{"kind":"liveSystem"}'*) ;;
+  *) printf 'empty legacy profile source did not decode as live: %s\n' "$output" >&2; exit 1 ;;
+esac
+
+cat >"$config" <<'EOF'
+{"version":1,"providers":[{"id":"codex","codexActiveSource":{"kind":"managedAccount","accountID":"invalid"}}]}
+EOF
+if CODEXBAR_CONFIG="$config" "$binary" config validate >/dev/null 2>&1; then
+    printf 'invalid managed Codex source unexpectedly loaded\n' >&2
+    exit 1
+fi
+
+cat >"$config" <<'EOF'
 {"version":1,"providers":[{"id":"deepseek","enabled":true,"source":"web"}]}
 EOF
 if CODEXBAR_CONFIG="$config" "$binary" config validate >"$work/validate.out"; then
