@@ -27,6 +27,7 @@
 #include "proxy_providers.h"
 #include "qwen_cloud.h"
 #include "simple_providers.h"
+#include "vertex.h"
 #include "wayfinder.h"
 #include "web_providers.h"
 #include "web_providers2.h"
@@ -174,6 +175,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         native_source = "cli";
         break;
     case CODEXBAR_NATIVE_CLAUDE:
+    case CODEXBAR_NATIVE_VERTEX:
         native_source = "oauth";
         break;
     case CODEXBAR_NATIVE_OPENCODE_GO:
@@ -406,6 +408,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_ZED:
         provider = codexbar_zed_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_VERTEX:
+        provider = codexbar_vertex_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_LITELLM:
         provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);

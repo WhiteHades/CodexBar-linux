@@ -58,6 +58,7 @@ core_sources = files(
   'src/serve.c',
   'src/simple_providers.c',
   'src/tui_actions.c',
+  'src/vertex.c',
   'src/wayfinder.c',
   'src/web_providers.c',
   'src/web_providers2.c',
@@ -322,6 +323,14 @@ zed_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-zed', zed_test, env: normalized_test_env)
+
+vertex_test = executable(
+  'codexbar-linux-vertex-tests',
+  files('tests/test_vertex.c', 'src/vertex.c', 'src/http.c', 'src/model.c', 'src/process.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-vertex', vertex_test, env: normalized_test_env, depends: process_supervisor)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',
