@@ -51,6 +51,8 @@ Sakana AI, Abacus AI, Mistral, LiteLLM, sub2api, and AWS Bedrock. configure
 providers in `~/.config/codexbar/config.json`. api keys can come from each provider's standard environment variable or
 the provider `apiKey` field.
 
+Amp `auto` source follows upstream order: local `amp usage`, API token, then a configured web session cookie.
+
 the native config commands normalize all 66 stable providers while preserving provider-specific fields that are not
 native yet. writes are atomic, reject concurrent changes, and keep the config file at mode `0600`.
 

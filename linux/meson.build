@@ -278,11 +278,16 @@ test('codexbar-linux-web-providers', web_providers_test, env: normalized_test_en
 
 web_providers2_test = executable(
   'codexbar-linux-web-providers2-tests',
-  files('tests/test_web_providers2.c', 'src/web_providers2.c', 'src/http.c', 'src/model.c'),
+  files('tests/test_web_providers2.c', 'src/web_providers2.c', 'src/http.c', 'src/model.c', 'src/process.c'),
   include_directories: source_includes,
   dependencies: core_deps,
 )
-test('codexbar-linux-web-providers2', web_providers2_test, env: normalized_test_env)
+test(
+  'codexbar-linux-web-providers2',
+  web_providers2_test,
+  env: normalized_test_env,
+  depends: process_supervisor,
+)
 
 web_providers3_test = executable(
   'codexbar-linux-web-providers3-tests',

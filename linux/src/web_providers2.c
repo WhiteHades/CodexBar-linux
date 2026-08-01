@@ -1,4 +1,5 @@
 #include "web_providers2.h"
+#include "process.h"
 
 #include <json-c/json.h>
 #include <math.h>
@@ -465,6 +466,29 @@ static const char *const amp_token_environment_keys[] = {"AMP_API_KEY", NULL};
 static const char *const amp_cookie_environment_keys[] = {
     "AMP_COOKIE_HEADER", "CODEXBAR_AMP_COOKIE_HEADER", "AMP_COOKIE", NULL};
 
+static char *amp_binary(void) {
+    const char *override = g_getenv("AMP_CLI_PATH");
+    if (override) {
+        char *path = clean_header_value(override);
+        if (path && g_path_is_absolute(path) && g_file_test(path, G_FILE_TEST_IS_EXECUTABLE)) return path;
+        g_free(path);
+        return NULL;
+    }
+    char *path = g_find_program_in_path("amp");
+    if (path) return path;
+    const char *relative_paths[] = {".local/bin/amp", ".amp/bin/amp"};
+    for (size_t index = 0; index < G_N_ELEMENTS(relative_paths); index++) {
+        path = g_build_filename(g_get_home_dir(), relative_paths[index], NULL);
+        if (g_file_test(path, G_FILE_TEST_IS_EXECUTABLE)) return path;
+        g_free(path);
+    }
+    const char *system_paths[] = {"/usr/local/bin/amp", "/opt/homebrew/bin/amp"};
+    for (size_t index = 0; index < G_N_ELEMENTS(system_paths); index++) {
+        if (g_file_test(system_paths[index], G_FILE_TEST_IS_EXECUTABLE)) return g_strdup(system_paths[index]);
+    }
+    return NULL;
+}
+
 static char *amp_api_token(const CodexBarProviderConfig *config) {
     char *value = config && config->api_key ? clean_header_value(config->api_key) : NULL;
     for (size_t index = 0; !value && amp_token_environment_keys[index]; index++) {
@@ -907,6 +931,52 @@ static CodexBarProvider *amp_fetch_web(const char *cookie,
     return provider;
 }
 
+static CodexBarProvider *amp_fetch_cli(GCancellable *cancellable, gint64 now_ms, GError **error) {
+    char *binary = amp_binary();
+    if (!binary) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Amp CLI was not found");
+        return NULL;
+    }
+    char **environment = g_get_environ();
+    environment = g_environ_setenv(environment, "NO_COLOR", "1", TRUE);
+    const char *arguments[] = {binary, "usage", NULL};
+    CodexBarProcessRequest request = {
+        .arguments = arguments,
+        .environment = (const char *const *)environment,
+        .timeout_milliseconds = 15000,
+        .termination_grace_milliseconds = 300,
+        .maximum_output_bytes = WEB2_MAXIMUM_RESPONSE_BYTES,
+        .new_session = TRUE,
+    };
+    CodexBarProcessResult *result = codexbar_process_run(&request, cancellable, error);
+    g_strfreev(environment);
+    g_free(binary);
+    if (!result) return NULL;
+    if (!codexbar_process_result_succeeded(result)) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    G_IO_ERROR_FAILED,
+                    "Amp CLI exited with status %d",
+                    result->exit_status);
+        codexbar_process_result_free(result);
+        return NULL;
+    }
+    const char *output = result->standard_output;
+    size_t length = result->standard_output_length;
+    char *trimmed = g_strndup(output, length);
+    strip_unicode_whitespace(trimmed);
+    if (trimmed[0] == '\0') {
+        g_free(trimmed);
+        output = result->standard_error;
+        length = result->standard_error_length;
+    } else {
+        g_free(trimmed);
+    }
+    CodexBarProvider *provider = amp_parse_display_text_with_source(output, length, "cli", now_ms, error);
+    codexbar_process_result_free(result);
+    return provider;
+}
+
 CodexBarProvider *codexbar_amp_fetch_with_transport_and_cancellable(
     const CodexBarProviderConfig *config,
     CodexBarWebProviders2Transport transport,
@@ -914,12 +984,16 @@ CodexBarProvider *codexbar_amp_fetch_with_transport_and_cancellable(
     gint64 now_ms,
     GError **error) {
     const char *source = config ? config->source : NULL;
+    gboolean wants_cli = !source || g_str_equal(source, "auto") || g_str_equal(source, "cli");
     gboolean wants_api = !source || g_str_equal(source, "auto") || g_str_equal(source, "api");
     gboolean wants_web = !source || g_str_equal(source, "auto") || g_str_equal(source, "web");
-    if (source && g_str_equal(source, "cli")) {
-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
-                            "Amp CLI usage must be fetched by the native CLI provider");
-        return NULL;
+    if (wants_cli) {
+        CodexBarProvider *cli_provider = amp_fetch_cli(cancellable, now_ms, error);
+        if (cli_provider || (source && g_str_equal(source, "cli")) ||
+            (cancellable && g_cancellable_is_cancelled(cancellable))) {
+            return cli_provider;
+        }
+        if (error && *error) g_clear_error(error);
     }
     char *token = wants_api ? amp_api_token(config) : NULL;
     char *cookie = wants_web ? amp_cookie(config) : NULL;

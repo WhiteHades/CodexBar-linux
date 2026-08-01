@@ -281,6 +281,40 @@ static void test_amp_transport(void) {
     g_clear_error(&error);
 }
 
+static void test_amp_cli_and_fallback_order(void) {
+    GError *error = NULL;
+    char *executable = g_file_read_link("/proc/self/exe", &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(executable);
+    g_assert_true(g_setenv("AMP_CLI_PATH", executable, TRUE));
+    CodexBarProviderConfig config = {.source = "cli"};
+    CodexBarProvider *provider = codexbar_amp_fetch_with_transport(&config, unexpected_transport, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "cli");
+    g_assert_cmpstr(provider->account, ==, "cli@example.com");
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 20);
+    codexbar_provider_free(provider);
+
+    config.source = "auto";
+    config.api_key = "sgamp-test";
+    provider = codexbar_amp_fetch_with_transport(&config, unexpected_transport, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "cli");
+    codexbar_provider_free(provider);
+
+    GCancellable *cancellable = g_cancellable_new();
+    g_cancellable_cancel(cancellable);
+    config.source = "cli";
+    provider = codexbar_amp_fetch_with_transport_and_cancellable(
+        &config, unexpected_transport, cancellable, 1000, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+    g_clear_error(&error);
+    g_object_unref(cancellable);
+    g_unsetenv("AMP_CLI_PATH");
+    g_free(executable);
+}
+
 static const char *t3chat_sample(void) {
     return
         "{\"json\":{\"0\":[[0],[null,0,0]]}}\n"
@@ -354,11 +388,17 @@ static void test_t3chat_capture_transport_and_challenge(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && g_str_equal(argv[1], "usage")) {
+        g_assert_cmpstr(g_getenv("NO_COLOR"), ==, "1");
+        g_print("Signed in as cli@example.com (CLI Org)\nAmp Free: 80%% remaining today (resets daily)\n");
+        return 0;
+    }
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/web2/manus/credentials-parser", test_manus_credentials_and_parser);
     g_test_add_func("/web2/manus/transport-cancellation", test_manus_transport_and_cancellation);
     g_test_add_func("/web2/amp/parsers", test_amp_parsers);
     g_test_add_func("/web2/amp/transport", test_amp_transport);
+    g_test_add_func("/web2/amp/cli-fallback-order", test_amp_cli_and_fallback_order);
     g_test_add_func("/web2/t3chat/parser", test_t3chat_parser);
     g_test_add_func("/web2/t3chat/transport-challenge", test_t3chat_capture_transport_and_challenge);
     return g_test_run();
