@@ -2,6 +2,7 @@
 
 #include "backend.h"
 #include "config.h"
+#include "refresh_policy.h"
 #include "render.h"
 #include "tui_actions.h"
 #include "wayfinder.h"
@@ -785,13 +786,35 @@ static char *dashboard_override(const CodexBarProvider *provider) {
     return url;
 }
 
+static gboolean tui_environment_flag(const char *name) {
+    const char *value = g_getenv(name);
+    return value && (g_str_equal(value, "1") || g_ascii_strcasecmp(value, "true") == 0 ||
+                     g_ascii_strcasecmp(value, "yes") == 0);
+}
+
+static guint tui_refresh_delay(CodexBarRefreshFrequency frequency, gint64 last_interaction_us) {
+    gint64 now = g_get_monotonic_time();
+    CodexBarRefreshPolicyInput input = {
+        .has_last_menu_open = last_interaction_us != 0,
+        .menu_age_seconds = last_interaction_us == 0 ? 0 : (double)(now - last_interaction_us) / G_USEC_PER_SEC,
+        .low_power = tui_environment_flag("CODEXBAR_LOW_POWER"),
+        .constrained = tui_environment_flag("CODEXBAR_THERMALLY_CONSTRAINED"),
+    };
+    return codexbar_refresh_policy_decide(frequency, input).delay_seconds;
+}
+
 int codexbar_tui_run(void) {
+    CodexBarConfig *runtime_config = codexbar_config_load(NULL);
+    CodexBarRefreshFrequency refresh_frequency =
+        runtime_config ? runtime_config->refresh_frequency : CODEXBAR_REFRESH_FIVE_MINUTES;
+    codexbar_config_free(runtime_config);
     setlocale(LC_ALL, "");
     initscr();
     cbreak();
     noecho();
     curs_set(0);
     keypad(stdscr, TRUE);
+    timeout(1000);
     if (has_colors()) {
         initialize_theme();
     }
@@ -813,6 +836,11 @@ int codexbar_tui_run(void) {
     gboolean help_visible = FALSE;
     gboolean pending_z = FALSE;
     gboolean running = TRUE;
+    gint64 last_interaction_us = g_get_monotonic_time();
+    guint refresh_delay = tui_refresh_delay(refresh_frequency, last_interaction_us);
+    gint64 next_refresh_us = refresh_delay == 0
+                                 ? 0
+                                 : g_get_monotonic_time() + (gint64)refresh_delay * G_USEC_PER_SEC;
     while (running) {
         if (snapshot->providers->len > 0 && selected >= snapshot->providers->len) {
             selected = snapshot->providers->len - 1;
@@ -823,6 +851,32 @@ int codexbar_tui_run(void) {
         }
         draw_screen(snapshot, selected, first_metric, visible_status, mode, actions, selected_action);
         int key = getch();
+        gint64 now = g_get_monotonic_time();
+        if (key != ERR) last_interaction_us = now;
+        if (next_refresh_us != 0 && now >= next_refresh_us) {
+            g_free(status);
+            status = g_strdup("refreshing provider telemetry...");
+            draw_screen(snapshot, selected, first_metric, status, mode, actions, selected_action);
+            codexbar_snapshot_free(snapshot);
+            g_free(status);
+            status = NULL;
+            snapshot = fetch_snapshot(&status);
+            first_metric = 0;
+            refresh_delay = tui_refresh_delay(refresh_frequency, last_interaction_us);
+            gint64 completed_at_us = g_get_monotonic_time();
+            gboolean fixed = !codexbar_refresh_frequency_is_adaptive(refresh_frequency) &&
+                             refresh_frequency != CODEXBAR_REFRESH_MANUAL;
+            if (refresh_delay == 0) {
+                next_refresh_us = 0;
+            } else if (!fixed) {
+                next_refresh_us = completed_at_us + (gint64)refresh_delay * G_USEC_PER_SEC;
+            } else if (next_refresh_us <= completed_at_us) {
+                next_refresh_us = codexbar_refresh_next_fixed_deadline(
+                    next_refresh_us, completed_at_us, (gint64)refresh_delay * G_USEC_PER_SEC);
+            }
+            continue;
+        }
+        if (key == ERR) continue;
         if (pending_z) {
             pending_z = FALSE;
             if (key == 'Z') {
@@ -933,6 +987,18 @@ int codexbar_tui_run(void) {
             status = NULL;
             snapshot = fetch_snapshot(&status);
             first_metric = 0;
+            refresh_delay = tui_refresh_delay(refresh_frequency, last_interaction_us);
+            gint64 completed_at_us = g_get_monotonic_time();
+            gboolean fixed = !codexbar_refresh_frequency_is_adaptive(refresh_frequency) &&
+                             refresh_frequency != CODEXBAR_REFRESH_MANUAL;
+            if (refresh_delay == 0) {
+                next_refresh_us = 0;
+            } else if (!fixed) {
+                next_refresh_us = completed_at_us + (gint64)refresh_delay * G_USEC_PER_SEC;
+            } else if (next_refresh_us <= completed_at_us) {
+                next_refresh_us = codexbar_refresh_next_fixed_deadline(
+                    next_refresh_us, completed_at_us, (gint64)refresh_delay * G_USEC_PER_SEC);
+            }
             break;
         }
         case KEY_RESIZE:

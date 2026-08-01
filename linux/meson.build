@@ -55,6 +55,8 @@ core_sources = files(
   'src/proxy_providers.c',
   'src/qwen_cloud.c',
   'src/render.c',
+  'src/refresh_coordinator.c',
+  'src/refresh_policy.c',
   'src/sessions.c',
   'src/serve.c',
   'src/simple_providers.c',
@@ -111,6 +113,14 @@ normalized_test_env = environment()
 normalized_test_env.set('LC_ALL', 'C')
 normalized_test_env.set('TZ', 'UTC')
 test('codexbar-linux', test_executable, env: normalized_test_env, depends: process_supervisor)
+
+refresh_test = executable(
+  'codexbar-linux-refresh-tests',
+  files('tests/test_refresh.c', 'src/refresh_coordinator.c', 'src/refresh_policy.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep],
+)
+test('codexbar-linux-refresh', refresh_test, env: normalized_test_env)
 
 serialization_test = executable(
   'codexbar-linux-usage-serialization-tests',

@@ -30,7 +30,7 @@ static int print_usage(const char *program) {
     fprintf(stderr, "       %s guard --provider <name> [--window session|weekly] [--min-remaining <percent>]\n", program);
     fprintf(stderr, "       %s hooks <list|enable|disable|test>\n", program);
     fprintf(stderr, "       %s <waybar|tui|status-item>\n", program);
-    fprintf(stderr, "       %s config <validate|dump|providers|enable|disable|set-api-key|accounts>\n", program);
+    fprintf(stderr, "       %s config <validate|dump|providers|enable|disable|set-api-key|accounts|refresh>\n", program);
     fprintf(stderr, "       %s --version\n", program);
     return 2;
 }

@@ -2,6 +2,8 @@
 
 #include <glib.h>
 
+#include "refresh_policy.h"
+
 typedef struct json_object json_object;
 
 typedef struct {
@@ -25,6 +27,7 @@ typedef struct {
     int version;
     char *path;
     GPtrArray *providers;
+    CodexBarRefreshFrequency refresh_frequency;
     json_object *raw;
     gboolean loaded_from_disk;
     char *loaded_digest;

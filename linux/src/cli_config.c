@@ -571,9 +571,59 @@ static int run_set_api_key(int argc, char **argv) {
     return 0;
 }
 
+static int run_refresh(int argc, char **argv) {
+    const char *values[] = {"--format"};
+    const char *flags[] = {"--json", "--json-only", "--pretty"};
+    int value_count = argc > 0 && argv[0][0] != '-' ? 1 : 0;
+    char *argument_error = validate_arguments(
+        argc - value_count, argv + value_count, values, G_N_ELEMENTS(values), flags, G_N_ELEMENTS(flags));
+    if (argument_error) {
+        int result = print_message_error(argc, argv, argument_error);
+        g_free(argument_error);
+        return result;
+    }
+    if (argc - value_count > 0 && argv[value_count][0] != '-') {
+        return print_message_error(argc, argv, "Only one refresh frequency may be specified.");
+    }
+
+    GError *error = NULL;
+    CodexBarConfig *config = value_count ? load_config_for_update(&error) : load_config(&error);
+    if (!config) return print_error(argc, argv, error);
+    if (value_count) {
+        CodexBarRefreshFrequency parsed = codexbar_refresh_frequency_parse(argv[0], TRUE);
+        if (!g_str_equal(codexbar_refresh_frequency_raw(parsed), argv[0])) {
+            codexbar_config_free(config);
+            return print_message_error(
+                argc,
+                argv,
+                "Refresh frequency must be manual, oneMinute, twoMinutes, fiveMinutes, fifteenMinutes, "
+                "thirtyMinutes, adaptive, or adaptiveAgentAware.");
+        }
+        config->refresh_frequency = parsed;
+        if (!codexbar_config_save(config, &error)) {
+            codexbar_config_free(config);
+            return print_error(argc, argv, error);
+        }
+    }
+    const char *raw = codexbar_refresh_frequency_raw(config->refresh_frequency);
+    if (json_output(argc, argv)) {
+        json_object *object = json_object_new_object();
+        json_object_object_add(object, "refreshFrequency", json_object_new_string(raw));
+        json_object_object_add(object, "configPath", json_object_new_string(config->path));
+        puts(json_object_to_json_string_ext(
+            object, has_flag(argc, argv, "--pretty") ? JSON_C_TO_STRING_PRETTY : JSON_C_TO_STRING_PLAIN));
+        json_object_put(object);
+    } else {
+        printf("Refresh frequency: %s\n", raw);
+    }
+    codexbar_config_free(config);
+    return 0;
+}
+
 int codexbar_cli_config_run(int argc, char **argv) {
     if (argc < 1) {
-        fputs("Usage: codexbar-linux config <validate|dump|providers|enable|disable|set-api-key>\n", stderr);
+        fputs("Usage: codexbar-linux config <validate|dump|providers|enable|disable|set-api-key|accounts|refresh>\n",
+              stderr);
         return 1;
     }
     if (g_str_equal(argv[0], "validate")) return run_validate(argc - 1, argv + 1);
@@ -583,6 +633,7 @@ int codexbar_cli_config_run(int argc, char **argv) {
     if (g_str_equal(argv[0], "disable")) return run_toggle(argc - 1, argv + 1, FALSE);
     if (g_str_equal(argv[0], "set-api-key")) return run_set_api_key(argc - 1, argv + 1);
     if (g_str_equal(argv[0], "accounts")) return run_accounts(argc - 1, argv + 1);
+    if (g_str_equal(argv[0], "refresh")) return run_refresh(argc - 1, argv + 1);
     fprintf(stderr, "Unknown config command: %s\n", argv[0]);
     return 1;
 }

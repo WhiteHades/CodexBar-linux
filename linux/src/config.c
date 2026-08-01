@@ -149,6 +149,7 @@ static CodexBarConfig *config_new(const char *path) {
     config->version = CODEXBAR_CONFIG_VERSION;
     config->path = g_strdup(path);
     config->providers = g_ptr_array_new_with_free_func(provider_config_free);
+    config->refresh_frequency = CODEXBAR_REFRESH_ADAPTIVE;
     config->lock_fd = -1;
     return config;
 }
@@ -227,6 +228,13 @@ static CodexBarConfig *config_load(gboolean for_update, GError **error) {
         return NULL;
     }
     config->raw = root;
+    json_object *refresh_frequency = NULL;
+    const char *refresh_raw = NULL;
+    if (json_object_object_get_ex(root, "refreshFrequency", &refresh_frequency) &&
+        json_object_is_type(refresh_frequency, json_type_string)) {
+        refresh_raw = json_object_get_string(refresh_frequency);
+    }
+    config->refresh_frequency = codexbar_refresh_frequency_parse(refresh_raw, TRUE);
     json_object *version = NULL;
     if (json_object_object_get_ex(root, "version", &version) && json_object_is_type(version, json_type_int)) {
         config->version = json_object_get_int(version);
@@ -300,6 +308,8 @@ static json_object *serialize_provider(const CodexBarProviderConfig *provider) {
 static json_object *serialize_config(const CodexBarConfig *config) {
     json_object *root = clone_object(config->raw);
     json_object_object_add(root, "version", json_object_new_int(CODEXBAR_CONFIG_VERSION));
+    json_object_object_add(
+        root, "refreshFrequency", json_object_new_string(codexbar_refresh_frequency_raw(config->refresh_frequency)));
     json_object *providers = json_object_new_array_ext((int)config->providers->len);
     for (guint index = 0; index < config->providers->len; index++) {
         json_object_array_add(providers, serialize_provider(g_ptr_array_index(config->providers, index)));

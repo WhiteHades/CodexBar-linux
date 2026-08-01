@@ -1,7 +1,10 @@
 #include "desktop.h"
 
 #include "backend.h"
+#include "config.h"
 #include "model.h"
+#include "refresh_coordinator.h"
+#include "refresh_policy.h"
 #include "render.h"
 
 #include <gio/gio.h>
@@ -13,8 +16,8 @@
 #include <unistd.h>
 
 #define CODEXBAR_STATUS_ITEM_PATH "/StatusNotifierItem"
-#define CODEXBAR_REFRESH_SECONDS 60U
 #define CODEXBAR_ICON_SIZE 32
+#define CODEXBAR_STATUS_REFRESH_KEY "status-item"
 
 typedef enum {
     CODEXBAR_TERMINAL_NOT_FOUND,
@@ -44,9 +47,17 @@ typedef struct {
     int percentage;
     char *status;
     GCancellable *refresh_cancellable;
-    gboolean refreshing;
+    CodexBarRefreshCoordinator *refresh_coordinator;
+    CodexBarRefreshFrequency refresh_frequency;
+    gint64 last_menu_open_us;
+    gint64 fixed_refresh_deadline_us;
     gboolean stopping;
 } CodexBarStatusItem;
+
+typedef struct {
+    CodexBarStatusItem *item;
+    guint64 generation;
+} RefreshContext;
 
 #define STATUS_ITEM_MEMBERS                                                                                         \
     "<property name='Category' type='s' access='read'/>"                                                           \
@@ -218,6 +229,7 @@ static void status_item_free(CodexBarStatusItem *item) {
     g_free(item->tooltip);
     g_free(item->status);
     g_clear_object(&item->refresh_cancellable);
+    codexbar_refresh_coordinator_free(item->refresh_coordinator);
     g_free(item);
 }
 
@@ -413,34 +425,97 @@ static void refresh_worker(GTask *task, gpointer source_object, gpointer task_da
     }
 }
 
+static gboolean environment_flag(const char *name) {
+    const char *value = g_getenv(name);
+    return value && (g_str_equal(value, "1") || g_ascii_strcasecmp(value, "true") == 0 ||
+                     g_ascii_strcasecmp(value, "yes") == 0);
+}
+
+static CodexBarRefreshDecision next_refresh_decision(CodexBarStatusItem *item) {
+    gint64 now = g_get_monotonic_time();
+    CodexBarRefreshPolicyInput input = {
+        .has_last_menu_open = item->last_menu_open_us != 0,
+        .menu_age_seconds = item->last_menu_open_us == 0 ? 0 : (double)(now - item->last_menu_open_us) / G_USEC_PER_SEC,
+        .low_power = environment_flag("CODEXBAR_LOW_POWER"),
+        .constrained = environment_flag("CODEXBAR_THERMALLY_CONSTRAINED"),
+    };
+    return codexbar_refresh_policy_decide(item->refresh_frequency, input);
+}
+
+static gboolean refresh_timer_fired(gpointer user_data);
+
+static void schedule_next_refresh(CodexBarStatusItem *item) {
+    if (item->refresh_timer) {
+        g_source_remove(item->refresh_timer);
+        item->refresh_timer = 0;
+    }
+    CodexBarRefreshDecision decision = next_refresh_decision(item);
+    if (item->stopping || decision.delay_seconds == 0) return;
+    gint64 now = g_get_monotonic_time();
+    gint64 delay_us = (gint64)decision.delay_seconds * G_USEC_PER_SEC;
+    if (decision.reason == CODEXBAR_REFRESH_REASON_FIXED) {
+        if (item->fixed_refresh_deadline_us == 0) {
+            item->fixed_refresh_deadline_us = now + delay_us;
+        } else if (item->fixed_refresh_deadline_us <= now) {
+            item->fixed_refresh_deadline_us = codexbar_refresh_next_fixed_deadline(
+                item->fixed_refresh_deadline_us, now, delay_us);
+        }
+        delay_us = item->fixed_refresh_deadline_us - now;
+    } else {
+        item->fixed_refresh_deadline_us = 0;
+    }
+    guint delay_ms = (guint)CLAMP((delay_us + 999) / 1000, 1, G_MAXUINT);
+    item->refresh_timer = g_timeout_add(delay_ms, refresh_timer_fired, item);
+}
+
 static void refresh_complete(GObject *source_object, GAsyncResult *result, gpointer user_data) {
     (void)source_object;
-    CodexBarStatusItem *item = user_data;
+    RefreshContext *context = user_data;
+    CodexBarStatusItem *item = context->item;
     GError *error = NULL;
     CodexBarSnapshot *snapshot = g_task_propagate_pointer(G_TASK(result), &error);
-    item->refreshing = FALSE;
-    g_clear_object(&item->refresh_cancellable);
-    if (!item->stopping) {
+    gboolean current = codexbar_refresh_coordinator_complete(
+        item->refresh_coordinator, CODEXBAR_STATUS_REFRESH_KEY, context->generation);
+    if (current) g_clear_object(&item->refresh_cancellable);
+    if (current && !item->stopping) {
         if (snapshot) {
             set_snapshot_state(item, snapshot);
         } else {
             set_error_state(item, error ? error->message : "usage refresh failed");
         }
+        schedule_next_refresh(item);
     }
     if (snapshot) codexbar_snapshot_free(snapshot);
     g_clear_error(&error);
     status_item_unref(item);
+    g_free(context);
 }
 
-static gboolean start_refresh(gpointer user_data) {
-    CodexBarStatusItem *item = user_data;
-    if (item->stopping || item->refreshing) return G_SOURCE_CONTINUE;
-    item->refreshing = TRUE;
+static void request_refresh(CodexBarStatusItem *item, gboolean replace) {
+    if (item->stopping) return;
+    CodexBarRefreshRequest request = codexbar_refresh_coordinator_request(
+        item->refresh_coordinator, CODEXBAR_STATUS_REFRESH_KEY, replace);
+    if (!request.should_start) return;
+    if (item->refresh_timer) {
+        g_source_remove(item->refresh_timer);
+        item->refresh_timer = 0;
+    }
+    if (request.replaced_active && item->refresh_cancellable) g_cancellable_cancel(item->refresh_cancellable);
+    g_clear_object(&item->refresh_cancellable);
     item->refresh_cancellable = g_cancellable_new();
-    GTask *task = g_task_new(NULL, item->refresh_cancellable, refresh_complete, status_item_ref(item));
+    RefreshContext *context = g_new0(RefreshContext, 1);
+    context->item = status_item_ref(item);
+    context->generation = request.generation;
+    GTask *task = g_task_new(NULL, item->refresh_cancellable, refresh_complete, context);
     g_task_run_in_thread(task, refresh_worker);
     g_object_unref(task);
-    return G_SOURCE_CONTINUE;
+}
+
+static gboolean refresh_timer_fired(gpointer user_data) {
+    CodexBarStatusItem *item = user_data;
+    item->refresh_timer = 0;
+    request_refresh(item, FALSE);
+    return G_SOURCE_REMOVE;
 }
 
 static void status_item_method(GDBusConnection *connection,
@@ -458,6 +533,7 @@ static void status_item_method(GDBusConnection *connection,
     (void)parameters;
     CodexBarStatusItem *item = user_data;
     if (g_str_equal(method_name, "Activate")) {
+        item->last_menu_open_us = g_get_monotonic_time();
         GError *error = NULL;
         if (!codexbar_desktop_launch_tui(item->program, &error)) {
             g_dbus_method_invocation_return_gerror(invocation, error);
@@ -465,7 +541,7 @@ static void status_item_method(GDBusConnection *connection,
             return;
         }
     } else if (g_str_equal(method_name, "ContextMenu") || g_str_equal(method_name, "SecondaryActivate")) {
-        start_refresh(item);
+        request_refresh(item, TRUE);
     }
     g_dbus_method_invocation_return_value(invocation, NULL);
 }
@@ -549,6 +625,7 @@ static gboolean register_status_item(CodexBarStatusItem *item, GError **error) {
 static gboolean stop_status_item(gpointer user_data) {
     CodexBarStatusItem *item = user_data;
     item->stopping = TRUE;
+    codexbar_refresh_coordinator_invalidate(item->refresh_coordinator, CODEXBAR_STATUS_REFRESH_KEY);
     if (item->refresh_cancellable) g_cancellable_cancel(item->refresh_cancellable);
     g_main_loop_quit(item->loop);
     return G_SOURCE_REMOVE;
@@ -556,6 +633,7 @@ static gboolean stop_status_item(gpointer user_data) {
 
 static void status_item_shutdown(CodexBarStatusItem *item) {
     item->stopping = TRUE;
+    codexbar_refresh_coordinator_invalidate(item->refresh_coordinator, CODEXBAR_STATUS_REFRESH_KEY);
     if (item->refresh_cancellable) g_cancellable_cancel(item->refresh_cancellable);
     if (item->refresh_timer) g_source_remove(item->refresh_timer);
     if (item->freedesktop_watcher) g_bus_unwatch_name(item->freedesktop_watcher);
@@ -574,6 +652,10 @@ int codexbar_status_item_run(const char *program) {
         g_strdup_printf("org.freedesktop.StatusNotifierItem-%" G_GINT64_FORMAT "-1", (gint64)getpid());
     item->tooltip = g_strdup("CodexBar\nLoading usage...");
     item->status = g_strdup("Active");
+    item->refresh_coordinator = codexbar_refresh_coordinator_new();
+    CodexBarConfig *config = codexbar_config_load(NULL);
+    item->refresh_frequency = config ? config->refresh_frequency : CODEXBAR_REFRESH_FIVE_MINUTES;
+    codexbar_config_free(config);
     item->loop = g_main_loop_new(NULL, FALSE);
     GError *error = NULL;
     item->connection = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
@@ -586,8 +668,7 @@ int codexbar_status_item_run(const char *program) {
     }
     g_unix_signal_add(SIGINT, stop_status_item, item);
     g_unix_signal_add(SIGTERM, stop_status_item, item);
-    start_refresh(item);
-    item->refresh_timer = g_timeout_add_seconds(CODEXBAR_REFRESH_SECONDS, start_refresh, item);
+    request_refresh(item, FALSE);
     g_main_loop_run(item->loop);
     status_item_shutdown(item);
     status_item_unref(item);

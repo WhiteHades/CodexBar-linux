@@ -63,6 +63,18 @@ fi
 output=$(CODEXBAR_CONFIG="$config" "$binary" config validate)
 [ "$output" = 'Config: OK' ]
 
+output=$(CODEXBAR_CONFIG="$config" "$binary" config refresh)
+[ "$output" = 'Refresh frequency: adaptive' ]
+output=$(CODEXBAR_CONFIG="$config" "$binary" config refresh adaptive --json)
+case "$output" in
+  *'"refreshFrequency":"adaptive"'*) ;;
+  *) printf 'unexpected refresh config output: %s\n' "$output" >&2; exit 1 ;;
+esac
+if CODEXBAR_CONFIG="$config" "$binary" config refresh hourly >/dev/null 2>&1; then
+    printf 'invalid refresh frequency unexpectedly passed\n' >&2
+    exit 1
+fi
+
 output=$(printf 'team-token' | CODEXBAR_CONFIG="$config" "$binary" config accounts add \
   --provider zai --label Team --usage-scope team --organization-id org-1 --workspace-id project-1 --stdin)
 [ "$output" = 'Config: added token account for z.ai' ]
