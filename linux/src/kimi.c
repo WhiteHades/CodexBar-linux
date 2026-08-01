@@ -7,12 +7,16 @@
 #include <math.h>
 #include <string.h>
 
+#define KIMI_RESPONSE_LIMIT (1024U * 1024U)
+#define KIMI_CREDENTIAL_LIMIT (16U * 1024U)
+#define KIMI_WEB_USAGE_URL "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages"
+
 static GQuark kimi_error_quark(void) {
     return g_quark_from_static_string("codexbar-kimi-error");
 }
 
 static char *clean_token(const char *raw) {
-    if (!raw) return NULL;
+    if (!raw || strlen(raw) > KIMI_CREDENTIAL_LIMIT || !g_utf8_validate(raw, -1, NULL)) return NULL;
     char *clean = g_strdup(raw);
     g_strstrip(clean);
     size_t length = strlen(clean);
@@ -22,17 +26,39 @@ static char *clean_token(const char *raw) {
         memmove(clean, clean + 1, length - 1);
         g_strstrip(clean);
     }
+    for (const unsigned char *cursor = (const unsigned char *)clean; *cursor; cursor++) {
+        if (*cursor < 33 || *cursor == 127) {
+            g_free(clean);
+            return NULL;
+        }
+    }
     if (clean[0] != '\0') return clean;
     g_free(clean);
     return NULL;
 }
 
 static char *resolve_token(const CodexBarProviderConfig *config, const char *const *environment_keys) {
-    char *token = clean_token(config->api_key);
+    char *token = clean_token(config ? config->api_key : NULL);
     for (guint index = 0; !token && environment_keys[index]; index++) {
         token = clean_token(g_getenv(environment_keys[index]));
     }
     return token;
+}
+
+static json_object *parse_json_document(const char *json) {
+    if (!json || !g_utf8_validate(json, -1, NULL) || strlen(json) > KIMI_RESPONSE_LIMIT) return NULL;
+    size_t length = strlen(json);
+    json_tokener *tokener = json_tokener_new();
+    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    json_object *root = json_tokener_parse_ex(tokener, json, (int)length);
+    enum json_tokener_error parse_error = json_tokener_get_error(tokener);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < length && g_ascii_isspace(json[consumed])) consumed++;
+    gboolean valid = parse_error == json_tokener_success && root && consumed == length;
+    json_tokener_free(tokener);
+    if (valid) return root;
+    if (root) json_object_put(root);
+    return NULL;
 }
 
 static gboolean json_int64(json_object *object, const char *key, gint64 *result) {
@@ -170,32 +196,25 @@ char *codexbar_kimi_usage_url(const char *base_url, GError **error) {
     return url;
 }
 
-CodexBarProvider *codexbar_kimi_parse_usage(const char *json, gint64 now_ms, GError **error) {
-    json_object *root = json_tokener_parse(json);
-    json_object *usage = NULL;
-    if (!root || !json_object_is_type(root, json_type_object) ||
-        !json_object_object_get_ex(root, "usage", &usage) || !json_object_is_type(usage, json_type_object)) {
-        if (root) json_object_put(root);
-        g_set_error_literal(error, kimi_error_quark(), 1, "Kimi usage response is malformed");
-        return NULL;
-    }
+static CodexBarProvider *kimi_provider(json_object *usage,
+                                      json_object *limits,
+                                      const char *source,
+                                      gint64 now_ms,
+                                      GError **error) {
     CodexBarQuotaWindow *weekly = kimi_window(usage, "primary", "weekly", FALSE, 0);
     if (!weekly) {
-        json_object_put(root);
         g_set_error_literal(error, kimi_error_quark(), 1, "Kimi usage response is malformed");
         return NULL;
     }
 
     CodexBarProvider *provider = codexbar_provider_new();
     provider->provider = g_strdup("kimi");
-    provider->source = g_strdup("api");
+    provider->source = g_strdup(source);
     provider->has_updated_at = TRUE;
     provider->updated_at_ms = now_ms;
     codexbar_provider_add_quota_window(provider, weekly);
 
-    json_object *limits = NULL;
-    if (json_object_object_get_ex(root, "limits", &limits) && json_object_is_type(limits, json_type_array) &&
-        json_object_array_length(limits) > 0) {
+    if (limits && json_object_is_type(limits, json_type_array) && json_object_array_length(limits) > 0) {
         json_object *first = json_object_array_get_idx(limits, 0);
         json_object *detail = NULL;
         if (json_object_is_type(first, json_type_object) && json_object_object_get_ex(first, "detail", &detail) &&
@@ -210,69 +229,308 @@ CodexBarProvider *codexbar_kimi_parse_usage(const char *json, gint64 now_ms, GEr
             }
         }
     }
+    return provider;
+}
+
+CodexBarProvider *codexbar_kimi_parse_usage(const char *json, gint64 now_ms, GError **error) {
+    json_object *root = parse_json_document(json);
+    json_object *usage = NULL;
+    json_object *limits = NULL;
+    if (!root || !json_object_is_type(root, json_type_object) ||
+        !json_object_object_get_ex(root, "usage", &usage) || !json_object_is_type(usage, json_type_object)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, kimi_error_quark(), 1, "Kimi usage response is malformed");
+        return NULL;
+    }
+    json_object_object_get_ex(root, "limits", &limits);
+    CodexBarProvider *provider = kimi_provider(usage, limits, "api", now_ms, error);
     json_object_put(root);
     return provider;
 }
 
-static gboolean fetch_json(
-    const char *provider_id, const char *url, const char *token, CodexBarHttpResponse **result, GError **error) {
+CodexBarProvider *codexbar_kimi_parse_web_usage(const char *json, gint64 now_ms, GError **error) {
+    json_object *root = parse_json_document(json);
+    json_object *usages = NULL;
+    if (!root || !json_object_is_type(root, json_type_object) ||
+        !json_object_object_get_ex(root, "usages", &usages) || !json_object_is_type(usages, json_type_array)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, kimi_error_quark(), 1, "Kimi web usage response is malformed");
+        return NULL;
+    }
+    CodexBarProvider *provider = NULL;
+    size_t count = json_object_array_length(usages);
+    for (size_t index = 0; index < count && !provider; index++) {
+        json_object *usage = json_object_array_get_idx(usages, index);
+        json_object *scope = NULL;
+        json_object *detail = NULL;
+        json_object *limits = NULL;
+        if (!json_object_is_type(usage, json_type_object) ||
+            !json_object_object_get_ex(usage, "scope", &scope) || !json_object_is_type(scope, json_type_string) ||
+            !g_str_equal(json_object_get_string(scope), "FEATURE_CODING") ||
+            !json_object_object_get_ex(usage, "detail", &detail) || !json_object_is_type(detail, json_type_object)) {
+            continue;
+        }
+        json_object_object_get_ex(usage, "limits", &limits);
+        provider = kimi_provider(detail, limits, "web", now_ms, error);
+    }
+    json_object_put(root);
+    if (!provider && (!error || !*error)) {
+        g_set_error_literal(error, kimi_error_quark(), 1,
+                            "Kimi web usage response has no FEATURE_CODING scope");
+    }
+    return provider;
+}
+
+static CodexBarHttpResponse *kimi_request(const char *url,
+                                          const char *method,
+                                          const char *token,
+                                          const char *body,
+                                          gboolean web,
+                                          CodexBarKimiTransport transport,
+                                          GCancellable *cancellable,
+                                          GError **error) {
     char *authorization = g_strdup_printf("Bearer %s", token);
+    char *cookie = web ? g_strdup_printf("kimi-auth=%s", token) : NULL;
     const CodexBarHttpRequestHeader headers[] = {
         {"Authorization", authorization},
         {"Accept", "application/json"},
+        {"Content-Type", "application/json"},
+        {"Cookie", cookie},
+        {"Origin", "https://www.kimi.com"},
+        {"Referer", "https://www.kimi.com/code/console"},
+        {"Connect-Protocol-Version", "1"},
+        {"X-Msh-Platform", "web"},
     };
-    const CodexBarHttpRequest request = {
+    CodexBarHttpRequest request = {
         .url = url,
-        .method = "GET",
+        .method = method,
         .headers = headers,
-        .header_count = G_N_ELEMENTS(headers),
+        .header_count = web ? G_N_ELEMENTS(headers) : 2,
+        .body = body,
+        .body_length = body ? strlen(body) : 0,
         .timeout_seconds = 15,
+        .maximum_response_bytes = KIMI_RESPONSE_LIMIT,
         .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
         .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
     };
-    *result = codexbar_http_send(&request, error);
+    CodexBarHttpResponse *result = transport(&request, error);
+    g_free(cookie);
     g_free(authorization);
-    if (*result) return TRUE;
-    if (!error || !*error) g_set_error(error, kimi_error_quark(), 2, "%s request failed", provider_id);
-    return FALSE;
+    if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+        codexbar_http_response_free(result);
+        if (error && *error) g_clear_error(error);
+        g_cancellable_set_error_if_cancelled(cancellable, error);
+        return NULL;
+    }
+    if (!result && (!error || !*error)) g_set_error_literal(error, kimi_error_quark(), 2, "Kimi request failed");
+    return result;
+}
+
+static CodexBarProvider *kimi_fetch_api_token(const CodexBarProviderConfig *config,
+                                             const char *token,
+                                             CodexBarKimiTransport transport,
+                                             GCancellable *cancellable,
+                                             gint64 now_ms,
+                                             GError **error) {
+    const char *base = config && config->enterprise_host ? config->enterprise_host : g_getenv("KIMI_CODE_BASE_URL");
+    char *url = codexbar_kimi_usage_url(base, error);
+    if (!url) return NULL;
+    CodexBarHttpResponse *response = kimi_request(url, "GET", token, NULL, FALSE, transport, cancellable, error);
+    g_free(url);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        long status = response->status;
+        codexbar_http_response_free(response);
+        if (status == 401) {
+            g_set_error_literal(error, kimi_error_quark(), 3, "Kimi Code API key is invalid or expired.");
+        } else {
+            g_set_error(error, kimi_error_quark(), 3, "Kimi API returned HTTP %ld", status);
+        }
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_kimi_parse_usage(response->body, now_ms, error);
+    codexbar_http_response_free(response);
+    return provider;
+}
+
+static char *config_string(const CodexBarProviderConfig *config, const char *field) {
+    json_object *value = NULL;
+    if (!config || !config->raw || !json_object_object_get_ex(config->raw, field, &value) ||
+        !json_object_is_type(value, json_type_string)) return NULL;
+    return g_strdup(json_object_get_string(value));
+}
+
+static char *kimi_web_token_from_raw(const char *raw) {
+    if (!raw || !g_utf8_validate(raw, -1, NULL) || strlen(raw) > KIMI_CREDENTIAL_LIMIT) return NULL;
+    char *lower = g_ascii_strdown(raw, -1);
+    char *match = strstr(lower, "kimi-auth=");
+    if (!match) match = strstr(lower, "kimi-auth:");
+    char *token = NULL;
+    if (match) {
+        size_t offset = (size_t)(match - lower) + strlen("kimi-auth=");
+        while (g_ascii_isspace(raw[offset])) offset++;
+        size_t length = strspn(raw + offset, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-+=/");
+        if (length > 0) token = g_strndup(raw + offset, length);
+    }
+    g_free(lower);
+    if (token) return token;
+    char *clean = clean_token(raw);
+    if (!clean) return NULL;
+    guint dots = 0;
+    for (const char *cursor = clean; *cursor; cursor++) dots += *cursor == '.';
+    if (g_str_has_prefix(clean, "eyJ") && dots == 2) return clean;
+    g_free(clean);
+    return NULL;
+}
+
+static char *kimi_web_token(const CodexBarProviderConfig *config) {
+    char *raw = config_string(config, "cookieHeader");
+    if (!raw) raw = config_string(config, "manualCookieHeader");
+    if (!raw) raw = g_strdup(g_getenv("KIMI_MANUAL_COOKIE"));
+    if (!raw) raw = g_strdup(g_getenv("KIMI_AUTH_TOKEN"));
+    char *token = kimi_web_token_from_raw(raw);
+    g_free(raw);
+    return token;
+}
+
+static char *kimi_cli_token(const CodexBarProviderConfig *config, gint64 now_ms) {
+    char *path = config_string(config, "codeCredentialsPath");
+    if (!path) {
+        const char *home = g_getenv("KIMI_CODE_HOME");
+        char *root = home && home[0] ? g_strdup(home) : g_build_filename(g_get_home_dir(), ".kimi-code", NULL);
+        path = g_build_filename(root, "credentials", "kimi-code.json", NULL);
+        g_free(root);
+    }
+    char *contents = NULL;
+    gsize length = 0;
+    gboolean loaded = g_file_get_contents(path, &contents, &length, NULL);
+    g_free(path);
+    if (!loaded || length > KIMI_CREDENTIAL_LIMIT || memchr(contents, '\0', length)) {
+        g_free(contents);
+        return NULL;
+    }
+    json_object *root = parse_json_document(contents);
+    g_free(contents);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        return NULL;
+    }
+    json_object *access = NULL;
+    json_object *expiry = NULL;
+    char *token = NULL;
+    if (json_object_object_get_ex(root, "access_token", &access) && json_object_is_type(access, json_type_string)) {
+        token = clean_token(json_object_get_string(access));
+    }
+    if (token && json_object_object_get_ex(root, "expires_at", &expiry)) {
+        double expires_at = json_object_get_double(expiry);
+        if (!isfinite(expires_at) || expires_at * 1000 <= (double)now_ms + 60000) g_clear_pointer(&token, g_free);
+    }
+    json_object_put(root);
+    return token;
+}
+
+static CodexBarProvider *kimi_fetch_web(const CodexBarProviderConfig *config,
+                                       CodexBarKimiTransport transport,
+                                       GCancellable *cancellable,
+                                       gint64 now_ms,
+                                       GError **error) {
+    char *token = kimi_web_token(config);
+    if (!token) {
+        g_set_error_literal(error, kimi_error_quark(), 2,
+                            "Kimi web token is missing; configure cookieHeader or KIMI_AUTH_TOKEN");
+        return NULL;
+    }
+    const char *body = "{\"scope\":[\"FEATURE_CODING\"]}";
+    CodexBarHttpResponse *response = kimi_request(
+        KIMI_WEB_USAGE_URL, "POST", token, body, TRUE, transport, cancellable, error);
+    g_free(token);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        long status = response->status;
+        codexbar_http_response_free(response);
+        if (status == 401 || status == 403) {
+            g_set_error_literal(error, kimi_error_quark(), 3, "Kimi web session is invalid or expired");
+        } else {
+            g_set_error(error, kimi_error_quark(), 3, "Kimi web API returned HTTP %ld", status);
+        }
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_kimi_parse_web_usage(response->body, now_ms, error);
+    codexbar_http_response_free(response);
+    return provider;
+}
+
+CodexBarProvider *codexbar_kimi_fetch_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarKimiTransport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    g_return_val_if_fail(transport != NULL, NULL);
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "web")) return kimi_fetch_web(config, transport, cancellable, now_ms, error);
+    const char *keys[] = {"KIMI_CODE_API_KEY", NULL};
+    char *token = resolve_token(config, keys);
+    if (g_str_equal(mode, "api")) {
+        if (!token) {
+            g_set_error_literal(error, kimi_error_quark(), 2,
+                                "Kimi Code API key is missing. Set it in config or KIMI_CODE_API_KEY.");
+            return NULL;
+        }
+        CodexBarProvider *provider = kimi_fetch_api_token(
+            config, token, transport, cancellable, now_ms, error);
+        g_free(token);
+        return provider;
+    }
+    if (!g_str_equal(mode, "auto")) {
+        g_free(token);
+        g_set_error(error, kimi_error_quark(), 2, "Kimi source '%s' is unsupported", mode);
+        return NULL;
+    }
+    if (token) {
+        GError *api_error = NULL;
+        CodexBarProvider *provider = kimi_fetch_api_token(
+            config, token, transport, cancellable, now_ms, &api_error);
+        g_free(token);
+        if (provider) return provider;
+        if (api_error && g_error_matches(api_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            if (error) *error = api_error;
+            else g_clear_error(&api_error);
+            return NULL;
+        }
+        g_clear_error(&api_error);
+    }
+    char *cli_token = kimi_cli_token(config, now_ms);
+    if (cli_token) {
+        GError *cli_error = NULL;
+        CodexBarProvider *provider = kimi_fetch_api_token(
+            config, cli_token, transport, cancellable, now_ms, &cli_error);
+        g_free(cli_token);
+        if (provider) {
+            g_free(provider->source);
+            provider->source = g_strdup("oauth");
+            return provider;
+        }
+        if (cli_error && g_error_matches(cli_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            if (error) *error = cli_error;
+            else g_clear_error(&cli_error);
+            return NULL;
+        }
+        g_clear_error(&cli_error);
+    }
+    return kimi_fetch_web(config, transport, cancellable, now_ms, error);
+}
+
+CodexBarProvider *codexbar_kimi_fetch_with_cancellable(const CodexBarProviderConfig *config,
+                                                       const char *source,
+                                                       GCancellable *cancellable,
+                                                       GError **error) {
+    return codexbar_kimi_fetch_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
 }
 
 CodexBarProvider *codexbar_kimi_fetch(const CodexBarProviderConfig *config, GError **error) {
-    const char *keys[] = {"KIMI_CODE_API_KEY", NULL};
-    char *token = resolve_token(config, keys);
-    if (!token) {
-        g_set_error_literal(error, kimi_error_quark(), 2,
-                            "Kimi Code API key is missing. Set it in config or KIMI_CODE_API_KEY.");
-        return NULL;
-    }
-    const char *base = config->enterprise_host ? config->enterprise_host : g_getenv("KIMI_CODE_BASE_URL");
-    char *url = codexbar_kimi_usage_url(base, error);
-    if (!url) {
-        g_free(token);
-        return NULL;
-    }
-    CodexBarHttpResponse *response = NULL;
-    if (!fetch_json("Kimi", url, token, &response, error)) {
-        g_free(url);
-        g_free(token);
-        return NULL;
-    }
-    g_free(url);
-    g_free(token);
-    if (response->status != 200) {
-        if (response->status == 400) {
-            g_set_error_literal(error, kimi_error_quark(), 3, "Invalid Kimi request: Bad request");
-        } else if (response->status == 401) {
-            g_set_error_literal(error, kimi_error_quark(), 3, "Kimi Code API key is invalid or expired.");
-        } else if (response->status == 403) {
-            g_set_error_literal(error, kimi_error_quark(), 3, "Kimi API returned HTTP 403 (permission or quota denied)");
-        } else {
-            g_set_error(error, kimi_error_quark(), 3, "Kimi API returned HTTP %ld", response->status);
-        }
-        codexbar_http_response_free(response);
-        return NULL;
-    }
-    CodexBarProvider *provider = codexbar_kimi_parse_usage(response->body, g_get_real_time() / 1000, error);
-    codexbar_http_response_free(response);
-    return provider;
+    return codexbar_kimi_fetch_with_cancellable(config, "auto", NULL, error);
 }

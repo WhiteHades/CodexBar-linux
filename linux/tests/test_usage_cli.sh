@@ -236,20 +236,21 @@ set -e
 [ "$status" -eq 1 ]
 [ "$output" = '[{"provider":"jetbrains","source":"cli","error":{"message":"Could not parse JetBrains AI quota: Invalid JSON format","code":1,"kind":"provider"}}]' ]
 
-output=$(env -u CODEXBAR_BACKEND -u KIMI_CODE_API_KEY CODEXBAR_CONFIG="$config" \
+output=$(env -u CODEXBAR_BACKEND -u KIMI_CODE_API_KEY -u KIMI_AUTH_TOKEN -u KIMI_MANUAL_COOKIE \
+  HOME="$work/empty-kimi-home" CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider kimi --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"kimi","source":"api","error":{"message":"Kimi Code API key is missing.'*'"code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"kimi","source":"auto","error":{"message":"Kimi web token is missing;'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Kimi missing-key output: %s\n' "$output" >&2
     exit 1
     ;;
 esac
 
-output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
+output=$(env -u CODEXBAR_BACKEND -u KIMI_AUTH_TOKEN -u KIMI_MANUAL_COOKIE CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider kimi --source web --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"kimi","source":"web","error":{"message":"Source '\''web'\'' is unavailable for kimi on Linux. Supported sources: auto, api.","code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"kimi","source":"web","error":{"message":"Kimi web token is missing;'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Kimi web-source output: %s\n' "$output" >&2
     exit 1

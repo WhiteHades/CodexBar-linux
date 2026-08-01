@@ -58,8 +58,20 @@ CodexBarProvider *codexbar_groq_parse_usage(const char *requests_json,
                                             const char *cache_hits_json,
                                             gint64 now_ms,
                                             GError **error);
+CodexBarProvider *codexbar_groq_parse_console_activity(const char *json,
+                                                       size_t length,
+                                                       gint64 now_ms,
+                                                       int history_days,
+                                                       GError **error);
 CodexBarProvider *codexbar_groq_fetch_with_transport_and_cancellable(
     const CodexBarProviderConfig *config,
+    CodexBarApiProviders2Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error);
+CodexBarProvider *codexbar_groq_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
     CodexBarApiProviders2Transport transport,
     GCancellable *cancellable,
     gint64 now_ms,
@@ -71,4 +83,9 @@ CodexBarProvider *codexbar_groq_fetch_with_transport(const CodexBarProviderConfi
 CodexBarProvider *codexbar_groq_fetch_with_cancellable(const CodexBarProviderConfig *config,
                                                        GCancellable *cancellable,
                                                        GError **error);
+CodexBarProvider *codexbar_groq_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error);
 CodexBarProvider *codexbar_groq_fetch(const CodexBarProviderConfig *config, GError **error);

@@ -13,6 +13,8 @@
 #define MINIMAX_GLOBAL_LEGACY_URL "https://api.minimax.io/v1/api/openplatform/coding_plan/remains"
 #define MINIMAX_CHINA_TOKEN_URL "https://api.minimaxi.com/v1/token_plan/remains"
 #define MINIMAX_CHINA_LEGACY_URL "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+#define MINIMAX_GLOBAL_WEB_URL "https://www.minimax.io/v1/api/openplatform/coding_plan/remains"
+#define MINIMAX_CHINA_WEB_URL "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains"
 
 #define ALIBABA_INTL_URL                                                                                         \
     "https://modelstudio.console.alibabacloud.com/data/api.json?"                                               \
@@ -90,6 +92,43 @@ static char *resolve_first(const char *configured, const char *const *environmen
     char *value = clean_credential(configured);
     for (size_t index = 0; !value && environment_keys[index]; index++) {
         value = clean_credential(g_getenv(environment_keys[index]));
+    }
+    return value;
+}
+
+static char *clean_header_value(const char *raw) {
+    if (!raw || !g_utf8_validate(raw, -1, NULL) || strlen(raw) > MAX_CREDENTIAL_BYTES) return NULL;
+    char *value = g_strdup(raw);
+    strip_unicode_whitespace(value);
+    size_t length = strlen(value);
+    if (length >= 2 && ((value[0] == '\'' && value[length - 1] == '\'') ||
+                        (value[0] == '"' && value[length - 1] == '"'))) {
+        value[length - 1] = '\0';
+        memmove(value, value + 1, length - 1);
+        strip_unicode_whitespace(value);
+    }
+    for (const unsigned char *cursor = (const unsigned char *)value; *cursor; cursor++) {
+        if (*cursor < 32 || *cursor == 127) {
+            g_free(value);
+            return NULL;
+        }
+    }
+    if (value[0]) return value;
+    g_free(value);
+    return NULL;
+}
+
+static char *config_or_environment_header(const CodexBarProviderConfig *config,
+                                          const char *field,
+                                          const char *const *environment_keys) {
+    char *value = NULL;
+    json_object *member = NULL;
+    if (config && config->raw && json_object_object_get_ex(config->raw, field, &member) &&
+        json_object_is_type(member, json_type_string)) {
+        value = clean_header_value(json_object_get_string(member));
+    }
+    for (size_t index = 0; !value && environment_keys[index]; index++) {
+        value = clean_header_value(g_getenv(environment_keys[index]));
     }
     return value;
 }
@@ -489,7 +528,7 @@ static CodexBarProvider *minimax_request_once(const char *url,
                                               gint64 now_ms,
                                               GError **error) {
     char *authorization = g_strdup_printf("Bearer %s", key);
-    const CodexBarHttpRequestHeader headers[] = {
+    CodexBarHttpRequestHeader headers[] = {
         {"Authorization", authorization},
         {"Accept", "application/json"},
         {"Content-Type", "application/json"},
@@ -596,6 +635,126 @@ CodexBarProvider *codexbar_minimax_fetch_with_transport_and_cancellable(
         g_clear_error(&first_error);
     }
     return NULL;
+}
+
+static CodexBarProvider *minimax_fetch_web(const CodexBarProviderConfig *config,
+                                          CodexBarApiProviders3Transport transport,
+                                          GCancellable *cancellable,
+                                          gint64 now_ms,
+                                          GError **error) {
+    static const char *const cookie_keys[] = {"MINIMAX_COOKIE", "MINIMAX_COOKIE_HEADER", NULL};
+    static const char *const authorization_keys[] = {"MINIMAX_AUTHORIZATION_TOKEN", NULL};
+    static const char *const group_keys[] = {"MINIMAX_GROUP_ID", NULL};
+    char *cookie = config_or_environment_header(config, "cookieHeader", cookie_keys);
+    if (!cookie) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "MiniMax web session is missing; configure cookieHeader or MINIMAX_COOKIE_HEADER");
+        return NULL;
+    }
+    char *authorization_token = config_or_environment_header(config, "authorizationToken", authorization_keys);
+    char *group_id = config_or_environment_header(config, "groupID", group_keys);
+    gboolean china = config && config->region && g_ascii_strcasecmp(config->region, "cn") == 0;
+    const char *base_url = china ? MINIMAX_CHINA_WEB_URL : MINIMAX_GLOBAL_WEB_URL;
+    char *escaped_group = group_id ? g_uri_escape_string(group_id, NULL, TRUE) : NULL;
+    char *url = escaped_group ? g_strdup_printf("%s?GroupId=%s", base_url, escaped_group) : g_strdup(base_url);
+    char *authorization = authorization_token ? g_strdup_printf("Bearer %s", authorization_token) : NULL;
+    CodexBarHttpRequestHeader headers[] = {
+        {"Cookie", cookie},
+        {"Authorization", authorization},
+        {"Accept", "application/json, text/plain, */*"},
+        {"X-Requested-With", "XMLHttpRequest"},
+        {"Origin", china ? "https://www.minimaxi.com" : "https://www.minimax.io"},
+        {"Referer", china ? "https://platform.minimaxi.com/user-center/payment/coding-plan?cycle_type=3"
+                           : "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3"},
+    };
+    CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .headers = headers,
+        .header_count = authorization ? G_N_ELEMENTS(headers) : G_N_ELEMENTS(headers) - 1,
+        .timeout_seconds = PROVIDER_TIMEOUT_SECONDS,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    if (!authorization) {
+        headers[1] = headers[2];
+        headers[2] = headers[3];
+        headers[3] = headers[4];
+        headers[4] = headers[5];
+    }
+    CodexBarHttpResponse *response = send_request(&request, transport, error);
+    g_free(authorization);
+    g_free(escaped_group);
+    g_free(group_id);
+    g_free(authorization_token);
+    g_free(cookie);
+    g_free(url);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "MiniMax web endpoint returned HTTP %ld",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_minimax_parse_api_usage(
+        response->body, response->body_length, now_ms, error);
+    codexbar_http_response_free(response);
+    if (provider) {
+        g_free(provider->source);
+        provider->source = g_strdup("web");
+    }
+    return provider;
+}
+
+CodexBarProvider *codexbar_minimax_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarApiProviders3Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "api")) {
+        return codexbar_minimax_fetch_with_transport_and_cancellable(
+            config, transport, cancellable, now_ms, error);
+    }
+    if (g_str_equal(mode, "web")) return minimax_fetch_web(config, transport, cancellable, now_ms, error);
+    if (!g_str_equal(mode, "auto")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                    "MiniMax source '%s' is unsupported", mode);
+        return NULL;
+    }
+    char *key = resolve_first(config ? config->api_key : NULL, minimax_environment_keys);
+    gboolean standard_key = key && g_str_has_prefix(key, "sk-api-");
+    g_free(key);
+    if (!standard_key && codexbar_minimax_has_api_key(config)) {
+        GError *api_error = NULL;
+        CodexBarProvider *provider = codexbar_minimax_fetch_with_transport_and_cancellable(
+            config, transport, cancellable, now_ms, &api_error);
+        if (provider) return provider;
+        if (api_error && g_error_matches(api_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            if (error) *error = api_error;
+            else g_clear_error(&api_error);
+            return NULL;
+        }
+        g_clear_error(&api_error);
+    }
+    return minimax_fetch_web(config, transport, cancellable, now_ms, error);
+}
+
+CodexBarProvider *codexbar_minimax_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_minimax_fetch_for_source_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
 }
 
 CodexBarProvider *codexbar_minimax_fetch_with_transport(const CodexBarProviderConfig *config,

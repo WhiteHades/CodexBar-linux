@@ -22,6 +22,18 @@ CodexBarProvider *codexbar_minimax_fetch_with_transport_and_cancellable(
     GCancellable *cancellable,
     gint64 now_ms,
     GError **error);
+CodexBarProvider *codexbar_minimax_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarApiProviders3Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error);
+CodexBarProvider *codexbar_minimax_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error);
 CodexBarProvider *codexbar_minimax_fetch_with_transport(const CodexBarProviderConfig *config,
                                                         CodexBarApiProviders3Transport transport,
                                                         gint64 now_ms,

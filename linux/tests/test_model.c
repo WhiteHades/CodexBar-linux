@@ -1170,6 +1170,81 @@ static void test_kimi_usage(void) {
     codexbar_provider_free(provider);
 }
 
+static gboolean kimi_test_web;
+
+static const char *kimi_test_header(const CodexBarHttpRequest *request, const char *name) {
+    for (size_t index = 0; index < request->header_count; index++) {
+        if (g_ascii_strcasecmp(request->headers[index].name, name) == 0) return request->headers[index].value;
+    }
+    return NULL;
+}
+
+static CodexBarHttpResponse *kimi_test_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)error;
+    CodexBarHttpResponse *response = g_new0(CodexBarHttpResponse, 1);
+    response->status = 200;
+    if (kimi_test_web) {
+        g_assert_cmpstr(request->url,
+                        ==,
+                        "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages");
+        g_assert_cmpstr(request->method, ==, "POST");
+        g_assert_cmpstr(kimi_test_header(request, "Authorization"), ==, "Bearer eyJtest.payload.signature");
+        g_assert_cmpstr(kimi_test_header(request, "Cookie"), ==, "kimi-auth=eyJtest.payload.signature");
+        g_assert_cmpmem(request->body,
+                        request->body_length,
+                        "{\"scope\":[\"FEATURE_CODING\"]}",
+                        strlen("{\"scope\":[\"FEATURE_CODING\"]}"));
+        response->body = g_strdup(
+            "{\"usages\":[{\"scope\":\"OTHER\",\"detail\":{\"limit\":1}},"
+            "{\"scope\":\"FEATURE_CODING\",\"detail\":{\"limit\":100,\"remaining\":40},"
+            "\"limits\":[{\"window\":{\"duration\":5,\"timeUnit\":\"TIME_UNIT_HOUR\"},"
+            "\"detail\":{\"limit\":20,\"used\":5}}]}]}");
+    } else {
+        g_assert_cmpstr(request->url, ==, "https://api.kimi.com/coding/v1/usages");
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_cmpstr(kimi_test_header(request, "Authorization"), ==, "Bearer kimi-api-key");
+        g_assert_null(kimi_test_header(request, "Cookie"));
+        response->body = g_strdup("{\"usage\":{\"limit\":100,\"used\":10}}");
+    }
+    response->body_length = strlen(response->body);
+    response->headers = g_ptr_array_new();
+    return response;
+}
+
+static void test_kimi_sources(void) {
+    CodexBarProviderConfig config = {.raw = json_object_new_object()};
+    json_object_object_add(config.raw,
+                           "cookieHeader",
+                           json_object_new_string("kimi-auth=eyJtest.payload.signature; other=value"));
+    kimi_test_web = TRUE;
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_kimi_fetch_with_transport_and_cancellable(
+        &config, "web", kimi_test_transport, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 60);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_kimi_fetch_with_transport_and_cancellable(
+        &config, "auto", kimi_test_transport, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "web");
+    codexbar_provider_free(provider);
+
+    config.api_key = "kimi-api-key";
+    kimi_test_web = FALSE;
+    provider = codexbar_kimi_fetch_with_transport_and_cancellable(
+        &config, "api", kimi_test_transport, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "api");
+    codexbar_provider_free(provider);
+    json_object_put(config.raw);
+}
+
 static void test_clawrouter_usage(void) {
     GError *error = NULL;
     const char *json =
@@ -1642,14 +1717,29 @@ static void test_provider_registry(void) {
     g_assert_cmpstr(plan[1], ==, "web");
     const char *single_source_providers[][2] = {
         {"alibaba", "api"},
-        {"antigravity", "cli"}, {"minimax", "api"}, {"kimi", "api"},
-        {"ollama", "api"},      {"groq", "api"},
+        {"antigravity", "cli"},
     };
     for (guint index = 0; index < G_N_ELEMENTS(single_source_providers); index++) {
         const CodexBarProviderDescriptor *single = codexbar_provider_registry_find(single_source_providers[index][0]);
         g_assert_cmpuint(codexbar_provider_auto_source_plan(single, plan, G_N_ELEMENTS(plan)), ==, 1);
         g_assert_cmpstr(plan[0], ==, single_source_providers[index][1]);
     }
+    const CodexBarProviderDescriptor *ollama = codexbar_provider_registry_find("ollama");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(ollama, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "web");
+    g_assert_cmpstr(plan[1], ==, "api");
+    const CodexBarProviderDescriptor *groq_sources = codexbar_provider_registry_find("groq");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(groq_sources, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "web");
+    g_assert_cmpstr(plan[1], ==, "api");
+    const CodexBarProviderDescriptor *minimax = codexbar_provider_registry_find("minimax");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(minimax, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "api");
+    g_assert_cmpstr(plan[1], ==, "web");
+    const CodexBarProviderDescriptor *kimi = codexbar_provider_registry_find("kimi");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(kimi, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "api");
+    g_assert_cmpstr(plan[1], ==, "web");
     const CodexBarProviderDescriptor *windsurf = codexbar_provider_registry_find("windsurf");
     g_assert_cmpuint(codexbar_provider_auto_source_plan(windsurf, plan, G_N_ELEMENTS(plan)), ==, 2);
     g_assert_cmpstr(plan[0], ==, "web");
@@ -1759,6 +1849,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/render/provider-siloing-operational-status", test_identity_provider_siloing_and_operational_status);
     g_test_add_func("/provider/openrouter-credits", test_openrouter_credits);
     g_test_add_func("/provider/kimi-usage", test_kimi_usage);
+    g_test_add_func("/provider/kimi-sources", test_kimi_sources);
     g_test_add_func("/provider/clawrouter-usage", test_clawrouter_usage);
     g_test_add_func("/provider/llmproxy-usage", test_llmproxy_usage);
     g_test_add_func("/provider/codebuff-usage", test_codebuff_usage);

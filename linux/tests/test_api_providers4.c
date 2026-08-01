@@ -13,6 +13,7 @@ typedef enum {
     FIXTURE_OLLAMA,
     FIXTURE_OLLAMA_LOOPBACK,
     FIXTURE_OLLAMA_UNAUTHORIZED,
+    FIXTURE_OLLAMA_WEB,
 } FixtureKind;
 
 typedef struct {
@@ -148,6 +149,22 @@ static CodexBarHttpResponse *stub_transport(const CodexBarHttpRequest *request, 
         g_assert_null(request->body);
         return make_response(200, "{\"models\":[{\"name\":\"gemma3\"},{\"name\":\"qwen3\"}]}");
     }
+    case FIXTURE_OLLAMA_WEB:
+        g_assert_cmpuint(index, ==, 0);
+        g_assert_cmpstr(request->url, ==, "https://ollama.com/settings");
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_cmpstr(request_header(request, "Cookie"), ==, "__Secure-session=test-session");
+        g_assert_cmpstr(request_header(request, "Origin"), ==, "https://ollama.com");
+        g_assert_cmpstr(request_header(request, "Referer"), ==, "https://ollama.com/settings");
+        g_assert_cmpint(request->redirect_policy, ==, CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN);
+        return make_response(
+            200,
+            "<span>Cloud Usage</span><span class=\"plan\">pro</span>"
+            "<h2 id=\"header-email\">user@example.com</h2>"
+            "<span>Session usage</span><span>12.5% used</span>"
+            "<div data-time=\"2026-08-02T01:02:03Z\"></div>"
+            "<span>Weekly usage</span><span style=\"width: 34%\"></span>"
+            "<div data-time=\"2026-08-08T00:00:00Z\"></div>");
     case FIXTURE_NONE:
         break;
     }
@@ -373,6 +390,58 @@ static void test_ollama_parser_transport_and_security(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_ollama_web_parser_and_source_routing(void) {
+    const char *html =
+        "<span>Cloud Usage</span><span>free</span>"
+        "<h2 id=\"header-email\">user@example.com</h2>"
+        "<span>Hourly usage</span><span>2.5% Used</span>"
+        "<div data-time=\"2026-08-02T01:02:03Z\"></div>"
+        "<span>Weekly usage</span><span style=\"width: 4.2%\"></span>"
+        "<div data-time=\"2026-08-08T00:00:00.123Z\"></div>";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_ollama_parse_settings_html(html, strlen(html), 7, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->plan, ==, "free");
+    g_assert_cmpstr(provider->account, ==, "user@example.com");
+    g_assert_cmpstr(provider->identity->login_method, ==, "free");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    CodexBarQuotaWindow *hourly = g_ptr_array_index(provider->quota_windows, 0);
+    CodexBarQuotaWindow *weekly = g_ptr_array_index(provider->quota_windows, 1);
+    g_assert_cmpfloat_with_epsilon(hourly->used_percent, 2.5, 0.001);
+    g_assert_false(hourly->has_window_minutes);
+    g_assert_true(hourly->has_resets_at);
+    g_assert_cmpfloat_with_epsilon(weekly->used_percent, 4.2, 0.001);
+    g_assert_cmpint(weekly->window_minutes, ==, 10080);
+    codexbar_provider_free(provider);
+
+    const char *signed_out =
+        "<h1>Sign in to Ollama</h1><form action=\"/signin\"><input type=\"email\"><input type=\"password\"></form>";
+    provider = codexbar_ollama_parse_settings_html(signed_out, strlen(signed_out), 7, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+    g_clear_error(&error);
+
+    json_object *raw = json_object_new_object();
+    json_object_object_add(raw, "cookieHeader", json_object_new_string("__Secure-session=test-session"));
+    CodexBarProviderConfig config = {.api_key = "ollama-test", .raw = raw};
+    reset_fixture(FIXTURE_OLLAMA_WEB);
+    provider = codexbar_ollama_fetch_for_source_with_transport_and_cancellable(
+        &config, "web", stub_transport, NULL, 7, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpfloat_with_epsilon(
+        ((CodexBarQuotaWindow *)g_ptr_array_index(provider->quota_windows, 0))->used_percent, 12.5, 0.001);
+    codexbar_provider_free(provider);
+
+    reset_fixture(FIXTURE_OLLAMA_WEB);
+    provider = codexbar_ollama_fetch_for_source_with_transport_and_cancellable(
+        &config, "auto", stub_transport, NULL, 7, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(fixture.count, ==, 1);
+    codexbar_provider_free(provider);
+    json_object_put(raw);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/api-providers4/factory/parsers", test_factory_parsers);
@@ -380,5 +449,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/api-providers4/gemini/parser", test_gemini_parser);
     g_test_add_func("/api-providers4/gemini/transport", test_gemini_transport_unauthorized_and_cancellation);
     g_test_add_func("/api-providers4/ollama/api", test_ollama_parser_transport_and_security);
+    g_test_add_func("/api-providers4/ollama/web", test_ollama_web_parser_and_source_routing);
     return g_test_run();
 }

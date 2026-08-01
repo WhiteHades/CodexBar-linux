@@ -120,6 +120,26 @@ static CodexBarHttpResponse *unexpected_transport(const CodexBarHttpRequest *req
     g_assert_not_reached();
 }
 
+static CodexBarHttpResponse *minimax_web_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)error;
+    g_assert_cmpstr(request->url,
+                    ==,
+                    "https://www.minimax.io/v1/api/openplatform/coding_plan/remains?GroupId=12345");
+    g_assert_cmpstr(request->method, ==, "GET");
+    g_assert_cmpstr(request_header(request, "Cookie"), ==, "session=web-token; other=value");
+    g_assert_null(request_header(request, "Authorization"));
+    g_assert_cmpstr(request_header(request, "Origin"), ==, "https://www.minimax.io");
+    g_assert_cmpint(request->redirect_policy, ==, CODEXBAR_HTTP_REDIRECT_DENY);
+    CodexBarHttpResponse *response = g_new0(CodexBarHttpResponse, 1);
+    response->status = 200;
+    response->body = g_strdup(
+        "{\"model_remains\":[{\"current_interval_total_count\":100,"
+        "\"current_interval_usage_count\":25}],\"base_resp\":{\"status_code\":0}}");
+    response->body_length = strlen(response->body);
+    response->headers = g_ptr_array_new();
+    return response;
+}
+
 static void reset_fixture(void) {
     memset(&fixture, 0, sizeof(fixture));
 }
@@ -237,6 +257,29 @@ static void test_minimax_fetch_fallback_and_cancellation(void) {
     g_assert_error(error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
     g_clear_error(&error);
     g_object_unref(fixture.cancellable);
+}
+
+static void test_minimax_web_source(void) {
+    CodexBarProviderConfig config = {.api_key = "sk-api-standard"};
+    config.raw = json_object_new_object();
+    json_object_object_add(config.raw, "cookieHeader", json_object_new_string("session=web-token; other=value"));
+    json_object_object_add(config.raw, "groupID", json_object_new_string("12345"));
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_minimax_fetch_for_source_with_transport_and_cancellable(
+        &config, "web", minimax_web_transport, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 75.0);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_minimax_fetch_for_source_with_transport_and_cancellable(
+        &config, "auto", minimax_web_transport, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "web");
+    codexbar_provider_free(provider);
+    json_object_put(config.raw);
 }
 
 static void test_alibaba_parse(void) {
@@ -528,6 +571,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/api-providers3/credentials", test_credentials);
     g_test_add_func("/api-providers3/minimax/parse", test_minimax_parse);
     g_test_add_func("/api-providers3/minimax/fetch", test_minimax_fetch_fallback_and_cancellation);
+    g_test_add_func("/api-providers3/minimax/web-source", test_minimax_web_source);
     g_test_add_func("/api-providers3/alibaba/parse", test_alibaba_parse);
     g_test_add_func("/api-providers3/alibaba/fetch", test_alibaba_fetch);
     g_test_add_func("/api-providers3/doubao/parse", test_doubao_parse);

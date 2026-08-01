@@ -241,7 +241,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         provider = codexbar_opencode_go_fetch(&error);
         break;
     case CODEXBAR_NATIVE_KIMI:
-        provider = codexbar_kimi_fetch(config, &error);
+        provider = codexbar_kimi_fetch_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_QWEN_CLOUD:
         provider = codexbar_qwen_cloud_fetch_with_cancellable(config, cancellable, &error);
@@ -268,10 +269,12 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         provider = codexbar_warp_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_GROQ:
-        provider = codexbar_groq_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_groq_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_MINIMAX:
-        provider = codexbar_minimax_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_minimax_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_ALIBABA:
         provider = codexbar_alibaba_fetch_with_cancellable(config, cancellable, &error);
@@ -287,7 +290,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         provider = codexbar_gemini_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_OLLAMA:
-        provider = codexbar_ollama_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_ollama_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_KIRO:
         provider = codexbar_kiro_fetch_with_cancellable(config, cancellable, &error);

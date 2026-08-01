@@ -39,7 +39,7 @@ static CodexBarHttpResponse *stub_transport(const CodexBarHttpRequest *request, 
     g_assert_cmpuint(index, <, fixture.response_count);
     g_assert_cmpstr(request_header(request, "Authorization"), ==, fixture.authorization);
     g_assert_cmpstr(request_header(request, "Accept"), ==, "application/json");
-    g_assert_cmpint(request->timeout_seconds, ==, 15);
+    g_assert_cmpint(request->timeout_seconds, ==, g_str_equal(fixture.provider, "groq-web") ? 20 : 15);
     g_assert_cmpuint(request->maximum_response_bytes, ==, 1024U * 1024U);
     g_assert_cmpint(request->protocol_policy, ==, CODEXBAR_HTTP_HTTPS_ONLY);
     g_assert_cmpint(request->redirect_policy, ==, CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN);
@@ -62,6 +62,13 @@ static CodexBarHttpResponse *stub_transport(const CodexBarHttpRequest *request, 
                         ==,
                         "GetRequestLimitInfo");
         json_object_put(body);
+    } else if (g_str_equal(fixture.provider, "groq-web")) {
+        g_assert_cmpuint(index, ==, 0);
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_true(g_str_has_prefix(
+            request->url, "https://metrics.groq.test/platform/v1/organizations/org_123/activity?"));
+        g_assert_nonnull(strstr(request->url, "start_date="));
+        g_assert_nonnull(strstr(request->url, "end_date="));
     } else {
         g_assert_cmpstr(request->method, ==, "GET");
         g_assert_true(g_str_has_prefix(request->url,
@@ -208,6 +215,54 @@ static void test_groq_parser(void) {
     g_clear_error(&error);
 }
 
+static void test_groq_console_parser_and_source(void) {
+    const char *activity =
+        "{\"data\":["
+        "{\"organization_name\":\"Acme\",\"model\":\"llama\",\"timestamp\":1785542400,"
+        "\"num_requests\":3,\"n_context_tokens_total\":100,"
+        "\"n_non_cached_context_tokens_total\":70,\"n_generated_tokens_total\":20,\"cost\":1.25},"
+        "{\"organization_name\":\"Acme\",\"model\":\"mixtral\",\"timestamp\":1785542500,"
+        "\"num_requests\":2,\"n_context_tokens_total\":50,\"n_generated_tokens_total\":10,\"cost\":0.75}"
+        "]}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_groq_parse_console_activity(
+        activity, strlen(activity), 1785542600000, 30, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "console");
+    g_assert_cmpstr(provider->identity->organization, ==, "Acme");
+    g_assert_cmpstr(provider->identity->login_method, ==, "Console");
+    g_assert_cmpfloat(provider->provider_cost->used, ==, 2.0);
+    g_assert_cmpint(provider->token_cost->today_tokens, ==, 180);
+    g_assert_cmpint(provider->token_cost->today_requests, ==, 5);
+    g_assert_cmpfloat(provider->token_cost->today_cost, ==, 2.0);
+    g_assert_cmpint(provider->token_cost->last_days_tokens, ==, 180);
+    g_assert_cmpint(provider->token_cost->history_days, ==, 30);
+    g_assert_nonnull(json_object_object_get(provider->usage_extensions, "groqConsoleUsage"));
+    codexbar_provider_free(provider);
+
+    json_object *raw = json_object_new_object();
+    json_object_object_add(
+        raw,
+        "cookieHeader",
+        json_object_new_string(
+            "stytch_session_jwt=x.eyJodHRwczovL2dyb3EuY29tL29yZ2FuaXphdGlvbiI6eyJpZCI6Im9yZ18xMjMifX0=.y"));
+    CodexBarProviderConfig config = {.api_key = "groq-key", .raw = raw};
+    g_setenv("GROQ_API_URL", "https://metrics.groq.test/custom", TRUE);
+    reset_fixture(
+        "groq-web",
+        "Bearer x.eyJodHRwczovL2dyb3EuY29tL29yZ2FuaXphdGlvbiI6eyJpZCI6Im9yZ18xMjMifX0=.y",
+        1);
+    fixture.statuses[0] = 200;
+    fixture.bodies[0] = activity;
+    provider = codexbar_groq_fetch_for_source_with_transport_and_cancellable(
+        &config, "web", stub_transport, NULL, 1785542600000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(fixture.count, ==, 1);
+    codexbar_provider_free(provider);
+    g_unsetenv("GROQ_API_URL");
+    json_object_put(raw);
+}
+
 static void test_transports_and_credentials(void) {
     g_unsetenv("SYNTHETIC_API_KEY");
     g_unsetenv("WARP_API_KEY");
@@ -311,6 +366,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/api-providers2/synthetic-fallback-malformed", test_synthetic_fallback_and_malformed);
     g_test_add_func("/api-providers2/warp-parser", test_warp_parser);
     g_test_add_func("/api-providers2/groq-parser", test_groq_parser);
+    g_test_add_func("/api-providers2/groq-console", test_groq_console_parser_and_source);
     g_test_add_func("/api-providers2/transports-security", test_transports_and_credentials);
     g_test_add_func("/api-providers2/cancellation", test_cancellation);
     return g_test_run();

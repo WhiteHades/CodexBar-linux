@@ -8,6 +8,8 @@
 #define SYNTHETIC_URL "https://api.synthetic.new/v2/quotas"
 #define WARP_URL "https://app.warp.dev/graphql/v2?op=GetRequestLimitInfo"
 #define GROQ_DEFAULT_BASE "https://api.groq.com/v1"
+#define GROQ_STYTCH_DEFAULT_BASE "https://api.stytchb2b.groq.com"
+#define GROQ_STYTCH_PUBLIC_TOKEN "public-token-live-58df57a9-a1f5-4066-bc0c-2ff942db684f"
 #define PROVIDER_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
 
 static const char warp_query[] =
@@ -902,6 +904,227 @@ CodexBarProvider *codexbar_groq_parse_usage(const char *requests_json,
     return groq_provider(requests, input_tokens, output_tokens, cache_hits, now_ms);
 }
 
+static gboolean groq_row_int(json_object *row, const char *key, gint64 *result) {
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(row, key, &value) || json_object_is_type(value, json_type_null)) {
+        *result = 0;
+        return TRUE;
+    }
+    return json_int_value(value, result);
+}
+
+CodexBarProvider *codexbar_groq_parse_console_activity(const char *json,
+                                                       size_t length,
+                                                       gint64 now_ms,
+                                                       int history_days,
+                                                       GError **error) {
+    json_object *root = parse_json_document(json, length);
+    json_object *data = NULL;
+    if (!root || !json_object_is_type(root, json_type_object) ||
+        !json_object_object_get_ex(root, "data", &data) || !json_object_is_type(data, json_type_array)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Groq console activity is malformed");
+        return NULL;
+    }
+    history_days = CLAMP(history_days, 1, 365);
+    double total_cost = 0, today_cost = 0;
+    gint64 total_tokens = 0, today_tokens = 0, total_requests = 0, today_requests = 0;
+    char *organization = NULL;
+    GDateTime *now = g_date_time_new_from_unix_local(now_ms / 1000);
+    int now_year = g_date_time_get_year(now);
+    int now_day = g_date_time_get_day_of_year(now);
+    size_t count = json_object_array_length(data);
+    for (size_t index = 0; index < count; index++) {
+        json_object *row = json_object_array_get_idx(data, index);
+        double timestamp = 0, cost = 0;
+        gint64 requests = 0, context = 0, generated = 0, non_cached = 0;
+        gboolean has_non_cached = FALSE;
+        json_object *value = NULL;
+        if (!row || !json_object_is_type(row, json_type_object) ||
+            !json_object_object_get_ex(row, "timestamp", &value) || !json_double_value(value, &timestamp) ||
+            timestamp < 0 || timestamp > (double)G_MAXINT64 ||
+            !groq_row_int(row, "num_requests", &requests) ||
+            !groq_row_int(row, "n_context_tokens_total", &context) ||
+            !groq_row_int(row, "n_generated_tokens_total", &generated)) {
+            g_date_time_unref(now);
+            g_free(organization);
+            json_object_put(root);
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Groq console activity is malformed");
+            return NULL;
+        }
+        if (json_object_object_get_ex(row, "n_non_cached_context_tokens_total", &value) &&
+            !json_object_is_type(value, json_type_null)) {
+            has_non_cached = json_int_value(value, &non_cached);
+            if (!has_non_cached) {
+                g_date_time_unref(now);
+                g_free(organization);
+                json_object_put(root);
+                g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Groq console activity is malformed");
+                return NULL;
+            }
+        }
+        if (json_object_object_get_ex(row, "cost", &value) && !json_object_is_type(value, json_type_null) &&
+            !json_double_value(value, &cost)) {
+            g_date_time_unref(now);
+            g_free(organization);
+            json_object_put(root);
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Groq console activity is malformed");
+            return NULL;
+        }
+        (void)has_non_cached;
+        if (requests < 0 || context < 0 || generated < 0 || non_cached < 0 || cost < 0 ||
+            context > G_MAXINT64 - generated || total_tokens > G_MAXINT64 - context - generated ||
+            total_requests > G_MAXINT64 - requests || !isfinite(total_cost + cost)) {
+            g_date_time_unref(now);
+            g_free(organization);
+            json_object_put(root);
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Groq console activity is malformed");
+            return NULL;
+        }
+        gint64 tokens = context + generated;
+        total_tokens += tokens;
+        total_requests += requests;
+        total_cost += cost;
+        GDateTime *row_time = g_date_time_new_from_unix_local((gint64)timestamp);
+        if (row_time && g_date_time_get_year(row_time) == now_year &&
+            g_date_time_get_day_of_year(row_time) == now_day) {
+            today_tokens += tokens;
+            today_requests += requests;
+            today_cost += cost;
+        }
+        if (row_time) g_date_time_unref(row_time);
+        if (!organization) organization = json_clean_string(row, "organization_name");
+    }
+    g_date_time_unref(now);
+    CodexBarProvider *provider = new_provider("groq", now_ms);
+    g_free(provider->source);
+    provider->source = g_strdup("console");
+    g_free(provider->identity->organization);
+    provider->identity->organization = organization;
+    provider->identity->login_method = g_strdup("Console");
+    provider->provider_cost = g_new0(CodexBarProviderCost, 1);
+    provider->provider_cost->used = total_cost;
+    provider->provider_cost->currency = g_strdup("USD");
+    provider->provider_cost->period = history_days == 1 ? g_strdup("Today")
+                                                        : g_strdup_printf("Last %d days", history_days);
+    provider->provider_cost->has_updated_at = TRUE;
+    provider->provider_cost->updated_at_ms = now_ms;
+    provider->token_cost = g_new0(CodexBarTokenCost, 1);
+    provider->token_cost->has_today_tokens = TRUE;
+    provider->token_cost->today_tokens = today_tokens;
+    provider->token_cost->has_today_cost = TRUE;
+    provider->token_cost->today_cost = today_cost;
+    provider->token_cost->has_today_requests = TRUE;
+    provider->token_cost->today_requests = today_requests;
+    provider->token_cost->has_last_days_tokens = TRUE;
+    provider->token_cost->last_days_tokens = total_tokens;
+    provider->token_cost->has_last_days_cost = TRUE;
+    provider->token_cost->last_days_cost = total_cost;
+    provider->token_cost->has_last_days_requests = TRUE;
+    provider->token_cost->last_days_requests = total_requests;
+    provider->token_cost->currency = g_strdup("USD");
+    provider->token_cost->history_label = history_days == 1 ? g_strdup("Today")
+                                                            : g_strdup_printf("Last %d days", history_days);
+    provider->token_cost->has_history_days = TRUE;
+    provider->token_cost->history_days = history_days;
+    provider->token_cost->has_updated_at = TRUE;
+    provider->token_cost->updated_at_ms = now_ms;
+    json_object *snapshot = json_object_new_object();
+    json_object_object_add(snapshot, "daily", json_object_get(data));
+    json_object_object_add(snapshot, "historyDays", json_object_new_int(history_days));
+    if (organization) json_object_object_add(snapshot, "organizationName", json_object_new_string(organization));
+    json_object_object_add(snapshot, "updatedAt", json_object_new_int64(now_ms));
+    json_object_object_add(provider->usage_extensions, "groqConsoleUsage", snapshot);
+    json_object_put(root);
+    return provider;
+}
+
+typedef struct {
+    char *session_token;
+    char *jwt;
+} GroqSession;
+
+static char *groq_config_string(const CodexBarProviderConfig *config, const char *key) {
+    json_object *value = NULL;
+    if (!config || !config->raw || !json_object_object_get_ex(config->raw, key, &value) ||
+        !json_object_is_type(value, json_type_string)) {
+        return NULL;
+    }
+    return clean_api_key(json_object_get_string(value));
+}
+
+static void groq_parse_cookie(const char *header, GroqSession *session) {
+    if (!header) return;
+    char **parts = g_strsplit(header, ";", -1);
+    for (size_t index = 0; parts[index]; index++) {
+        char *part = g_strstrip(parts[index]);
+        char *separator = strchr(part, '=');
+        if (!separator) continue;
+        *separator = '\0';
+        char *name = g_strstrip(part);
+        char *value = g_strstrip(separator + 1);
+        if (value[0] == '\0') continue;
+        if (g_str_equal(name, "stytch_session") && !session->session_token) {
+            session->session_token = clean_api_key(value);
+        } else if (g_str_equal(name, "stytch_session_jwt") && !session->jwt) {
+            session->jwt = clean_api_key(value);
+        }
+    }
+    g_strfreev(parts);
+}
+
+static GroqSession groq_session(const CodexBarProviderConfig *config) {
+    GroqSession session = {0};
+    session.session_token = clean_api_key(g_getenv("GROQ_SESSION_TOKEN"));
+    session.jwt = clean_api_key(g_getenv("GROQ_SESSION_JWT"));
+    char *cookie = groq_config_string(config, "cookieHeader");
+    if (!cookie) cookie = groq_config_string(config, "manualCookieHeader");
+    if (cookie && !session.session_token && !session.jwt) groq_parse_cookie(cookie, &session);
+    g_free(cookie);
+    return session;
+}
+
+static void groq_session_clear(GroqSession *session) {
+    g_clear_pointer(&session->session_token, g_free);
+    g_clear_pointer(&session->jwt, g_free);
+}
+
+static char *groq_jwt_organization(const char *jwt) {
+    char **segments = g_strsplit(jwt, ".", 4);
+    if (!segments[0] || !segments[1] || !segments[2]) {
+        g_strfreev(segments);
+        return NULL;
+    }
+    char *encoded = g_strdup(segments[1]);
+    g_strfreev(segments);
+    for (char *cursor = encoded; *cursor; cursor++) {
+        if (*cursor == '-') *cursor = '+';
+        else if (*cursor == '_') *cursor = '/';
+    }
+    size_t encoded_length = strlen(encoded);
+    size_t padding = (4 - encoded_length % 4) % 4;
+    char *padded = g_malloc(encoded_length + padding + 1);
+    memcpy(padded, encoded, encoded_length);
+    memset(padded + encoded_length, '=', padding);
+    padded[encoded_length + padding] = '\0';
+    g_free(encoded);
+    gsize decoded_length = 0;
+    guchar *decoded = g_base64_decode(padded, &decoded_length);
+    g_free(padded);
+    json_object *payload = parse_json_document((const char *)decoded, decoded_length);
+    g_free(decoded);
+    json_object *organization = NULL;
+    char *id = NULL;
+    if (payload && json_object_object_get_ex(payload, "https://groq.com/organization", &organization)) {
+        id = json_clean_string(organization, "id");
+    }
+    if (!id && payload && json_object_object_get_ex(payload, "https://stytch.com/organization", &organization)) {
+        id = json_clean_string(organization, "slug");
+    }
+    if (payload) json_object_put(payload);
+    return id;
+}
+
 static char *groq_base_url(GError **error) {
     const char *raw = g_getenv("GROQ_API_URL");
     if (!raw || raw[0] == '\0') return g_strdup(GROQ_DEFAULT_BASE);
@@ -919,6 +1142,217 @@ static char *groq_base_url(GError **error) {
     size_t length = strlen(normalized);
     while (length > 0 && normalized[length - 1] == '/') normalized[--length] = '\0';
     return normalized;
+}
+
+static char *groq_endpoint_at_root(const char *base, const char *path, const char *query, GError **error) {
+    GUri *uri = g_uri_parse(base, G_URI_FLAGS_NONE, NULL);
+    if (!uri || !g_uri_get_scheme(uri) || !g_uri_get_host(uri)) {
+        if (uri) g_uri_unref(uri);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Groq endpoint is invalid");
+        return NULL;
+    }
+    char *result = g_uri_join(G_URI_FLAGS_NONE,
+                              g_uri_get_scheme(uri),
+                              NULL,
+                              g_uri_get_host(uri),
+                              g_uri_get_port(uri),
+                              path,
+                              query,
+                              NULL);
+    g_uri_unref(uri);
+    return result;
+}
+
+static char *groq_refresh_session(const char *session_token,
+                                  CodexBarApiProviders2Transport transport,
+                                  GCancellable *cancellable,
+                                  GError **error) {
+    const char *raw_base = g_getenv("GROQ_STYTCH_URL");
+    char *base = codexbar_http_normalize_endpoint(
+        raw_base && raw_base[0] ? raw_base : GROQ_STYTCH_DEFAULT_BASE, CODEXBAR_HTTP_HTTPS_ONLY, error);
+    if (!base) return NULL;
+    GUri *base_uri = g_uri_parse(base, G_URI_FLAGS_NONE, NULL);
+    if (!base_uri || g_uri_get_query(base_uri) || g_uri_get_fragment(base_uri) || g_uri_get_userinfo(base_uri)) {
+        if (base_uri) g_uri_unref(base_uri);
+        g_free(base);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Groq Stytch endpoint is invalid");
+        return NULL;
+    }
+    if (base_uri) g_uri_unref(base_uri);
+    char *url = groq_endpoint_at_root(base, "/sdk/v1/b2b/sessions/authenticate", NULL, error);
+    g_free(base);
+    if (!url) return NULL;
+    char *public_token = clean_api_key(g_getenv("GROQ_STYTCH_PUBLIC_TOKEN"));
+    if (!public_token) public_token = g_strdup(GROQ_STYTCH_PUBLIC_TOKEN);
+    char *credentials = g_strdup_printf("%s:%s", public_token, session_token);
+    char *encoded = g_base64_encode((const guchar *)credentials, strlen(credentials));
+    char *authorization = g_strdup_printf("Basic %s", encoded);
+    static const char sdk_blob[] =
+        "{\"app\":{\"identifier\":\"console.groq.com\"},"
+        "\"sdk\":{\"identifier\":\"Stytch.js Javascript SDK\",\"version\":\"5.43.0\"}}";
+    char *sdk_client = g_base64_encode((const guchar *)sdk_blob, sizeof(sdk_blob) - 1);
+    json_object *body_object = json_object_new_object();
+    json_object_object_add(body_object, "session_token", json_object_new_string(session_token));
+    json_object_object_add(body_object, "session_duration_minutes", json_object_new_int(30));
+    char *body = g_strdup(json_object_to_json_string_ext(body_object, JSON_C_TO_STRING_PLAIN));
+    json_object_put(body_object);
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Authorization", authorization},
+        {"Content-Type", "application/json"},
+        {"Origin", "https://console.groq.com"},
+        {"X-SDK-Parent-Host", "https://console.groq.com"},
+        {"X-SDK-Client", sdk_client},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "POST",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .body = body,
+        .body_length = strlen(body),
+        .timeout_seconds = 20,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = send_request(&request, transport, error);
+    g_free(body);
+    g_free(sdk_client);
+    g_free(authorization);
+    g_free(encoded);
+    g_free(credentials);
+    g_free(public_token);
+    g_free(url);
+    if (!response) return NULL;
+    if (response->status < 200 || response->status >= 300) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "Groq Stytch session refresh returned HTTP %ld",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    json_object *root = parse_json_document(response->body, response->body_length);
+    json_object *data = NULL;
+    char *jwt = root && json_object_object_get_ex(root, "data", &data) ? json_clean_string(data, "session_jwt")
+                                                                       : NULL;
+    if (root) json_object_put(root);
+    codexbar_http_response_free(response);
+    if (!jwt) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Groq Stytch response is missing session_jwt");
+    }
+    return jwt;
+}
+
+static CodexBarProvider *groq_fetch_console(const CodexBarProviderConfig *config,
+                                            CodexBarApiProviders2Transport transport,
+                                            GCancellable *cancellable,
+                                            gint64 now_ms,
+                                            GError **error) {
+    GroqSession session = groq_session(config);
+    if (!session.session_token && !session.jwt) {
+        g_set_error_literal(error,
+                            G_IO_ERROR,
+                            G_IO_ERROR_NOT_FOUND,
+                            "Groq console session is missing; configure cookieHeader, GROQ_SESSION_TOKEN, or GROQ_SESSION_JWT");
+        return NULL;
+    }
+    char *jwt = NULL;
+    if (session.session_token) {
+        GError *refresh_error = NULL;
+        jwt = groq_refresh_session(session.session_token, transport, cancellable, &refresh_error);
+        if (!jwt && session.jwt && !(refresh_error && g_error_matches(refresh_error, G_IO_ERROR, G_IO_ERROR_CANCELLED))) {
+            g_clear_error(&refresh_error);
+            jwt = g_strdup(session.jwt);
+        }
+        if (!jwt) {
+            groq_session_clear(&session);
+            if (error) *error = refresh_error;
+            else g_clear_error(&refresh_error);
+            return NULL;
+        }
+    } else {
+        jwt = g_strdup(session.jwt);
+    }
+    groq_session_clear(&session);
+    char *organization = groq_jwt_organization(jwt);
+    if (!organization) {
+        g_free(jwt);
+        g_set_error_literal(error,
+                            G_IO_ERROR,
+                            G_IO_ERROR_INVALID_ARGUMENT,
+                            "Groq session token is missing the organization claim");
+        return NULL;
+    }
+    char *base = groq_base_url(error);
+    if (!base) {
+        g_free(organization);
+        g_free(jwt);
+        return NULL;
+    }
+    GDateTime *now = g_date_time_new_from_unix_local(now_ms / 1000);
+    GDateTime *today = g_date_time_new_local(
+        g_date_time_get_year(now), g_date_time_get_month(now), g_date_time_get_day_of_month(now), 0, 0, 0);
+    GDateTime *start = g_date_time_add_days(today, -29);
+    GDateTime *end = g_date_time_add_days(today, 1);
+    char *query = g_strdup_printf("start_date=%" G_GINT64_FORMAT "&end_date=%" G_GINT64_FORMAT,
+                                  g_date_time_to_unix(start),
+                                  g_date_time_to_unix(end));
+    char *escaped = g_uri_escape_string(organization, NULL, FALSE);
+    char *path = g_strdup_printf("/platform/v1/organizations/%s/activity", escaped);
+    char *url = groq_endpoint_at_root(base, path, query, error);
+    g_free(path);
+    g_free(escaped);
+    g_free(query);
+    g_date_time_unref(end);
+    g_date_time_unref(start);
+    g_date_time_unref(today);
+    g_date_time_unref(now);
+    g_free(base);
+    g_free(organization);
+    if (!url) {
+        g_free(jwt);
+        return NULL;
+    }
+    char *authorization = g_strdup_printf("Bearer %s", jwt);
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Authorization", authorization},
+        {"Accept", "application/json"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .timeout_seconds = 20,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = send_request(&request, transport, error);
+    g_free(authorization);
+    g_free(jwt);
+    g_free(url);
+    if (!response) return NULL;
+    if (response->status < 200 || response->status >= 300) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "Groq console activity returned HTTP %ld",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_groq_parse_console_activity(
+        response->body, response->body_length, now_ms, 30, error);
+    codexbar_http_response_free(response);
+    return provider;
 }
 
 static CodexBarProvider *fetch_single_json(const CodexBarProviderConfig *config,
@@ -1130,6 +1564,37 @@ CodexBarProvider *codexbar_groq_fetch_with_transport_and_cancellable(
     return groq_fetch_internal(config, transport, cancellable, now_ms, error);
 }
 
+CodexBarProvider *codexbar_groq_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarApiProviders2Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    g_return_val_if_fail(transport != NULL, NULL);
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "api")) return groq_fetch_internal(config, transport, cancellable, now_ms, error);
+    if (g_str_equal(mode, "web")) return groq_fetch_console(config, transport, cancellable, now_ms, error);
+    if (!g_str_equal(mode, "auto")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Groq source '%s' is unsupported", mode);
+        return NULL;
+    }
+    GError *web_error = NULL;
+    CodexBarProvider *provider = groq_fetch_console(config, transport, cancellable, now_ms, &web_error);
+    if (provider) return provider;
+    gboolean fallback = web_error &&
+                        (g_error_matches(web_error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ||
+                         g_error_matches(web_error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT) ||
+                         g_error_matches(web_error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED));
+    if (!fallback || !codexbar_groq_has_api_key(config)) {
+        if (error) *error = web_error;
+        else g_clear_error(&web_error);
+        return NULL;
+    }
+    g_clear_error(&web_error);
+    return groq_fetch_internal(config, transport, cancellable, now_ms, error);
+}
+
 #define DEFINE_FETCH_WRAPPERS(name)                                                                                 \
     CodexBarProvider *codexbar_##name##_fetch_with_transport(const CodexBarProviderConfig *config,                  \
                                                              CodexBarApiProviders2Transport transport,              \
@@ -1150,3 +1615,12 @@ CodexBarProvider *codexbar_groq_fetch_with_transport_and_cancellable(
 DEFINE_FETCH_WRAPPERS(synthetic)
 DEFINE_FETCH_WRAPPERS(warp)
 DEFINE_FETCH_WRAPPERS(groq)
+
+CodexBarProvider *codexbar_groq_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_groq_fetch_for_source_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+}

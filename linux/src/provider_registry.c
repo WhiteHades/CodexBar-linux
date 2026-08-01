@@ -26,9 +26,9 @@ static const CodexBarProviderDescriptor providers[] = {
     {"copilot", "Copilot", "copilot", NULL, A | P, FALSE, "https://github.com/settings/copilot", "https://www.githubstatus.com/", CODEXBAR_NATIVE_COPILOT},
     {"devin", "Devin", "devin", NULL, A | W, FALSE, "https://app.devin.ai", NULL, CODEXBAR_NATIVE_DEVIN},
     {"zai", "z.ai", "zai", "z.ai", A | P, FALSE, "https://z.ai/manage-apikey/coding-plan/personal/my-plan", NULL, CODEXBAR_NATIVE_ZAI},
-    {"minimax", "MiniMax", "minimax", "mini-max", A | P, FALSE, "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3", NULL, CODEXBAR_NATIVE_MINIMAX},
+    {"minimax", "MiniMax", "minimax", "mini-max", A | W | P, FALSE, "https://platform.minimax.io/user-center/payment/coding-plan?cycle_type=3", NULL, CODEXBAR_NATIVE_MINIMAX},
     {"manus", "Manus", "manus", NULL, A | W, FALSE, "https://manus.im", NULL, CODEXBAR_NATIVE_MANUS},
-    {"kimi", "Kimi", "kimi", "kimi-ai", A | P, FALSE, "https://www.kimi.com/code/console", NULL, CODEXBAR_NATIVE_KIMI},
+    {"kimi", "Kimi", "kimi", "kimi-ai", A | W | P, FALSE, "https://www.kimi.com/code/console", NULL, CODEXBAR_NATIVE_KIMI},
     {"kilo", "Kilo", "kilo", "kilo-ai", A | P | C, FALSE, "https://app.kilo.ai/usage", NULL, CODEXBAR_NATIVE_KILO},
     {"kiro", "Kiro", "kiro", "kiro-cli", A | C, FALSE, "https://app.kiro.dev/account/usage", "https://health.aws.amazon.com/health/status", CODEXBAR_NATIVE_KIRO},
     {"vertexai", "Vertex AI", "vertexai", NULL, A | O, FALSE, "https://console.cloud.google.com/vertex-ai", "https://status.cloud.google.com", CODEXBAR_NATIVE_VERTEX},
@@ -37,7 +37,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"moonshot", "Moonshot / Kimi API", "moonshot", NULL, A | P, FALSE, "https://platform.moonshot.ai/console/account", NULL, CODEXBAR_NATIVE_SIMPLE},
     {"amp", "Amp", "amp", NULL, A | P | W | C, FALSE, "https://ampcode.com/settings/usage", NULL, CODEXBAR_NATIVE_AMP},
     {"t3chat", "T3 Chat", "t3chat", "t3-chat,t3", A | W, FALSE, "https://t3.chat/settings/customization", NULL, CODEXBAR_NATIVE_T3CHAT},
-    {"ollama", "Ollama", "ollama", NULL, A | P, FALSE, "https://ollama.com/settings", NULL, CODEXBAR_NATIVE_OLLAMA},
+    {"ollama", "Ollama", "ollama", NULL, A | W | P, FALSE, "https://ollama.com/settings", NULL, CODEXBAR_NATIVE_OLLAMA},
     {"synthetic", "Synthetic", "synthetic", "synthetic.new", A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_SYNTHETIC},
     {"warp", "Warp", "warp", "warp-ai,warp-terminal", A | P, FALSE, "https://docs.warp.dev/reference/cli/api-keys", NULL, CODEXBAR_NATIVE_WARP},
     {"openrouter", "OpenRouter", "openrouter", "or", A | P, FALSE, "https://openrouter.ai/settings/credits", "https://status.openrouter.ai", CODEXBAR_NATIVE_OPENROUTER},
@@ -60,7 +60,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"stepfun", "StepFun", "stepfun", "step-fun,sf", A | W, FALSE, "https://platform.stepfun.com/plan-usage", NULL, CODEXBAR_NATIVE_STEPFUN},
     {"bedrock", "AWS Bedrock", "bedrock", "aws-bedrock", A | P, FALSE, "https://console.aws.amazon.com/bedrock", "https://health.aws.amazon.com/health/status", CODEXBAR_NATIVE_BEDROCK},
     {"grok", "Grok", "grok", NULL, A | C | W, FALSE, "https://grok.com/?_s=usage", "https://status.x.ai", CODEXBAR_NATIVE_GROK},
-    {"groq", "Groq", "groqcloud", "groq,groq-api", A | P, FALSE, "https://console.groq.com/dashboard/usage", "https://status.groq.com", CODEXBAR_NATIVE_GROQ},
+    {"groq", "Groq", "groqcloud", "groq,groq-api", A | W | P, FALSE, "https://console.groq.com/dashboard/usage", "https://status.groq.com", CODEXBAR_NATIVE_GROQ},
     {"llmproxy", "LLM Proxy", "llmproxy", "llm-api-key-proxy,llm-proxy", A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_PROXY},
     {"litellm", "LiteLLM", "litellm", "litellm-proxy", A | P, FALSE, NULL, NULL, CODEXBAR_NATIVE_LITELLM},
     {"deepgram", "Deepgram", "deepgram", "dg", A | P, FALSE, "https://console.deepgram.com/project/", "https://status.deepgram.com", CODEXBAR_NATIVE_DEEPGRAM},
@@ -170,6 +170,16 @@ guint codexbar_provider_auto_source_plan(const CodexBarProviderDescriptor *provi
     if (g_str_equal(provider->id, "grok")) {
         append_source("cli", sources, capacity, &count);
         append_source("web", sources, capacity, &count);
+        return count;
+    }
+    if (g_str_equal(provider->id, "ollama")) {
+        append_source("web", sources, capacity, &count);
+        append_source("api", sources, capacity, &count);
+        return count;
+    }
+    if (g_str_equal(provider->id, "groq")) {
+        append_source("web", sources, capacity, &count);
+        append_source("api", sources, capacity, &count);
         return count;
     }
     if (g_str_equal(provider->id, "opencodego")) {

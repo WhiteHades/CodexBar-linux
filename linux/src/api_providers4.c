@@ -20,6 +20,7 @@
 #define GEMINI_REFRESH_URL "https://oauth2.googleapis.com/token"
 #define OLLAMA_TAGS_URL "https://ollama.com/api/tags"
 #define OLLAMA_VALIDATION_URL "https://ollama.com/api/web_search"
+#define OLLAMA_SETTINGS_URL "https://ollama.com/settings"
 
 static gboolean json_whitespace(char character) {
     return character == ' ' || character == '\t' || character == '\n' || character == '\r';
@@ -1313,6 +1314,173 @@ gboolean codexbar_ollama_has_api_key(const CodexBarProviderConfig *config) {
     return present;
 }
 
+static char *ollama_config_string(const CodexBarProviderConfig *config, const char *key) {
+    json_object *value = NULL;
+    if (!config || !config->raw || !json_object_object_get_ex(config->raw, key, &value) ||
+        !json_object_is_type(value, json_type_string)) {
+        return NULL;
+    }
+    return clean_credential(json_object_get_string(value));
+}
+
+static char *ollama_cookie(const CodexBarProviderConfig *config) {
+    char *cookie = ollama_config_string(config, "cookieHeader");
+    if (!cookie) cookie = ollama_config_string(config, "manualCookieHeader");
+    if (!cookie) cookie = clean_credential(g_getenv("OLLAMA_COOKIE_HEADER"));
+    if (!cookie) cookie = clean_credential(g_getenv("OLLAMA_COOKIE"));
+    if (!cookie) return NULL;
+    if (!strchr(cookie, '=')) {
+        char *normalized = g_strdup_printf("__Secure-session=%s", cookie);
+        g_free(cookie);
+        return normalized;
+    }
+    return cookie;
+}
+
+static char *ollama_regex_capture(const char *text, const char *pattern, GRegexCompileFlags flags) {
+    GRegex *regex = g_regex_new(pattern, flags, 0, NULL);
+    if (!regex) return NULL;
+    GMatchInfo *match = NULL;
+    char *capture = g_regex_match(regex, text, 0, &match) ? g_match_info_fetch(match, 1) : NULL;
+    g_match_info_free(match);
+    g_regex_unref(regex);
+    if (capture) g_strstrip(capture);
+    if (capture && capture[0] == '\0') g_clear_pointer(&capture, g_free);
+    return capture;
+}
+
+static gboolean ollama_parse_percent(const char *text, double *result) {
+    char *value = ollama_regex_capture(
+        text, "([0-9]+(?:\\.[0-9]+)?)\\s*%\\s*used", G_REGEX_CASELESS);
+    if (!value) {
+        value = ollama_regex_capture(text, "width:\\s*([0-9]+(?:\\.[0-9]+)?)%", G_REGEX_CASELESS);
+    }
+    if (!value) return FALSE;
+    char *end = NULL;
+    double percent = g_ascii_strtod(value, &end);
+    gboolean valid = end && *end == '\0' && isfinite(percent);
+    g_free(value);
+    if (valid) *result = percent;
+    return valid;
+}
+
+static gboolean ollama_parse_reset(const char *text, gint64 *result) {
+    char *value = ollama_regex_capture(text, "data-time=\\\"([^\\\"]+)\\\"", 0);
+    if (!value) return FALSE;
+    GDateTime *date = g_date_time_new_from_iso8601(value, NULL);
+    g_free(value);
+    if (!date) return FALSE;
+    *result = g_date_time_to_unix(date) * 1000 + g_date_time_get_microsecond(date) / 1000;
+    g_date_time_unref(date);
+    return TRUE;
+}
+
+static gboolean ollama_usage_block(const char *html,
+                                   const char *label,
+                                   const char *alternate_label,
+                                   double *percent,
+                                   gint64 *resets_at_ms,
+                                   gboolean *has_reset) {
+    const char *start = strstr(html, label);
+    if (!start && alternate_label) start = strstr(html, alternate_label);
+    if (!start) return FALSE;
+    start += strlen(strstr(html, label) == start ? label : alternate_label);
+    const char *end = html + strlen(html);
+    static const char *const labels[] = {"Session usage", "Hourly usage", "Weekly usage", NULL};
+    for (size_t index = 0; labels[index]; index++) {
+        const char *candidate = strstr(start, labels[index]);
+        if (candidate && candidate < end) end = candidate;
+    }
+    if ((size_t)(end - start) > 4000) end = start + 4000;
+    char *window = g_strndup(start, (size_t)(end - start));
+    gboolean found = ollama_parse_percent(window, percent);
+    *has_reset = found && ollama_parse_reset(window, resets_at_ms);
+    g_free(window);
+    return found;
+}
+
+static gboolean ollama_looks_signed_out(const char *html) {
+    char *lower = g_ascii_strdown(html, -1);
+    gboolean form = strstr(lower, "<form") != NULL;
+    gboolean heading = strstr(lower, "sign in to ollama") || strstr(lower, "log in to ollama");
+    gboolean route = strstr(lower, "/api/auth/signin") || strstr(lower, "/auth/signin") ||
+                     strstr(lower, "action=\"/login\"") || strstr(lower, "action='/login'") ||
+                     strstr(lower, "href=\"/login\"") || strstr(lower, "href='/login'") ||
+                     strstr(lower, "action=\"/signin\"") || strstr(lower, "action='/signin'") ||
+                     strstr(lower, "href=\"/signin\"") || strstr(lower, "href='/signin'");
+    gboolean password = strstr(lower, "type=\"password\"") || strstr(lower, "type='password'") ||
+                        strstr(lower, "name=\"password\"") || strstr(lower, "name='password'");
+    gboolean email = strstr(lower, "type=\"email\"") || strstr(lower, "type='email'") ||
+                     strstr(lower, "name=\"email\"") || strstr(lower, "name='email'");
+    gboolean signed_out = (heading && form && (email || password || route)) || (form && route) ||
+                          (form && password && email);
+    g_free(lower);
+    return signed_out;
+}
+
+CodexBarProvider *codexbar_ollama_parse_settings_html(const char *html,
+                                                      size_t length,
+                                                      gint64 now_ms,
+                                                      GError **error) {
+    if (!html || length == 0 || length > PROVIDER_MAXIMUM_RESPONSE_BYTES || memchr(html, '\0', length) ||
+        !g_utf8_validate(html, (gssize)length, NULL)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Ollama settings response is invalid");
+        return NULL;
+    }
+    char *document = g_strndup(html, length);
+    double primary_percent = 0, weekly_percent = 0;
+    gint64 primary_reset = 0, weekly_reset = 0;
+    gboolean primary_has_reset = FALSE, weekly_has_reset = FALSE;
+    gboolean session = strstr(document, "Session usage") != NULL;
+    gboolean has_primary = ollama_usage_block(
+        document, "Session usage", "Hourly usage", &primary_percent, &primary_reset, &primary_has_reset);
+    gboolean has_weekly = ollama_usage_block(
+        document, "Weekly usage", NULL, &weekly_percent, &weekly_reset, &weekly_has_reset);
+    if (!has_primary && !has_weekly) {
+        gboolean signed_out = ollama_looks_signed_out(document);
+        g_free(document);
+        g_set_error_literal(error,
+                            G_IO_ERROR,
+                            signed_out ? G_IO_ERROR_PERMISSION_DENIED : G_IO_ERROR_INVALID_DATA,
+                            signed_out ? "Ollama session cookie is invalid or expired"
+                                       : "Ollama usage data is missing");
+        return NULL;
+    }
+    CodexBarProvider *provider = provider_new("ollama", now_ms);
+    g_free(provider->source);
+    provider->source = g_strdup("web");
+    provider->dashboard_url = g_strdup(OLLAMA_SETTINGS_URL);
+    provider->explicit_quota_slots = TRUE;
+    char *plan = ollama_regex_capture(
+        document, "Cloud Usage\\s*</span>\\s*<span[^>]*>([^<]+)</span>", G_REGEX_DOTALL);
+    char *email = ollama_regex_capture(document, "id=\\\"header-email\\\"[^>]*>([^<]+)<", G_REGEX_DOTALL);
+    if (email && !strchr(email, '@')) g_clear_pointer(&email, g_free);
+    provider->plan = plan ? g_strdup(plan) : NULL;
+    provider->account = email;
+    provider->identity = g_new0(CodexBarProviderIdentity, 1);
+    provider->identity->login_method = plan;
+    if (has_primary) {
+        add_window(provider,
+                   "primary",
+                   session ? "Session" : "Hourly",
+                   primary_percent,
+                   session ? 300 : 0,
+                   primary_has_reset ? primary_reset : 0,
+                   NULL);
+    }
+    if (has_weekly) {
+        add_window(provider,
+                   "secondary",
+                   "Weekly",
+                   weekly_percent,
+                   10080,
+                   weekly_has_reset ? weekly_reset : 0,
+                   NULL);
+    }
+    g_free(document);
+    return provider;
+}
+
 CodexBarProvider *codexbar_ollama_parse_api_tags(const char *json,
                                                 size_t length,
                                                 gint64 now_ms,
@@ -1491,6 +1659,98 @@ CodexBarProvider *codexbar_ollama_fetch_with_transport_and_cancellable(
         config, OLLAMA_TAGS_URL, OLLAMA_VALIDATION_URL, transport, cancellable, now_ms, error);
 }
 
+static CodexBarProvider *ollama_fetch_web(const CodexBarProviderConfig *config,
+                                          CodexBarApiProviders4Transport transport,
+                                          GCancellable *cancellable,
+                                          gint64 now_ms,
+                                          GError **error) {
+    char *cookie = ollama_cookie(config);
+    if (!cookie) {
+        g_set_error_literal(error,
+                            G_IO_ERROR,
+                            G_IO_ERROR_NOT_FOUND,
+                            "Ollama web session is missing; configure cookieHeader or OLLAMA_COOKIE_HEADER");
+        return NULL;
+    }
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Cookie", cookie},
+        {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/143.0.0.0 Safari/537.36"},
+        {"Accept-Language", "en-US,en;q=0.9"},
+        {"Origin", "https://ollama.com"},
+        {"Referer", OLLAMA_SETTINGS_URL},
+    };
+    const CodexBarHttpRequest request = {
+        .url = OLLAMA_SETTINGS_URL,
+        .method = "GET",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .timeout_seconds = OLLAMA_TIMEOUT_SECONDS,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = send_request(&request, transport, error);
+    g_free(cookie);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "Ollama settings endpoint returned HTTP %ld",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_ollama_parse_settings_html(
+        response->body, response->body_length, now_ms, error);
+    codexbar_http_response_free(response);
+    return provider;
+}
+
+CodexBarProvider *codexbar_ollama_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "api")) {
+        return codexbar_ollama_fetch_with_transport_and_cancellable(
+            config, transport, cancellable, now_ms, error);
+    }
+    if (g_str_equal(mode, "web")) return ollama_fetch_web(config, transport, cancellable, now_ms, error);
+    if (!g_str_equal(mode, "auto")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Ollama source '%s' is unsupported", mode);
+        return NULL;
+    }
+    char *cookie = ollama_cookie(config);
+    gboolean has_cookie = cookie != NULL;
+    g_free(cookie);
+    if (has_cookie) {
+        GError *web_error = NULL;
+        CodexBarProvider *provider = ollama_fetch_web(config, transport, cancellable, now_ms, &web_error);
+        if (provider) return provider;
+        if (web_error && g_error_matches(web_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            if (error) *error = web_error;
+            else g_clear_error(&web_error);
+            return NULL;
+        }
+        if (!codexbar_ollama_has_api_key(config)) {
+            if (error) *error = web_error;
+            else g_clear_error(&web_error);
+            return NULL;
+        }
+        g_clear_error(&web_error);
+    }
+    return codexbar_ollama_fetch_with_transport_and_cancellable(
+        config, transport, cancellable, now_ms, error);
+}
+
 CodexBarProvider *codexbar_ollama_fetch_with_transport(const CodexBarProviderConfig *config,
                                                        CodexBarApiProviders4Transport transport,
                                                        gint64 now_ms,
@@ -1503,6 +1763,15 @@ CodexBarProvider *codexbar_ollama_fetch_with_cancellable(const CodexBarProviderC
                                                          GError **error) {
     return codexbar_ollama_fetch_with_transport_and_cancellable(
         config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+}
+
+CodexBarProvider *codexbar_ollama_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_ollama_fetch_for_source_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
 }
 
 CodexBarProvider *codexbar_ollama_fetch(const CodexBarProviderConfig *config, GError **error) {
