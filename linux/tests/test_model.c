@@ -1558,6 +1558,11 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("factory")->native_provider, ==, CODEXBAR_NATIVE_FACTORY);
     g_assert_cmpint(codexbar_provider_registry_find("gemini")->native_provider, ==, CODEXBAR_NATIVE_GEMINI);
     g_assert_cmpint(codexbar_provider_registry_find("ollama")->native_provider, ==, CODEXBAR_NATIVE_OLLAMA);
+    g_assert_cmpint(codexbar_provider_registry_find("kiro-cli")->native_provider, ==, CODEXBAR_NATIVE_KIRO);
+    g_assert_cmpint(codexbar_provider_registry_find("augment")->native_provider, ==, CODEXBAR_NATIVE_AUGMENT);
+    g_assert_cmpint(codexbar_provider_registry_find("antigravity")->native_provider,
+                    ==,
+                    CODEXBAR_NATIVE_ANTIGRAVITY);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }

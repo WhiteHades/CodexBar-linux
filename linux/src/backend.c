@@ -16,6 +16,7 @@
 #include "jetbrains.h"
 #include "kilo.h"
 #include "kimi.h"
+#include "local_providers.h"
 #include "neuralwatt.h"
 #include "openai_api.h"
 #include "opencode_go.h"
@@ -145,6 +146,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     switch (descriptor->native_provider) {
     case CODEXBAR_NATIVE_CODEX:
     case CODEXBAR_NATIVE_JETBRAINS:
+    case CODEXBAR_NATIVE_KIRO:
+    case CODEXBAR_NATIVE_AUGMENT:
+    case CODEXBAR_NATIVE_ANTIGRAVITY:
         native_source = "cli";
         break;
     case CODEXBAR_NATIVE_CLAUDE:
@@ -304,6 +308,15 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_OLLAMA:
         provider = codexbar_ollama_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_KIRO:
+        provider = codexbar_kiro_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_AUGMENT:
+        provider = codexbar_augment_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_ANTIGRAVITY:
+        provider = codexbar_antigravity_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_OPENROUTER:
         provider = codexbar_openrouter_fetch(config, &error);

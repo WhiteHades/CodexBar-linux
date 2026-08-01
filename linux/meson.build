@@ -42,6 +42,7 @@ core_sources = files(
   'src/jetbrains.c',
   'src/kilo.c',
   'src/kimi.c',
+  'src/local_providers.c',
   'src/model.c',
   'src/neuralwatt.c',
   'src/openai_api.c',
@@ -240,6 +241,14 @@ api_providers4_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-api-providers4', api_providers4_test, env: normalized_test_env)
+
+local_providers_test = executable(
+  'codexbar-linux-local-providers-tests',
+  files('tests/test_local_providers.c', 'src/local_providers.c', 'src/http.c', 'src/model.c', 'src/process.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-local-providers', local_providers_test, env: normalized_test_env, depends: process_supervisor)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',
