@@ -365,7 +365,7 @@ static gint64 saturated_add(gint64 left, gint64 right) {
 }
 
 static void scan_quota_groups(json_object *groups, double *minimum, gboolean *has_minimum,
-                              gint64 *earliest_reset, gboolean *has_reset) {
+                              gint64 *earliest_reset, gboolean *has_reset, gint64 now_ms) {
     if (!groups) return;
     size_t count = json_object_is_type(groups, json_type_array) ? json_object_array_length(groups) : 0;
     if (json_object_is_type(groups, json_type_array)) {
@@ -383,6 +383,7 @@ static void scan_quota_groups(json_object *groups, double *minimum, gboolean *ha
             gint64 parsed = 0;
             if (json_object_object_get_ex(entry, "reset_time", &reset) &&
                 json_object_is_type(reset, json_type_string) && iso_timestamp(json_object_get_string(reset), &parsed) &&
+                parsed > now_ms &&
                 (!*has_reset || parsed < *earliest_reset)) {
                 *earliest_reset = parsed;
                 *has_reset = TRUE;
@@ -393,7 +394,7 @@ static void scan_quota_groups(json_object *groups, double *minimum, gboolean *ha
             (void)key;
             json_object *array = json_object_new_array();
             json_object_array_add(array, json_object_get(entry));
-            scan_quota_groups(array, minimum, has_minimum, earliest_reset, has_reset);
+            scan_quota_groups(array, minimum, has_minimum, earliest_reset, has_reset, now_ms);
             json_object_put(array);
         }
     }
@@ -458,7 +459,7 @@ CodexBarProvider *codexbar_llmproxy_parse(const char *json, gint64 now_ms, GErro
         }
         json_object *groups = NULL;
         if (json_object_object_get_ex(stats, "quota_groups", &groups)) {
-            scan_quota_groups(groups, &minimum, &has_minimum, &earliest_reset, &has_reset);
+            scan_quota_groups(groups, &minimum, &has_minimum, &earliest_reset, &has_reset, now_ms);
         }
         g_ptr_array_add(summaries, provider_summary);
         if (malformed) break;

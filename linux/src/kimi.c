@@ -81,7 +81,8 @@ static gboolean iso_timestamp_ms(json_object *object, gint64 *result) {
     return FALSE;
 }
 
-static CodexBarQuotaWindow *kimi_window(json_object *detail, const char *id, const char *title, gboolean rate) {
+static CodexBarQuotaWindow *kimi_window(
+    json_object *detail, const char *id, const char *title, gboolean rate, gint64 rate_minutes) {
     gint64 limit = 0;
     gint64 remaining = 0;
     gint64 used = 0;
@@ -101,13 +102,47 @@ static CodexBarQuotaWindow *kimi_window(json_object *detail, const char *id, con
                                : 0.0;
     if (rate) {
         window->has_window_minutes = TRUE;
-        window->window_minutes = 300;
-        window->detail = g_strdup_printf("Rate: %" G_GINT64_FORMAT "/%" G_GINT64_FORMAT " per 5 hours", used, limit);
+        window->window_minutes = rate_minutes;
+        if (rate_minutes % 60 == 0) {
+            gint64 hours = rate_minutes / 60;
+            window->detail = g_strdup_printf("Rate: %" G_GINT64_FORMAT "/%" G_GINT64_FORMAT
+                                             " per %" G_GINT64_FORMAT " %s",
+                                             used,
+                                             limit,
+                                             hours,
+                                             hours == 1 ? "hour" : "hours");
+        } else {
+            window->detail = g_strdup_printf("Rate: %" G_GINT64_FORMAT "/%" G_GINT64_FORMAT
+                                             " per %" G_GINT64_FORMAT " %s",
+                                             used,
+                                             limit,
+                                             rate_minutes,
+                                             rate_minutes == 1 ? "minute" : "minutes");
+        }
     } else {
         window->detail = g_strdup_printf("%" G_GINT64_FORMAT "/%" G_GINT64_FORMAT " requests", used, limit);
     }
     window->has_resets_at = iso_timestamp_ms(detail, &window->resets_at_ms);
     return window;
+}
+
+static gint64 kimi_rate_limit_minutes(json_object *limit) {
+    json_object *window = NULL;
+    json_object *unit_value = NULL;
+    gint64 duration = 0;
+    if (!json_object_object_get_ex(limit, "window", &window) || !json_object_is_type(window, json_type_object) ||
+        !json_int64(window, "duration", &duration) || duration <= 0 ||
+        !json_object_object_get_ex(window, "timeUnit", &unit_value) ||
+        !json_object_is_type(unit_value, json_type_string)) {
+        return 300;
+    }
+    const char *unit = json_object_get_string(unit_value);
+    gint64 multiplier = g_str_equal(unit, "TIME_UNIT_MINUTE") ? 1
+                        : g_str_equal(unit, "TIME_UNIT_HOUR")  ? 60
+                        : g_str_equal(unit, "TIME_UNIT_DAY")   ? 24 * 60
+                                                               : 0;
+    if (multiplier == 0 || duration > G_MAXINT64 / multiplier) return 300;
+    return duration * multiplier;
 }
 
 char *codexbar_kimi_usage_url(const char *base_url, GError **error) {
@@ -144,7 +179,7 @@ CodexBarProvider *codexbar_kimi_parse_usage(const char *json, gint64 now_ms, GEr
         g_set_error_literal(error, kimi_error_quark(), 1, "Kimi usage response is malformed");
         return NULL;
     }
-    CodexBarQuotaWindow *weekly = kimi_window(usage, "primary", "weekly", FALSE);
+    CodexBarQuotaWindow *weekly = kimi_window(usage, "primary", "weekly", FALSE, 0);
     if (!weekly) {
         json_object_put(root);
         g_set_error_literal(error, kimi_error_quark(), 1, "Kimi usage response is malformed");
@@ -165,7 +200,8 @@ CodexBarProvider *codexbar_kimi_parse_usage(const char *json, gint64 now_ms, GEr
         json_object *detail = NULL;
         if (json_object_is_type(first, json_type_object) && json_object_object_get_ex(first, "detail", &detail) &&
             json_object_is_type(detail, json_type_object)) {
-            CodexBarQuotaWindow *rate = kimi_window(detail, "secondary", "rate limit", TRUE);
+            CodexBarQuotaWindow *rate =
+                kimi_window(detail, "secondary", "rate limit", TRUE, kimi_rate_limit_minutes(first));
             gint64 limit = 0;
             if (rate && json_int64(detail, "limit", &limit) && limit > 0) {
                 codexbar_provider_add_quota_window(provider, rate);

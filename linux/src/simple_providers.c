@@ -200,27 +200,35 @@ CodexBarProvider *codexbar_crof_parse(const char *json, GError **error) {
     double credits = 0.0;
     double plan = 0.0;
     double usable = 0.0;
+    json_object *plan_value = NULL;
+    json_object *usable_value = NULL;
+    gboolean has_plan = root && json_object_object_get_ex(root, "requests_plan", &plan_value) &&
+                        !json_object_is_type(plan_value, json_type_null);
+    gboolean has_usable = root && json_object_object_get_ex(root, "usable_requests", &usable_value) &&
+                          !json_object_is_type(usable_value, json_type_null);
     if (!root || !json_object_is_type(root, json_type_object) || !strict_number_member(root, "credits", &credits) ||
-        !strict_number_member(root, "requests_plan", &plan) ||
-        !strict_number_member(root, "usable_requests", &usable)) {
+        (has_plan && !strict_number_member(root, "requests_plan", &plan)) ||
+        (has_usable && !strict_number_member(root, "usable_requests", &usable))) {
         g_set_error_literal(error, provider_error_quark(), 7, "Crof usage response is malformed");
         if (root) json_object_put(root);
         return NULL;
     }
 
-    double displayed = MAX(0.0, usable);
-    double clamped = CLAMP(displayed, 0.0, MAX(0.0, plan));
-    int remaining_percent = plan > 0.0 ? (int)((clamped / plan) * 100.0) : 0;
     double credit_floor = floor(MAX(0.0, credits) * 100.0) / 100.0;
     CodexBarProvider *provider = provider_new("crof");
     provider->plan = g_strdup("API key");
-    CodexBarQuotaWindow *requests_window = add_window(provider, "requests", "requests");
-    requests_window->used_percent = 100.0 - remaining_percent;
-    char *requests = amount(displayed);
-    requests_window->detail = g_strdup_printf("%s requests left", requests);
-    g_free(requests);
-    requests_window->has_resets_at = TRUE;
-    requests_window->resets_at_ms = next_chicago_midnight_ms();
+    if (has_plan && has_usable) {
+        double displayed = MAX(0.0, usable);
+        double clamped = CLAMP(displayed, 0.0, MAX(0.0, plan));
+        int remaining_percent = plan > 0.0 ? (int)((clamped / plan) * 100.0) : 0;
+        CodexBarQuotaWindow *requests_window = add_window(provider, "requests", "requests");
+        requests_window->used_percent = 100.0 - remaining_percent;
+        char *requests = amount(displayed);
+        requests_window->detail = g_strdup_printf("%s requests left", requests);
+        g_free(requests);
+        requests_window->has_resets_at = TRUE;
+        requests_window->resets_at_ms = next_chicago_midnight_ms();
+    }
     CodexBarQuotaWindow *balance_window = add_window(provider, "balance", "balance");
     balance_window->used_percent = credits > 0.0 ? 0.0 : 100.0;
     balance_window->detail = g_strdup_printf("$%.2f", credit_floor);

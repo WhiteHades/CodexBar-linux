@@ -1084,7 +1084,8 @@ static void test_kimi_usage(void) {
     GError *error = NULL;
     CodexBarProvider *provider = codexbar_kimi_parse_usage(
         "{\"usage\":{\"limit\":\"2048\",\"remaining\":\"1834\","
-        "\"resetTime\":\"2026-01-09T15:23:13.716839300Z\"},\"limits\":[{\"detail\":{"
+        "\"resetTime\":\"2026-01-09T15:23:13.716839300Z\"},\"limits\":[{"
+        "\"window\":{\"duration\":2,\"timeUnit\":\"TIME_UNIT_HOUR\"},\"detail\":{"
         "\"limit\":200,\"used\":139,\"remaining\":61,\"reset_at\":\"2026-01-06T13:33:02Z\"}}]}",
         G_GINT64_CONSTANT(1800000000000),
         &error);
@@ -1098,8 +1099,8 @@ static void test_kimi_usage(void) {
     g_assert_cmpstr(window_at(provider, 0)->detail, ==, "214/2048 requests");
     g_assert_true(window_at(provider, 0)->has_resets_at);
     g_assert_cmpfloat_with_epsilon(window_at(provider, 1)->used_percent, 69.5, 0.0001);
-    g_assert_cmpint(window_at(provider, 1)->window_minutes, ==, 300);
-    g_assert_cmpstr(window_at(provider, 1)->detail, ==, "Rate: 139/200 per 5 hours");
+    g_assert_cmpint(window_at(provider, 1)->window_minutes, ==, 120);
+    g_assert_cmpstr(window_at(provider, 1)->detail, ==, "Rate: 139/200 per 2 hours");
     codexbar_provider_free(provider);
 
     provider = codexbar_kimi_parse_usage(
@@ -1195,6 +1196,8 @@ static void test_llmproxy_usage(void) {
     g_assert_cmpstr(window_at(provider, 3)->title, ==, "openai");
     g_assert_cmpstr(window_at(provider, 3)->reset_description, ==, "120 req · 6,000 tok · $12.50");
     g_assert_cmpfloat_with_epsilon(provider->provider_cost->used, 15.5, 0.0001);
+    g_assert_true(window_at(provider, 0)->has_resets_at);
+    g_assert_cmpint(window_at(provider, 0)->resets_at_ms, ==, G_GINT64_CONSTANT(1779105600123));
     CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
     snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
     g_ptr_array_add(snapshot->providers, provider);
@@ -1204,6 +1207,17 @@ static void test_llmproxy_usage(void) {
     g_assert_null(strstr(rendered, "llmproxy-openai"));
     g_free(rendered);
     codexbar_snapshot_free(snapshot);
+
+    provider = codexbar_llmproxy_parse(
+        "{\"providers\":{\"openai\":{\"quota_groups\":["
+        "{\"remaining_percent\":10,\"reset_time\":\"1970-01-01T00:00:00Z\"},"
+        "{\"remaining_percent\":20,\"reset_time\":\"2030-01-01T00:00:00Z\"}]}}}",
+        G_GINT64_CONSTANT(1000),
+        &error);
+    g_assert_no_error(error);
+    g_assert_true(window_at(provider, 0)->has_resets_at);
+    g_assert_cmpint(window_at(provider, 0)->resets_at_ms, ==, G_GINT64_CONSTANT(1893456000000));
+    codexbar_provider_free(provider);
 
     provider = codexbar_llmproxy_parse("{\"providers\":{}}", 1000, &error);
     g_assert_no_error(error);
@@ -1311,6 +1325,14 @@ static void test_simple_provider_parsers(void) {
     g_assert_no_error(error);
     g_assert_cmpfloat_with_epsilon(window_at(crof, 0)->used_percent, 0.0, 0.0001);
     g_assert_cmpstr(window_at(crof, 0)->detail, ==, "1200 requests left");
+    codexbar_provider_free(crof);
+
+    crof = codexbar_crof_parse(
+        "{\"credits\":9.0441,\"requests_plan\":null,\"usable_requests\":null,\"usage\":{}}", &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(crof->quota_windows->len, ==, 1);
+    g_assert_cmpstr(window_at(crof, 0)->title, ==, "balance");
+    g_assert_cmpstr(window_at(crof, 0)->detail, ==, "$9.04");
     codexbar_provider_free(crof);
 
     CodexBarProvider *venice = codexbar_venice_parse(
