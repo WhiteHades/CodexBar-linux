@@ -1584,6 +1584,20 @@ static CodexBarProvider *codex_source_cli(GError **error) {
     return provider;
 }
 
+static void test_codex_http_reset_bounds(void) {
+    const char *usage =
+        "{\"rate_limit\":{\"primary_window\":{\"used_percent\":25,"
+        "\"reset_at\":1e100,\"limit_window_seconds\":1e100}}}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_codex_parse_http_usage(usage, "oauth", 1800000000000LL, &error);
+    g_assert_no_error(error);
+    CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, 0);
+    g_assert_nonnull(window);
+    g_assert_false(window->has_resets_at);
+    g_assert_false(window->has_window_minutes);
+    codexbar_provider_free(provider);
+}
+
 static void test_codex_source_planner(void) {
     const char *usage =
         "{\"plan_type\":\"pro\",\"rate_limit\":{\"primary_window\":{\"used_percent\":25,"
@@ -1938,6 +1952,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/provider/codebuff-usage", test_codebuff_usage);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
+    g_test_add_func("/provider/codex-http-reset-bounds", test_codex_http_reset_bounds);
     g_test_add_func("/provider/codex-source-planner", test_codex_source_planner);
     g_test_add_func("/provider/registry", test_provider_registry);
     g_test_add_func("/pace/linear", test_linear_pace_matches_upstream_thresholds);

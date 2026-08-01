@@ -290,8 +290,13 @@ static CodexBarQuotaWindow *make_window(const char *id,
     window->used_percent = percent;
     window->has_window_minutes = TRUE;
     window->window_minutes = minutes;
-    window->has_resets_at = TRUE;
-    window->resets_at_ms = now_ms + reset_seconds * 1000;
+    if (reset_seconds >= 0 && reset_seconds <= G_MAXINT64 / 1000) {
+        gint64 reset_delta_ms = reset_seconds * 1000;
+        if (now_ms <= G_MAXINT64 - reset_delta_ms) {
+            window->has_resets_at = TRUE;
+            window->resets_at_ms = now_ms + reset_delta_ms;
+        }
+    }
     return window;
 }
 
@@ -324,7 +329,7 @@ static gboolean opencode_go_web_window(const char *text,
                                        gint64 *reset_seconds) {
     double reset = 0;
     if (!opencode_go_capture_number(text, label, "usagePercent", percent) ||
-        !opencode_go_capture_number(text, label, "resetInSec", &reset) || reset < 0 || reset > G_MAXINT64) {
+        !opencode_go_capture_number(text, label, "resetInSec", &reset) || reset < 0 || reset >= 0x1p63) {
         return FALSE;
     }
     *percent = CLAMP(*percent, 0.0, 100.0);
@@ -381,18 +386,33 @@ static gboolean opencode_go_reset_at(json_object *object,
             char *end = NULL;
             double numeric = g_ascii_strtod(raw, &end);
             if (!raw[0] || !end || *end || !isfinite(numeric)) return FALSE;
-            reset_ms = numeric > 100000000000.0 ? (gint64)llround(numeric)
-                                                 : (gint64)llround(numeric * 1000.0);
+            double milliseconds = numeric > 100000000000.0 ? numeric : numeric * 1000.0;
+            if (!isfinite(milliseconds) || milliseconds < -0x1p63 || milliseconds >= 0x1p63) return FALSE;
+            reset_ms = (gint64)llround(milliseconds);
         }
-    } else if (json_object_is_type(value, json_type_int) || json_object_is_type(value, json_type_double)) {
+    } else if (json_object_is_type(value, json_type_int)) {
+        gint64 numeric = json_object_get_int64(value);
+        if (numeric > 100000000000LL) {
+            reset_ms = numeric;
+        } else {
+            if (numeric > G_MAXINT64 / 1000 || numeric < G_MININT64 / 1000) return FALSE;
+            reset_ms = numeric * 1000;
+        }
+    } else if (json_object_is_type(value, json_type_double)) {
         double numeric = json_object_get_double(value);
         if (!isfinite(numeric)) return FALSE;
-        reset_ms = numeric > 100000000000.0 ? (gint64)llround(numeric)
-                                             : (gint64)llround(numeric * 1000.0);
+        double milliseconds = numeric > 100000000000.0 ? numeric : numeric * 1000.0;
+        if (!isfinite(milliseconds) || milliseconds < -0x1p63 || milliseconds >= 0x1p63) return FALSE;
+        reset_ms = (gint64)llround(milliseconds);
     } else {
         return FALSE;
     }
-    *result = MAX((reset_ms - now_ms) / 1000, 0);
+    if (reset_ms <= now_ms) {
+        *result = 0;
+    } else {
+        if (now_ms < 0 && reset_ms > G_MAXINT64 + now_ms) return FALSE;
+        *result = (reset_ms - now_ms) / 1000;
+    }
     return TRUE;
 }
 
@@ -438,7 +458,7 @@ static gboolean opencode_go_json_window(json_object *object,
         has_reset = opencode_go_json_number(object, reset_in_keys[index], &reset);
     }
     if (has_reset) {
-        *reset_seconds = MAX((gint64)llround(reset), 0);
+        *reset_seconds = reset <= 0 ? 0 : (reset >= 0x1p63 ? G_MAXINT64 : (gint64)llround(reset));
         return TRUE;
     }
     for (guint index = 0; index < G_N_ELEMENTS(reset_at_keys); index++) {

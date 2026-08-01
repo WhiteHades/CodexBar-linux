@@ -5,6 +5,7 @@
 
 #include <gio/gio.h>
 #include <json-c/json.h>
+#include <math.h>
 #include <string.h>
 
 enum {
@@ -122,14 +123,20 @@ static void parse_http_window(json_object *rate_limit,
     window->usage_known = TRUE;
     window->used_percent = codexbar_usage_percent_from_raw(used_percent).raw;
     double seconds = 0;
-    if (json_number_value(window_value, "limit_window_seconds", &seconds) && seconds > 0) {
-        window->has_window_minutes = TRUE;
-        window->window_minutes = (gint64)(seconds / 60.0);
+    if (json_number_value(window_value, "limit_window_seconds", &seconds) && isfinite(seconds) && seconds > 0) {
+        double minutes = seconds / 60.0;
+        if (minutes < 0x1p63) {
+            window->has_window_minutes = TRUE;
+            window->window_minutes = (gint64)minutes;
+        }
     }
     double reset = 0;
-    if (json_number_value(window_value, "reset_at", &reset) && reset >= 0 && reset <= G_MAXINT64 / 1000) {
-        window->has_resets_at = TRUE;
-        window->resets_at_ms = (gint64)reset * 1000;
+    if (json_number_value(window_value, "reset_at", &reset) && isfinite(reset) && reset >= 0 && reset < 0x1p63) {
+        gint64 reset_seconds = (gint64)reset;
+        if (reset_seconds <= G_MAXINT64 / 1000) {
+            window->has_resets_at = TRUE;
+            window->resets_at_ms = reset_seconds * 1000;
+        }
     }
     codexbar_provider_add_quota_window(provider, window);
 }

@@ -680,13 +680,13 @@ static json_object *parse_json(const char *json, size_t length) {
 
 static char *first_dns_label(const char *value) {
     if (!value) return NULL;
-    const char *start = value;
-    while (*start == '.') start++;
-    const char *end = value + strlen(value);
-    while (end > start && end[-1] == '.') end--;
-    const char *dot = memchr(start, '.', (size_t)(end - start));
-    if (dot) end = dot;
-    return end > start ? g_strndup(start, (gsize)(end - start)) : NULL;
+    size_t start = 0;
+    size_t end = strlen(value);
+    while (start < end && value[start] == '.') start++;
+    while (end > start && value[end - 1] == '.') end--;
+    const char *dot = memchr(value + start, '.', end - start);
+    if (dot) end = (size_t)(dot - value);
+    return end > start ? g_strndup(value + start, end - start) : NULL;
 }
 
 static void add_local_label(GHashTable *labels, const char *value) {

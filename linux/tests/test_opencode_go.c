@@ -248,6 +248,15 @@ static void test_web_usage_parser(void) {
     g_assert_cmpfloat(window(provider, 1, "secondary")->used_percent, ==, 40);
     g_assert_cmpfloat(window(provider, 2, "tertiary")->used_percent, ==, 75);
     codexbar_provider_free(provider);
+
+    const char *oversized_reset =
+        "{\"rollingUsage\":{\"usagePercent\":25,\"resetInSec\":1e100}}";
+    provider = codexbar_opencode_go_parse_web_usage(
+        oversized_reset, strlen(oversized_reset), 1800000000000LL, &error);
+    g_assert_no_error(error);
+    CodexBarQuotaWindow *primary = window(provider, 0, "primary");
+    g_assert_false(primary->has_resets_at);
+    codexbar_provider_free(provider);
 }
 
 static void test_web_discovery_fallback_and_zen_balance(void) {

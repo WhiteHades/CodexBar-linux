@@ -19,6 +19,8 @@ static void test_tailscale_dictionary_and_array_shapes(void) {
         "\"two\":{\"DNSName\":\"other.tail.ts.net.\",\"OS\":\"windows\",\"Online\":true},"
         "\"dup\":{\"DNSName\":\"linuxbox.other.ts.net.\",\"OS\":\"linux\",\"Online\":true},"
         "\"self\":{\"DNSName\":\"local.other.ts.net.\",\"OS\":\"linux\",\"Online\":true},"
+        "\"empty\":{\"DNSName\":\"\",\"OS\":\"linux\",\"Online\":true},"
+        "\"dots\":{\"DNSName\":\"...\",\"OS\":\"linux\",\"Online\":true},"
         "\"phone\":{\"DNSName\":\"phone.tail.ts.net.\",\"OS\":\"iOS\",\"Online\":true},"
         "\"off\":{\"DNSName\":\"offline.tail.ts.net.\",\"OS\":\"linux\",\"Online\":false}}}";
     GPtrArray *hosts = codexbar_tailscale_status_parse_hosts(dictionary, strlen(dictionary), "LOCAL");
