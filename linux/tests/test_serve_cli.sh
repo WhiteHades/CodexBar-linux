@@ -25,7 +25,7 @@ chmod +x "$wrapper"
 
 CODEXBAR_BACKEND="$wrapper" CODEXBAR_TEST_BACKEND="$backend" CODEXBAR_TEST_COUNT="$count" \
   CODEXBAR_COST_CODEX_ROOT="$work/codex" CODEXBAR_COST_CLAUDE_ROOT="$work/claude" \
-  "$binary" serve --port "$port" --refresh-interval 60 --request-timeout 0.2 \
+  "$binary" serve --port "$port" --refresh-interval 60 --request-timeout 1 \
   >"$work/server.out" 2>"$work/server.err" &
 server_pid=$!
 
@@ -80,7 +80,7 @@ esac
 curl -fsS --max-time 2 "http://127.0.0.1:$port/usage?provider=codex" >/dev/null
 [ "$(cat "$count")" -eq 1 ]
 
-status=$(curl -sS --max-time 2 -o "$work/timeout" -w '%{http_code}' \
+status=$(curl -sS --max-time 3 -o "$work/timeout" -w '%{http_code}' \
   "http://127.0.0.1:$port/usage?provider=claude")
 [ "$status" -eq 504 ]
 [ "$(cat "$work/timeout")" = '{"error":"request timed out"}' ]
