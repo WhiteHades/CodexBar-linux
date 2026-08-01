@@ -22,7 +22,6 @@ core_sources = files(
   'src/cli_cache.c',
   'src/cli_cards.c',
   'src/cli_config.c',
-  'src/cli_cookie.c',
   'src/cli_cost.c',
   'src/cli_diagnose.c',
   'src/cli_guard.c',
@@ -413,9 +412,6 @@ test(
   args: [codexbar_linux],
   depends: process_supervisor,
 )
-
-cookie_cli_test = find_program('tests/test_cookie_cli.sh')
-test('codexbar-linux-cookie-cli', cookie_cli_test, args: [codexbar_linux])
 
 serve_cli_test = find_program('tests/test_serve_cli.sh')
 test(

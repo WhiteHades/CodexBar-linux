@@ -23,7 +23,6 @@ codexbar-linux usage --provider openrouter --format json --pretty
 codexbar-linux usage --provider claude --all-accounts --format json --pretty
 codexbar-linux guard --provider codex --min-remaining 20
 codexbar-linux hooks list
-codexbar-linux cookie refresh --provider codex # reports unsupported on Linux
 codexbar-linux config validate
 codexbar-linux config providers
 codexbar-linux --version
