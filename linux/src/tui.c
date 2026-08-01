@@ -1,9 +1,9 @@
 #include "tui.h"
 
-#include "backend.h"
 #include "config.h"
 #include "refresh_policy.h"
 #include "render.h"
+#include "runtime.h"
 #include "tui_actions.h"
 #include "wayfinder.h"
 #include "version.h"
@@ -715,9 +715,9 @@ static void draw_screen(const CodexBarSnapshot *snapshot,
     refresh();
 }
 
-static CodexBarSnapshot *fetch_snapshot(char **status) {
+static CodexBarSnapshot *fetch_snapshot(CodexBarRuntime *runtime, char **status) {
     GError *error = NULL;
-    CodexBarSnapshot *snapshot = codexbar_backend_fetch(&error);
+    CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, NULL, &error);
     if (!snapshot) {
         *status = g_strdup_printf("backend error: %s", error->message);
         g_error_free(error);
@@ -827,7 +827,8 @@ int codexbar_tui_run(void) {
     g_free(status);
     status = NULL;
 
-    CodexBarSnapshot *snapshot = fetch_snapshot(&status);
+    CodexBarRuntime *runtime = codexbar_runtime_new();
+    CodexBarSnapshot *snapshot = fetch_snapshot(runtime, &status);
     guint selected = 0;
     guint first_metric = 0;
     CodexBarTuiMode mode = CODEXBAR_TUI_MODE_USAGE;
@@ -860,7 +861,7 @@ int codexbar_tui_run(void) {
             codexbar_snapshot_free(snapshot);
             g_free(status);
             status = NULL;
-            snapshot = fetch_snapshot(&status);
+            snapshot = fetch_snapshot(runtime, &status);
             first_metric = 0;
             refresh_delay = tui_refresh_delay(refresh_frequency, last_interaction_us);
             gint64 completed_at_us = g_get_monotonic_time();
@@ -985,7 +986,7 @@ int codexbar_tui_run(void) {
             codexbar_snapshot_free(snapshot);
             g_free(status);
             status = NULL;
-            snapshot = fetch_snapshot(&status);
+            snapshot = fetch_snapshot(runtime, &status);
             first_metric = 0;
             refresh_delay = tui_refresh_delay(refresh_frequency, last_interaction_us);
             gint64 completed_at_us = g_get_monotonic_time();
@@ -1016,6 +1017,7 @@ int codexbar_tui_run(void) {
     }
 
     codexbar_snapshot_free(snapshot);
+    codexbar_runtime_free(runtime);
     g_clear_pointer(&actions, g_ptr_array_unref);
     g_free(status);
     endwin();

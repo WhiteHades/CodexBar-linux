@@ -1,11 +1,11 @@
 #include "desktop.h"
 
-#include "backend.h"
 #include "config.h"
 #include "model.h"
 #include "refresh_coordinator.h"
 #include "refresh_policy.h"
 #include "render.h"
+#include "runtime.h"
 
 #include <gio/gio.h>
 #include <glib-unix.h>
@@ -49,6 +49,7 @@ typedef struct {
     GCancellable *refresh_cancellable;
     CodexBarRefreshCoordinator *refresh_coordinator;
     CodexBarRefreshFrequency refresh_frequency;
+    CodexBarRuntime *runtime;
     gint64 last_menu_open_us;
     gint64 fixed_refresh_deadline_us;
     gboolean stopping;
@@ -230,6 +231,7 @@ static void status_item_free(CodexBarStatusItem *item) {
     g_free(item->status);
     g_clear_object(&item->refresh_cancellable);
     codexbar_refresh_coordinator_free(item->refresh_coordinator);
+    codexbar_runtime_free(item->runtime);
     g_free(item);
 }
 
@@ -415,9 +417,9 @@ static void set_snapshot_state(CodexBarStatusItem *item, const CodexBarSnapshot 
 
 static void refresh_worker(GTask *task, gpointer source_object, gpointer task_data, GCancellable *cancellable) {
     (void)source_object;
-    (void)task_data;
+    CodexBarRuntime *runtime = task_data;
     GError *error = NULL;
-    CodexBarSnapshot *snapshot = codexbar_backend_fetch_with_cancellable(cancellable, &error);
+    CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, cancellable, &error);
     if (snapshot) {
         g_task_return_pointer(task, snapshot, (GDestroyNotify)codexbar_snapshot_free);
     } else {
@@ -507,6 +509,7 @@ static void request_refresh(CodexBarStatusItem *item, gboolean replace) {
     context->item = status_item_ref(item);
     context->generation = request.generation;
     GTask *task = g_task_new(NULL, item->refresh_cancellable, refresh_complete, context);
+    g_task_set_task_data(task, item->runtime, NULL);
     g_task_run_in_thread(task, refresh_worker);
     g_object_unref(task);
 }
@@ -653,6 +656,7 @@ int codexbar_status_item_run(const char *program) {
     item->tooltip = g_strdup("CodexBar\nLoading usage...");
     item->status = g_strdup("Active");
     item->refresh_coordinator = codexbar_refresh_coordinator_new();
+    item->runtime = codexbar_runtime_new();
     CodexBarConfig *config = codexbar_config_load(NULL);
     item->refresh_frequency = config ? config->refresh_frequency : CODEXBAR_REFRESH_FIVE_MINUTES;
     codexbar_config_free(config);

@@ -58,6 +58,7 @@ core_sources = files(
   'src/proxy_providers.c',
   'src/qwen_cloud.c',
   'src/render.c',
+  'src/runtime.c',
   'src/refresh_coordinator.c',
   'src/refresh_policy.c',
   'src/sessions.c',
@@ -142,6 +143,14 @@ transitions_test = executable(
   dependencies: [glib_dep, gio_dep],
 )
 test('codexbar-linux-transitions', transitions_test, env: normalized_test_env)
+
+runtime_test = executable(
+  'codexbar-linux-runtime-tests',
+  core_sources + files('tests/test_runtime.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-runtime', runtime_test, env: normalized_test_env)
 
 managed_codex_test = executable(
   'codexbar-linux-managed-codex-tests',
