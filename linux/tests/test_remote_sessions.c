@@ -16,26 +16,25 @@ static void test_tailscale_dictionary_and_array_shapes(void) {
     const char *dictionary =
         "{\"BackendState\":\"Running\",\"Self\":{\"DNSName\":\"local.tail.ts.net.\"},\"Peer\":{"
         "\"one\":{\"DNSName\":\"LinuxBox.tail.ts.net.\",\"OS\":\"linux\",\"Online\":true},"
-        "\"two\":{\"DNSName\":\"clawmac.tail.ts.net.\",\"OS\":\"macOS\",\"Online\":true},"
+        "\"two\":{\"DNSName\":\"other.tail.ts.net.\",\"OS\":\"windows\",\"Online\":true},"
         "\"dup\":{\"DNSName\":\"linuxbox.other.ts.net.\",\"OS\":\"linux\",\"Online\":true},"
         "\"self\":{\"DNSName\":\"local.other.ts.net.\",\"OS\":\"linux\",\"Online\":true},"
         "\"phone\":{\"DNSName\":\"phone.tail.ts.net.\",\"OS\":\"iOS\",\"Online\":true},"
         "\"off\":{\"DNSName\":\"offline.tail.ts.net.\",\"OS\":\"linux\",\"Online\":false}}}";
     GPtrArray *hosts = codexbar_tailscale_status_parse_hosts(dictionary, strlen(dictionary), "LOCAL");
     g_assert_nonnull(hosts);
-    g_assert_cmpuint(hosts->len, ==, 2);
+    g_assert_cmpuint(hosts->len, ==, 1);
     g_assert_cmpstr(g_ptr_array_index(hosts, 0), ==, "LinuxBox");
-    g_assert_cmpstr(g_ptr_array_index(hosts, 1), ==, "clawmac");
     g_ptr_array_unref(hosts);
 
     const char *array =
         "{\"Self\":{},\"Peer\":["
         "{\"DNSName\":\"beta.tail.ts.net\",\"OS\":\"linux\",\"Online\":true},"
-        "{\"DNSName\":\"alpha.tail.ts.net\",\"OS\":\"macOS\",\"Online\":true}]}";
+        "{\"DNSName\":\"alpha.tail.ts.net\",\"OS\":\"windows\",\"Online\":true}]}";
     hosts = codexbar_tailscale_status_parse_hosts(array, strlen(array), NULL);
     g_assert_nonnull(hosts);
-    g_assert_cmpstr(g_ptr_array_index(hosts, 0), ==, "alpha");
-    g_assert_cmpstr(g_ptr_array_index(hosts, 1), ==, "beta");
+    g_assert_cmpuint(hosts->len, ==, 1);
+    g_assert_cmpstr(g_ptr_array_index(hosts, 0), ==, "beta");
     g_ptr_array_unref(hosts);
 
     g_assert_null(codexbar_tailscale_status_parse_hosts("{\"Version\":\"1\"}", 15, NULL));

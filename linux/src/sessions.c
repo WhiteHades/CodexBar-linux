@@ -709,7 +709,7 @@ static void add_tailscale_peer(json_object *peer, GHashTable *local, GHashTable 
         return;
     }
     const char *os_name = json_object_get_string(os);
-    if (!g_str_equal(os_name, "linux") && !g_str_equal(os_name, "macOS")) return;
+    if (!g_str_equal(os_name, "linux")) return;
     char *label = first_dns_label(json_object_get_string(dns_name));
     if (!label) return;
     char *lower = g_utf8_strdown(label, -1);
@@ -983,9 +983,7 @@ typedef struct {
 } RemoteFetchJob;
 
 static const char *remote_list_command =
-    "CODEXBAR_REMOTE_SESSIONS_LOCAL_ONLY=1 codexbar sessions --json || "
-    "CODEXBAR_REMOTE_SESSIONS_LOCAL_ONLY=1 codexbar-linux sessions --json || "
-    "'/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI' sessions --json";
+    "CODEXBAR_REMOTE_SESSIONS_LOCAL_ONLY=1 codexbar-linux sessions --json";
 
 static CodexBarRemoteSessionHostResult *remote_fetch_one(const char *host,
                                                          CodexBarSessionProcessRunner runner,
@@ -1091,10 +1089,7 @@ GPtrArray *codexbar_remote_sessions_discover(CodexBarSessionProcessRunner runner
         }
     }
     g_strfreev(directories);
-    const char *fixed[] = {"/usr/local/bin/tailscale",
-                           "/opt/homebrew/bin/tailscale",
-                           "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-                           NULL};
+    const char *fixed[] = {"/usr/local/bin/tailscale", "/usr/bin/tailscale", NULL};
     for (size_t index = 0; fixed[index]; index++) {
         if (!g_hash_table_contains(seen, fixed[index])) {
             g_hash_table_add(seen, g_strdup(fixed[index]));
@@ -1163,12 +1158,7 @@ gboolean codexbar_remote_session_focus(const char *session_id,
         return FALSE;
     }
     char *quoted_id = shell_quote(session_id);
-    char *remote_command = g_strdup_printf(
-        "codexbar sessions focus %s || codexbar-linux sessions focus %s || "
-        "'/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI' sessions focus %s",
-        quoted_id,
-        quoted_id,
-        quoted_id);
+    char *remote_command = g_strdup_printf("codexbar-linux sessions focus %s", quoted_id);
     char *command = shell_quote(remote_command);
     const char *arguments[] = {
         ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", clean_host, "sh", "-lc", command, NULL};

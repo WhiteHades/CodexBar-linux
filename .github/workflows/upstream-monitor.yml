@@ -1,313 +1,52 @@
-name: Monitor Upstream Changes
+name: upstream monitor
 
 on:
   schedule:
-    # Run Monday and Thursday at 9 AM UTC
     - cron: '0 9 * * 1,4'
   workflow_dispatch:
-    inputs:
-      target:
-        description: 'Which upstream to check'
-        required: false
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - upstream
-          - quotio
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
-  check-upstreams:
+  audit:
     runs-on: ubuntu-24.04
-    env:
-      CHECK_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'all' }}
-    permissions:
-      issues: write
-      contents: read
-    
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Add upstream remotes
+      - name: compare audited revision
+        id: compare
+        shell: bash
         run: |
-          case "$CHECK_TARGET" in
-            all|upstream|quotio) ;;
-            *)
-              echo "Invalid target '$CHECK_TARGET'. Allowed values are all, upstream, or quotio." >&2
-              exit 1
-              ;;
-          esac
-          if [ "$CHECK_TARGET" = "all" ] || [ "$CHECK_TARGET" = "upstream" ]; then
-            git remote get-url upstream >/dev/null 2>&1 || \
-              git remote add upstream https://github.com/steipete/CodexBar.git
-            git fetch upstream
-          fi
-          if [ "$CHECK_TARGET" = "all" ] || [ "$CHECK_TARGET" = "quotio" ]; then
-            git remote get-url quotio >/dev/null 2>&1 || \
-              git remote add quotio https://github.com/nguyenphutrong/quotio.git
-            git fetch quotio
-          fi
+          set +e
+          output=$(./Scripts/check-upstream.sh 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          {
+            echo 'report<<EOF'
+            echo "$output"
+            echo 'EOF'
+            echo "changed=$([[ $status -eq 0 ]] && echo false || echo true)"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Check for new commits
-        id: check
-        run: |
-          remote_default_branch() {
-            local remote="$1"
-            local branch=""
-            branch=$(git symbolic-ref -q --short "refs/remotes/${remote}/HEAD" 2>/dev/null | sed "s#^${remote}/##" || true)
-            if [ -z "$branch" ]; then
-              branch=$(git remote show "$remote" 2>/dev/null | awk '/HEAD branch/ {print $NF; exit}' || true)
-            fi
-            if [ -n "$branch" ] && git rev-parse --verify -q "${remote}/${branch}" >/dev/null; then
-              echo "$branch"
-              return 0
-            fi
-            for candidate in main master; do
-              if git rev-parse --verify -q "${remote}/${candidate}" >/dev/null; then
-                echo "$candidate"
-                return 0
-              fi
-            done
-            echo "Could not resolve default branch for ${remote}" >&2
-            exit 1
-          }
-
-          TARGET="$CHECK_TARGET"
-          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
-
-          BASE_REF="main"
-          UPSTREAM_REF="not checked"
-          QUOTIO_REF="not checked"
-          UPSTREAM_SUMMARY="(upstream checks skipped)"
-          QUOTIO_SUMMARY="(quotio checks skipped)"
-          UPSTREAM_NEW=0
-          QUOTIO_NEW=0
-
-          if [ "$TARGET" = "all" ] || [ "$TARGET" = "upstream" ]; then
-            UPSTREAM_BRANCH=$(remote_default_branch upstream)
-            UPSTREAM_REF="upstream/${UPSTREAM_BRANCH}"
-            BASE_REF=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)
-            if [ -z "$BASE_REF" ]; then
-              BASE_REF="main"
-            fi
-            if ! git rev-parse -q --verify "origin/${BASE_REF}" >/dev/null; then
-              BASE_REF="main"
-            fi
-            if ! git rev-parse -q --verify "origin/${BASE_REF}" >/dev/null; then
-              BASE_REF="master"
-            fi
-            if ! git rev-parse -q --verify "origin/${BASE_REF}" >/dev/null; then
-              echo "Could not resolve local default branch for upstream comparison" >&2
-              exit 1
-            fi
-            UPSTREAM_SUMMARY="$(git log -10 --oneline "origin/${BASE_REF}..${UPSTREAM_REF}" --no-merges 2>/dev/null)"
-            UPSTREAM_NEW=$(git log --oneline "origin/${BASE_REF}..${UPSTREAM_REF}" --no-merges 2>/dev/null | wc -l | tr -d ' ')
-            if [ -z "$UPSTREAM_SUMMARY" ]; then
-              UPSTREAM_SUMMARY="No commits"
-            fi
-          fi
-
-          if [ "$TARGET" = "all" ] || [ "$TARGET" = "quotio" ]; then
-            QUOTIO_BRANCH=$(remote_default_branch quotio)
-            QUOTIO_REF="quotio/${QUOTIO_BRANCH}"
-            QUOTIO_SUMMARY="$(git log -10 --oneline "$QUOTIO_REF" --since='7 days ago' 2>/dev/null)"
-            QUOTIO_NEW=$(git log --oneline "$QUOTIO_REF" --since='7 days ago' 2>/dev/null | wc -l | tr -d ' ')
-            if [ -z "$QUOTIO_SUMMARY" ]; then
-              QUOTIO_SUMMARY="No commits"
-            fi
-          fi
-
-          echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "upstream_ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
-          echo "quotio_ref=$QUOTIO_REF" >> "$GITHUB_OUTPUT"
-          echo "upstream_commits=$UPSTREAM_NEW" >> "$GITHUB_OUTPUT"
-          echo "quotio_commits=$QUOTIO_NEW" >> "$GITHUB_OUTPUT"
-          echo "upstream_summary<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$UPSTREAM_SUMMARY" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-          echo "quotio_summary<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$QUOTIO_SUMMARY" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Check if issues are enabled
-        id: issue-capability
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          retries: 3
-          script: |
-            const repo = await github.rest.repos.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
-            core.setOutput('enabled', repo.data.has_issues ? 'true' : 'false');
-      
-      - name: Create or update issue
-        if: (fromJSON(steps.check.outputs.upstream_commits) > 0 || fromJSON(steps.check.outputs.quotio_commits) > 0) && steps.issue-capability.outputs.enabled == 'true'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      - name: open or update audit issue
+        if: steps.compare.outputs.changed == 'true'
         env:
-          UPSTREAM_COMMITS: ${{ steps.check.outputs.upstream_commits }}
-          QUOTIO_COMMITS: ${{ steps.check.outputs.quotio_commits }}
-          UPSTREAM_REF: ${{ steps.check.outputs.upstream_ref }}
-          UPSTREAM_BASE_REF: ${{ steps.check.outputs.base_ref }}
-          QUOTIO_REF: ${{ steps.check.outputs.quotio_ref }}
-          UPSTREAM_SUMMARY: ${{ steps.check.outputs.upstream_summary }}
-          QUOTIO_SUMMARY: ${{ steps.check.outputs.quotio_summary }}
-        with:
-          retries: 3
-          script: |
-            const upstreamCommits = process.env.UPSTREAM_COMMITS;
-            const quotioCommits = process.env.QUOTIO_COMMITS;
-            const upstreamRef = process.env.UPSTREAM_REF || 'not checked';
-            const quotioRef = process.env.QUOTIO_REF || 'not checked';
-            const upstreamBaseBranch = process.env.UPSTREAM_BASE_REF || 'main';
-            const upstreamBaseRef = `origin/${upstreamBaseBranch}`;
-            const upstreamSummary = process.env.UPSTREAM_SUMMARY || 'Skipped';
-            const quotioSummary = process.env.QUOTIO_SUMMARY || 'Skipped';
-
-            const sourceRefs = [];
-            const detailCommands = [];
-            let links = '';
-
-            let detailsSection = '### Review Actions\n\n';
-            if (upstreamRef !== 'not checked') {
-              sourceRefs.push(upstreamRef);
-              detailsSection += '**Review upstream changes:**\n';
-              detailsSection += '```bash\n./Scripts/review_upstream.sh upstream\n```\n\n';
-              detailCommands.push(`git diff ${upstreamBaseRef}..${upstreamRef}`);
-              const upstreamBranch = upstreamRef.replace('upstream/', '');
-              links += `\n- [steipete commits](https://github.com/${context.repo.owner}/${context.repo.repo}/compare/${upstreamBaseBranch}...steipete:CodexBar:${upstreamBranch})`;
-            } else {
-              detailsSection += '**Review upstream changes:** not checked in this run\n\n';
-            }
-
-            if (quotioRef !== 'not checked') {
-              sourceRefs.push(quotioRef);
-              detailsSection += '**Review quotio changes:**\n';
-              detailsSection += '```bash\n./Scripts/analyze_quotio.sh\n```\n\n';
-              detailCommands.push(`git log -p ${quotioRef} --since='7 days ago'`);
-              links += `\n- [quotio commits](https://github.com/nguyenphutrong/quotio/commits/${quotioRef.replace('quotio/', '')})`;
-            } else {
-              detailsSection += '**Review quotio changes:** not checked in this run\n\n';
-            }
-
-            const sourceRefsText = sourceRefs.length > 0 ? sourceRefs.join(', ') : 'none';
-            const diffCommands = detailCommands.length > 0
-              ? `\`\`\`bash\n${detailCommands.join('\n')}\n\`\`\``
-              : '`No source refs were checked in this run.`';
-
-            const body = `## Upstream Changes Detected
-
-            **steipete/CodexBar:** ${upstreamCommits} new commits
-            **quotio:** ${quotioCommits} new commits (last 7 days)
-            **Source refs:** ${sourceRefsText}
-
-            ### steipete/CodexBar Recent Commits
-            \`\`\`
-            ${upstreamRef === 'not checked' ? 'Skipped' : upstreamSummary}
-            \`\`\`
-
-            ### quotio Recent Commits
-            \`\`\`
-            ${quotioRef === 'not checked' ? 'Skipped' : quotioSummary}
-            \`\`\`
-
-            ### Detailed Changes
-            ${diffCommands}
-
-            ${detailsSection}
-            ### Links${links}
-
-            ---
-            *Auto-generated by upstream-monitor workflow*
-            *Last checked: ${new Date().toISOString()}*`;
-
-            const requiredLabels = [
-              {
-                name: 'upstream-sync',
-                color: '1d76db',
-                description: 'Tracks changes from an upstream repository'
-              },
-              {
-                name: 'needs-review',
-                color: 'fbca04',
-                description: 'Requires maintainer review'
-              }
-            ];
-            for (const label of requiredLabels) {
-              try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label.name
-                });
-              } catch (error) {
-                if (error.status !== 404) throw error;
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ...label
-                });
-              }
-            }
-
-            // Check for existing open issue
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: 'upstream-sync',
-              state: 'open'
-            });
-            
-            if (issues.data.length > 0) {
-              // Update existing issue
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issues.data[0].number,
-                body: body
-              });
-              
-              // Add comment
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issues.data[0].number,
-                body: `Updated with latest changes (${upstreamCommits} upstream, ${quotioCommits} quotio)`
-              });
-            } else {
-              // Create new issue
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: 'Upstream Changes Available for Review',
-                body: body,
-                labels: ['upstream-sync', 'needs-review']
-              });
-            }
-
-      - name: Changes detected but issues disabled
-        if: (fromJSON(steps.check.outputs.upstream_commits) > 0 || fromJSON(steps.check.outputs.quotio_commits) > 0) && steps.issue-capability.outputs.enabled != 'true'
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.compare.outputs.report }}
+        shell: bash
         run: |
-          echo "New upstream changes detected, but issues are disabled for this repository."
-          echo "Skipped upstream-sync issue/comment creation."
-      
-      - name: No changes detected
-        if: fromJSON(steps.check.outputs.upstream_commits) == 0 && fromJSON(steps.check.outputs.quotio_commits) == 0
-        run: |
-          TARGET="${{ steps.check.outputs.target }}"
-          if [ "$TARGET" = "upstream" ]; then
-            echo "No new upstream changes detected"
-            echo "steipete/CodexBar: up to date"
-            echo "quotio checks skipped"
-          elif [ "$TARGET" = "quotio" ]; then
-            echo "No new quotio changes detected in the last 7 days"
-            echo "steipete/CodexBar check skipped"
-            echo "quotio: no commits in last 7 days"
+          title='audit new codexbar upstream commits'
+          body=$(printf 'The native parity baseline is stale.\n\n```text\n%s\n```\n\nRun `./Scripts/check-upstream.sh`, port applicable behavior, verify, and update `UPSTREAM_REVISION`.' "$REPORT")
+          number=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [[ -n "$number" ]]; then
+            gh issue edit "$number" --body "$body"
           else
-            echo "No new upstream changes detected"
-            echo "steipete/CodexBar: up to date"
-            echo "quotio: no commits in last 7 days"
+            gh issue create --title "$title" --body "$body"
           fi

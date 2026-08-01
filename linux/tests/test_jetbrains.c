@@ -252,7 +252,7 @@ static void test_discovery_uses_latest_quota_file(void) {
     g_free(home);
 }
 
-static void test_discovery_equal_mtime_uses_swift_order(void) {
+static void test_discovery_equal_mtime_uses_version_order(void) {
     GError *error = NULL;
     char *home = g_dir_make_tmp("codexbar-jetbrains-XXXXXX", &error);
     g_assert_no_error(error);
@@ -363,7 +363,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/jetbrains/strict-json", test_strict_json);
     g_test_add_func("/jetbrains/discovery-roots", test_discovery_roots);
     g_test_add_func("/jetbrains/discovery-latest", test_discovery_uses_latest_quota_file);
-    g_test_add_func("/jetbrains/discovery-equal-mtime", test_discovery_equal_mtime_uses_swift_order);
+    g_test_add_func("/jetbrains/discovery-equal-mtime", test_discovery_equal_mtime_uses_version_order);
     g_test_add_func("/jetbrains/discovery-fifo", test_discovery_rejects_fifo);
     g_test_add_func("/jetbrains/discovery-oversized", test_discovery_rejects_oversized_file);
     g_test_add_func("/jetbrains/discovery-symlink", test_discovery_follows_symlink);

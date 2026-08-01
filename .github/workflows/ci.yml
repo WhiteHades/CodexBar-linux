@@ -1,11 +1,10 @@
-name: CI
+name: ci
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -14,425 +13,80 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  SWIFT_VERSION: 6.3.3
-  SWIFTLY_VERSION: 1.1.3
-  SWIFTLY_SIGNING_FINGERPRINT: E813C892820A6FA13755B268F167DF1ACF9CE069
-
 jobs:
-  changes:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      macos-tests: ${{ steps.macos-tests.outputs.macos-tests }}
-      macos-tests-deferred: ${{ steps.macos-tests.outputs.macos-tests-deferred }}
-      macos-tests-reason: ${{ steps.macos-tests.outputs.macos-tests-reason }}
-      changed-path-count: ${{ steps.macos-tests.outputs.changed-path-count }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Detect macOS test impact
-        id: macos-tests
-        shell: bash
-        env:
-          CI_PULL_REQUEST_DRAFT: ${{ github.event.pull_request.draft || false }}
-        run: |
-          set -euo pipefail
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base_sha="${{ github.event.pull_request.base.sha }}"
-          else
-            base_sha="${{ github.event.before }}"
-          fi
-
-          changed_paths="${RUNNER_TEMP}/changed-paths.txt"
-          if [[ -z "$base_sha" || "$base_sha" =~ ^0+$ ]]; then
-            git ls-files | awk '{ print "A\t" $0 }' > "$changed_paths"
-          elif ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
-            echo "Base commit ${base_sha} is unavailable; running macOS tests conservatively."
-            git ls-files | awk '{ print "A\t" $0 }' > "$changed_paths"
-          else
-            git diff --name-status "$base_sha" "$GITHUB_SHA" > "$changed_paths"
-          fi
-
-          printf 'Changed paths:\n'
-          sed 's/^/- /' "$changed_paths"
-          ./Scripts/ci_macos_test_gate.sh "$changed_paths"
-
-      - name: Summarize macOS test gate
-        if: ${{ always() }}
-        shell: bash
-        env:
-          MACOS_TESTS: ${{ steps.macos-tests.outputs.macos-tests }}
-          MACOS_TESTS_REASON: ${{ steps.macos-tests.outputs.macos-tests-reason }}
-          CHANGED_PATH_COUNT: ${{ steps.macos-tests.outputs.changed-path-count }}
-        run: |
-          set -euo pipefail
-          reason="${MACOS_TESTS_REASON:-<unset>}"
-          reason="${reason//|/\\|}"
-          {
-            printf '### macOS test gate\n\n'
-            printf '| Field | Value |\n'
-            printf '| --- | --- |\n'
-            printf '| macOS Swift tests required | `%s` |\n' "${MACOS_TESTS:-<unset>}"
-            printf '| Reason | %s |\n' "$reason"
-            printf '| Changed path entries | `%s` |\n' "${CHANGED_PATH_COUNT:-<unset>}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  lint:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install lint tools
-        run: ./Scripts/install_lint_tools.sh swiftlint
-
-      - name: Lint
-        run: ./Scripts/lint.sh lint-linux
-
-  native-c-tests:
-    name: Native C (${{ matrix.name }})
-    runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: gcc-x64
-            runs-on: ubuntu-24.04
-            cc: gcc-14
-            compiler-package: gcc-14
-            sanitizers: none
-          - name: clang-x64
-            runs-on: ubuntu-24.04
-            cc: clang-18
-            compiler-package: clang-18
-            sanitizers: none
-          - name: gcc-arm64
-            runs-on: ubuntu-24.04-arm
-            cc: gcc-14
-            compiler-package: gcc-14
-            sanitizers: none
-          - name: clang-arm64
-            runs-on: ubuntu-24.04-arm
-            cc: clang-18
-            compiler-package: clang-18
-            sanitizers: none
-          - name: clang-asan-ubsan
-            runs-on: ubuntu-24.04
-            cc: clang-18
-            compiler-package: clang-18
-            sanitizers: address,undefined
-    env:
-      CC: ${{ matrix.cc }}
-      BUILD_DIR: build/native-${{ matrix.name }}
-      SANITIZERS: ${{ matrix.sanitizers }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install native dependencies
-        env:
-          COMPILER_PACKAGE: ${{ matrix.compiler-package }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            "$COMPILER_PACKAGE" \
-            libcurl4-openssl-dev \
-            libglib2.0-dev \
-            libjson-c-dev \
-            libncurses-dev \
-            libsqlite3-dev \
-            ninja-build \
-            pkg-config \
-            python3-venv
-
-      - name: Install Meson
-        run: |
-          set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/meson"
-          "$RUNNER_TEMP/meson/bin/pip" install --disable-pip-version-check "meson==1.6.1"
-          echo "$RUNNER_TEMP/meson/bin" >> "$GITHUB_PATH"
-
-      - name: Configure
-        run: |
-          set -euo pipefail
-          "$CC" --version
-          args=(setup "$BUILD_DIR" --buildtype=debug --wrap-mode=nodownload)
-          if [[ "$SANITIZERS" != none ]]; then
-            args+=("-Db_sanitize=$SANITIZERS" "-Db_lundef=false")
-          fi
-          meson "${args[@]}"
-
-      - name: Compile
-        run: meson compile -C "$BUILD_DIR"
-
-      - name: Test
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: meson test -C "$BUILD_DIR" --no-rebuild --print-errorlogs
-
-      - name: Verify native version
-        run: |
-          set -euo pipefail
-          project_version="$(
-            meson introspect --projectinfo "$BUILD_DIR" |
-              python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
-          )"
-          test "$("$BUILD_DIR/linux/codexbar-linux" --version)" = "CodexBar $project_version"
-
-  swift-test-macos:
-    needs: changes
-    if: ${{ needs.changes.outputs.macos-tests == 'true' }}
-    runs-on: macos-15-intel
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # Two shards amortize SwiftPM's per-shard discovery/cold build.
-        # Each shard remains within the 50-minute Swift Test timeout.
-        shard-index: [0, 1]
-        shard-count: [2]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Select Xcode 26.3 or 26.2
-        run: |
-          set -euo pipefail
-          # Both versions are part of the official macOS 15 runner image.
-          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
-            if [[ -d "$candidate" ]]; then
-              sudo xcode-select -s "${candidate}/Contents/Developer"
-              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
-              break
-            fi
-          done
-          [[ "$(/usr/bin/xcodebuild -version)" == Xcode\ 26.* ]]
-          /usr/bin/xcodebuild -version
-
-      - name: Swift toolchain version
-        run: |
-          set -euo pipefail
-          swift --version
-          swift package --version
-
-      - name: Check app locales and Swift formatting
-        if: ${{ matrix.shard-index == 0 }}
-        run: ./Scripts/lint.sh lint-macos
-
-      - name: Swift Test
-        # Keep small batches to reduce SwiftPM process overhead without returning to one aggregate run.
-        timeout-minutes: 50
-        run: |
-          CODEXBAR_TEST_GROUP_SIZE=4 \
-            CODEXBAR_TEST_SUITE_TIMEOUT=120 \
-            CODEXBAR_TEST_RETRY_NON_TIMEOUT_FAILURES=0 \
-            CODEXBAR_TEST_SHARD_INDEX=${{ matrix.shard-index }} \
-            CODEXBAR_TEST_SHARD_COUNT=${{ matrix.shard-count }} \
-            ./Scripts/test.sh
-
-      - name: Summarize macOS shard
-        if: ${{ always() }}
-        shell: bash
-        env:
-          SHARD_INDEX: ${{ matrix.shard-index }}
-          SHARD_COUNT: ${{ matrix.shard-count }}
-          RUNS_LINT_MACOS: ${{ matrix.shard-index == 0 }}
-        run: |
-          set -euo pipefail
-          display_shard_index=$((SHARD_INDEX + 1))
-          xcode_version="$(/usr/bin/xcodebuild -version 2>/dev/null | tr '\n' ' ' || true)"
-          {
-            printf '### macOS Swift shard\n\n'
-            printf '| Field | Value |\n'
-            printf '| --- | --- |\n'
-            printf '| Shard | `%s / %s` |\n' "$display_shard_index" "$SHARD_COUNT"
-            printf '| Runner | `%s` |\n' "${RUNNER_NAME:-unknown}"
-            printf '| Xcode | `%s` |\n' "${xcode_version:-unknown}"
-            printf '| Runs lint-macos | `%s` |\n' "$RUNS_LINT_MACOS"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  lint-build-test:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    needs:
-      - changes
-      - lint
-      - native-c-tests
-      - swift-test-macos
-    if: ${{ always() && !cancelled() }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Verify lint and macOS test jobs
-        run: |
-          test "${{ needs.native-c-tests.result }}" = "success"
-          ./Scripts/ci_verify_test_jobs.sh \
-            "${{ needs.lint.result }}" \
-            "${{ needs.changes.result }}" \
-            "${{ needs.changes.outputs.macos-tests }}" \
-            "${{ needs.swift-test-macos.result }}" \
-            "${{ needs.changes.outputs.macos-tests-deferred }}"
-
-      - name: Summarize aggregate CI gate
-        if: ${{ always() }}
-        shell: bash
-        env:
-          LINT_RESULT: ${{ needs.lint.result }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          MACOS_TESTS: ${{ needs.changes.outputs.macos-tests }}
-          MACOS_TESTS_DEFERRED: ${{ needs.changes.outputs.macos-tests-deferred }}
-          MACOS_TESTS_REASON: ${{ needs.changes.outputs.macos-tests-reason }}
-          MACOS_RESULT: ${{ needs.swift-test-macos.result }}
-          NATIVE_C_RESULT: ${{ needs.native-c-tests.result }}
-        run: |
-          set -euo pipefail
-          reason="${MACOS_TESTS_REASON:-<unset>}"
-          reason="${reason//|/\\|}"
-          {
-            printf '### Aggregate CI gate\n\n'
-            printf '| Field | Value |\n'
-            printf '| --- | --- |\n'
-            printf '| lint result | `%s` |\n' "$LINT_RESULT"
-            printf '| native C result | `%s` |\n' "$NATIVE_C_RESULT"
-            printf '| changes result | `%s` |\n' "$CHANGES_RESULT"
-            printf '| macOS Swift tests required | `%s` |\n' "${MACOS_TESTS:-<unset>}"
-            printf '| macOS Swift tests deferred | `%s` |\n' "${MACOS_TESTS_DEFERRED:-<unset>}"
-            printf '| macOS gate reason | %s |\n' "$reason"
-            printf '| swift-test-macos result | `%s` |\n' "$MACOS_RESULT"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  build-linux-cli:
+  native:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-x64
-            runs-on: ubuntu-24.04
-          - name: linux-arm64
-            runs-on: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runs-on }}
+          - name: gcc-x86_64
+            runner: ubuntu-24.04
+            cc: gcc-14
+            compiler: gcc-14
+            sanitize: none
+          - name: clang-x86_64
+            runner: ubuntu-24.04
+            cc: clang-18
+            compiler: clang-18
+            sanitize: none
+          - name: gcc-aarch64
+            runner: ubuntu-24.04-arm
+            cc: gcc-14
+            compiler: gcc-14
+            sanitize: none
+          - name: clang-aarch64
+            runner: ubuntu-24.04-arm
+            cc: clang-18
+            compiler: clang-18
+            sanitize: none
+          - name: clang-asan-ubsan
+            runner: ubuntu-24.04
+            cc: clang-18
+            compiler: clang-18
+            sanitize: address,undefined
+    env:
+      CC: ${{ matrix.cc }}
+      BUILD_DIR: .build/ci-${{ matrix.name }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
 
-      - name: Runner info
+      - name: install dependencies
+        env:
+          COMPILER: ${{ matrix.compiler }}
         run: |
-          set -euo pipefail
-          uname -a
-          uname -m
+          sudo apt-get update
+          sudo apt-get install -y "$COMPILER" ninja-build pkg-config python3-venv \
+            libglib2.0-dev libcurl4-openssl-dev libjson-c-dev libsqlite3-dev libncurses-dev
+          python3 -m venv "$RUNNER_TEMP/meson"
+          "$RUNNER_TEMP/meson/bin/pip" install --disable-pip-version-check meson==1.6.1
+          echo "$RUNNER_TEMP/meson/bin" >> "$GITHUB_PATH"
 
-      - name: Restore Swift toolchain cache
-        id: swift-toolchain-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.local/share/swiftly
-          key: swift-${{ runner.os }}-${{ runner.arch }}-${{ env.SWIFT_VERSION }}-swiftly-${{ env.SWIFTLY_VERSION }}
-
-      - name: Install Swift ${{ env.SWIFT_VERSION }} via swiftly
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          missing_packages=()
-          for package in ca-certificates gpg libcurl4-openssl-dev; do
-            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed"; then
-              missing_packages+=("$package")
-            fi
-          done
-          if [[ "${#missing_packages[@]}" -gt 0 ]]; then
-            sudo apt-get update
-            sudo apt-get install -y "${missing_packages[@]}"
-          fi
-
-          SWIFTLY_ARCH="$(uname -m)"
-          SWIFTLY_ARCHIVE="$RUNNER_TEMP/swiftly-${SWIFTLY_VERSION}-${SWIFTLY_ARCH}.tar.gz"
-          SWIFTLY_SIGNATURE="${SWIFTLY_ARCHIVE}.sig"
-          SWIFTLY_HOME_DIR="$HOME/.local/share/swiftly"
-          SWIFTLY_BIN_DIR="$HOME/.local/bin"
-          SWIFT_GNUPGHOME="$(mktemp -d)"
-          SWIFT_KEYS="$RUNNER_TEMP/swift-signing-keys.asc"
-          POST_INSTALL_SCRIPT="$(mktemp)"
-
-          mkdir -p "$SWIFTLY_BIN_DIR"
-          chmod 700 "$SWIFT_GNUPGHOME"
-          echo "Swift toolchain cache hit: ${{ steps.swift-toolchain-cache.outputs.cache-hit }}"
-          curl -fsSL "https://download.swift.org/swiftly/linux/swiftly-${SWIFTLY_VERSION}-${SWIFTLY_ARCH}.tar.gz" -o "$SWIFTLY_ARCHIVE"
-          curl -fsSL "https://download.swift.org/swiftly/linux/swiftly-${SWIFTLY_VERSION}-${SWIFTLY_ARCH}.tar.gz.sig" -o "$SWIFTLY_SIGNATURE"
-          curl -fsSL --compressed "https://www.swift.org/keys/all-keys.asc" -o "$SWIFT_KEYS"
-          GNUPGHOME="$SWIFT_GNUPGHOME" gpg --batch --import "$SWIFT_KEYS"
-          SIGNATURE_STATUS="$(GNUPGHOME="$SWIFT_GNUPGHOME" gpg --batch --status-fd=1 \
-            --verify "$SWIFTLY_SIGNATURE" "$SWIFTLY_ARCHIVE" 2>&1)"
-          printf '%s\n' "$SIGNATURE_STATUS"
-          grep -Fq "[GNUPG:] VALIDSIG ${SWIFTLY_SIGNING_FINGERPRINT} " <<< "$SIGNATURE_STATUS"
-          tar -xzf "$SWIFTLY_ARCHIVE" -C /tmp
-          /tmp/swiftly init --assume-yes --skip-install
-
-          . "$SWIFTLY_HOME_DIR/env.sh"
-          echo "$SWIFTLY_BIN_DIR" >> "$GITHUB_PATH"
-          echo "SWIFTLY_HOME_DIR=$SWIFTLY_HOME_DIR" >> "$GITHUB_ENV"
-          echo "SWIFTLY_BIN_DIR=$SWIFTLY_BIN_DIR" >> "$GITHUB_ENV"
-
-          swiftly install "$SWIFT_VERSION" --use --assume-yes --verify --post-install-file "$POST_INSTALL_SCRIPT"
-          if [[ -s "$POST_INSTALL_SCRIPT" ]]; then
-            sudo apt-get update
-            sudo bash "$POST_INSTALL_SCRIPT"
-          fi
-
-          hash -r
-          swift --version
-
-      - name: Build CodexBarCLI (release, static Swift stdlib)
-        run: swift build -c release --product CodexBarCLI --static-swift-stdlib
-
-      - name: Swift Test (Linux only)
-        run: swift test --parallel
-
-      - name: Smoke test CodexBarCLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          BIN_DIR="$(swift build -c release --product CodexBarCLI --static-swift-stdlib --show-bin-path)"
-          BIN="$BIN_DIR/CodexBarCLI"
-          "$BIN" --help >/dev/null
-          "$BIN" --version >/dev/null
-          if "$BIN" usage --provider codex --web >/dev/null 2>&1; then
-            echo "Expected --web to fail on Linux"
-            exit 1
-          fi
-          "$BIN" usage --provider codex --web 2>&1 | tee /tmp/codexbarcli-stderr.txt >/dev/null || true
-          grep -q "macOS" /tmp/codexbarcli-stderr.txt
-
-      - name: Summarize Linux CLI build
-        if: ${{ always() }}
+      - name: configure
         shell: bash
         env:
-          MATRIX_NAME: ${{ matrix.name }}
-          MATRIX_RUNS_ON: ${{ matrix.runs-on }}
-          SWIFT_CACHE_HIT: ${{ steps.swift-toolchain-cache.outputs.cache-hit }}
+          SANITIZE: ${{ matrix.sanitize }}
         run: |
-          set -euo pipefail
-          {
-            printf '### Linux CLI build\n\n'
-            printf '| Field | Value |\n'
-            printf '| --- | --- |\n'
-            printf '| Matrix | `%s` |\n' "$MATRIX_NAME"
-            printf '| Runner label | `%s` |\n' "$MATRIX_RUNS_ON"
-            printf '| Swift version | `%s` |\n' "$SWIFT_VERSION"
-            printf '| Swift toolchain cache hit | `%s` |\n' "${SWIFT_CACHE_HIT:-false}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          args=(setup "$BUILD_DIR" --buildtype=debug --wrap-mode=nodownload)
+          if [[ "$SANITIZE" != none ]]; then
+            args+=("-Db_sanitize=$SANITIZE" -Db_lundef=false)
+          fi
+          meson "${args[@]}"
+
+      - name: compile and test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          meson compile -C "$BUILD_DIR"
+          meson test -C "$BUILD_DIR" --no-rebuild --print-errorlogs
+
+      - name: verify repository and version
+        run: |
+          ./Scripts/verify-tree.sh
+          version=$(meson introspect --projectinfo "$BUILD_DIR" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
+          test "$("$BUILD_DIR/linux/codexbar-linux" --version)" = "CodexBar $version"

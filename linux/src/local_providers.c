@@ -1353,8 +1353,7 @@ static int antigravity_process_kind(const char *command) {
     char *lower = g_utf8_strdown(command, -1);
     gboolean language_server = command_segment(lower, "language_server") || command_segment(lower, "language-server") ||
                                strstr(lower, "/language_server_") || strstr(lower, "/language-server-");
-    gboolean antigravity = strstr(lower, "antigravity.app/") || strstr(lower, "antigravity ide.app/") ||
-                           strstr(lower, "/antigravity/") || strstr(lower, "--app_data_dir antigravity") ||
+    gboolean antigravity = strstr(lower, "/antigravity/") || strstr(lower, "--app_data_dir antigravity") ||
                            strstr(lower, "--app_data_dir=antigravity");
     int kind = language_server && antigravity ? 1
                : (command_segment(lower, "agy") || command_segment(lower, "antigravity-cli") ||
