@@ -29,6 +29,7 @@
 #include "simple_providers.h"
 #include "wayfinder.h"
 #include "web_providers.h"
+#include "web_providers2.h"
 #include "xai.h"
 #include "zai.h"
 #include "zoommate.h"
@@ -179,6 +180,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_CURSOR:
     case CODEXBAR_NATIVE_OPENCODE:
     case CODEXBAR_NATIVE_DEVIN:
+    case CODEXBAR_NATIVE_MANUS:
+    case CODEXBAR_NATIVE_T3CHAT:
         native_source = "web";
         break;
     case CODEXBAR_NATIVE_COPILOT:
@@ -214,6 +217,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         native_source = "api";
         break;
     case CODEXBAR_NATIVE_KILO:
+    case CODEXBAR_NATIVE_AMP:
         native_source = configured_source;
         break;
     case CODEXBAR_NATIVE_UNAVAILABLE:
@@ -349,6 +353,15 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_DEVIN:
         provider = codexbar_devin_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_MANUS:
+        provider = codexbar_manus_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_AMP:
+        provider = codexbar_amp_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_T3CHAT:
+        provider = codexbar_t3chat_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_LITELLM:
         provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);

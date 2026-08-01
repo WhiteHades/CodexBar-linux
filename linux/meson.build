@@ -61,6 +61,7 @@ core_sources = files(
   'src/tui_actions.c',
   'src/wayfinder.c',
   'src/web_providers.c',
+  'src/web_providers2.c',
   'src/xai.c',
   'src/zai.c',
   'src/zoommate.c',
@@ -273,6 +274,14 @@ web_providers_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-web-providers', web_providers_test, env: normalized_test_env)
+
+web_providers2_test = executable(
+  'codexbar-linux-web-providers2-tests',
+  files('tests/test_web_providers2.c', 'src/web_providers2.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-web-providers2', web_providers2_test, env: normalized_test_env)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',
