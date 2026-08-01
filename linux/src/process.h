@@ -7,6 +7,8 @@ typedef struct {
     const char *const *arguments;
     const char *const *environment;
     const char *working_directory;
+    const void *standard_input;
+    size_t standard_input_length;
     guint timeout_milliseconds;
     guint termination_grace_milliseconds;
     size_t maximum_output_bytes;

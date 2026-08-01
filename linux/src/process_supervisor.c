@@ -326,17 +326,13 @@ int main(int argc, char **argv) {
             }
         }
         if (working_directory && chdir(working_directory) < 0) target_setup_failed(CONFIGURATION_FD, errno);
-        int null_descriptor = open("/dev/null", O_RDONLY | O_CLOEXEC);
-        if (null_descriptor < 0 || dup2(null_descriptor, STDIN_FILENO) < 0) {
-            target_setup_failed(CONFIGURATION_FD, errno);
-        }
-        if (null_descriptor > STDERR_FILENO) close(null_descriptor);
         close_target_descriptors();
         raise(SIGSTOP);
         char **target_environment = inherit_environment ? environ : configured_environment;
         execvpe(argv[5], argv + 5, target_environment);
         target_setup_failed(CONFIGURATION_FD, errno);
     }
+    close(STDIN_FILENO);
     close(execution_pipe[1]);
     free(working_directory);
     free_environment(configured_environment);

@@ -22,6 +22,7 @@ core_sources = files(
   'src/cli_cost.c',
   'src/cli_diagnose.c',
   'src/cli_guard.c',
+  'src/cli_hooks.c',
   'src/cli_sessions.c',
   'src/cli_serve.c',
   'src/cli_usage.c',
@@ -328,6 +329,14 @@ test(
   'codexbar-linux-guard-cli',
   guard_cli_test,
   args: [codexbar_linux, find_program('tests/fake_backend.sh')],
+  depends: process_supervisor,
+)
+
+hooks_cli_test = find_program('tests/test_hooks_cli.sh')
+test(
+  'codexbar-linux-hooks-cli',
+  hooks_cli_test,
+  args: [codexbar_linux],
   depends: process_supervisor,
 )
 

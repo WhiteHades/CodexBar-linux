@@ -126,3 +126,16 @@ case "$output" in
     exit 1
     ;;
 esac
+
+cat >"$config" <<'EOF'
+{"version":1,"providers":[],"hooks":{"enabled":true,"events":[{"id":"duplicate","event":"quota_low","provider":"or","threshold":0,"executable":"relative","timeoutSeconds":301},{"id":"duplicate","event":"refresh_failed","executable":"/bin/true"}]}}
+EOF
+if CODEXBAR_CONFIG="$config" "$binary" config validate --json >"$work/hooks-validate.out"; then
+    printf 'invalid hooks unexpectedly passed validation\n' >&2
+    exit 1
+fi
+output=$(sed -n '1p' "$work/hooks-validate.out")
+case "$output" in
+  *'"code":"invalid_hook_executable"'*'"code":"invalid_hook_provider"'*'"code":"invalid_hook_threshold"'*'"code":"invalid_hook_timeout"'*'"code":"duplicate_hook_id"'*) ;;
+  *) printf 'unexpected hook validation output: %s\n' "$output" >&2; exit 1 ;;
+esac

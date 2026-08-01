@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <glib/gstdio.h>
 #include <json-c/json.h>
+#include <math.h>
 #include <stdarg.h>
 #include <string.h>
 #include <sys/file.h>
@@ -443,6 +444,178 @@ static gboolean value_in_csv(const char *values, const char *value) {
     return found;
 }
 
+static gboolean hook_string(json_object *object, const char *key, const char **value, size_t *length) {
+    json_object *entry = NULL;
+    if (!json_object_object_get_ex(object, key, &entry) || !json_object_is_type(entry, json_type_string)) return FALSE;
+    *value = json_object_get_string(entry);
+    *length = (size_t)json_object_get_string_len(entry);
+    return strlen(*value) == *length;
+}
+
+static void validate_hooks(const CodexBarConfig *config, GPtrArray *issues) {
+    enum {
+        MAX_RULES = 32,
+        MAX_ID_BYTES = 128,
+        MAX_ARGUMENTS = 32,
+        MAX_STRING_BYTES = 4096,
+        MAX_COMMAND_BYTES = 32 * 1024,
+    };
+    json_object *hooks = NULL;
+    if (!config->raw || !json_object_object_get_ex(config->raw, "hooks", &hooks)) return;
+    if (!json_object_is_type(hooks, json_type_object)) {
+        add_issue(issues, TRUE, NULL, "hooks", "invalid_hooks", "Hooks must be an object.");
+        return;
+    }
+    json_object *events = NULL;
+    if (!json_object_object_get_ex(hooks, "events", &events)) return;
+    if (!json_object_is_type(events, json_type_array)) {
+        add_issue(issues, TRUE, NULL, "hooks.events", "invalid_hook_rules", "Hook events must be an array.");
+        return;
+    }
+    size_t count = json_object_array_length(events);
+    if (count > MAX_RULES) {
+        add_issue(issues,
+                  TRUE,
+                  NULL,
+                  "hooks.events",
+                  "too_many_hook_rules",
+                  "Hooks support at most %d rules.",
+                  MAX_RULES);
+    }
+    GHashTable *ids = g_hash_table_new(g_str_hash, g_str_equal);
+    const char *valid_events =
+        "quota_low,quota_reached,quota_reset,provider_unavailable,provider_recovered,refresh_failed";
+    for (size_t index = 0; index < count; index++) {
+        json_object *rule = json_object_array_get_idx(events, index);
+        char *field = g_strdup_printf("hooks.events[%zu]", index);
+        if (!json_object_is_type(rule, json_type_object)) {
+            add_issue(issues, TRUE, NULL, field, "invalid_hook_rule", "Hook rules must be objects.");
+            g_free(field);
+            continue;
+        }
+        const char *id = NULL;
+        size_t id_length = 0;
+        json_object *id_value = NULL;
+        if (json_object_object_get_ex(rule, "id", &id_value)) {
+            if (!hook_string(rule, "id", &id, &id_length) || id_length == 0 || id_length > MAX_ID_BYTES) {
+                add_issue(issues,
+                          TRUE,
+                          NULL,
+                          field,
+                          "invalid_hook_command_size",
+                          "Hook IDs, arguments, or aggregate command size exceed supported limits.");
+            } else if (g_hash_table_contains(ids, id)) {
+                add_issue(issues, TRUE, NULL, field, "duplicate_hook_id", "Hook rule IDs must be unique.");
+            } else {
+                g_hash_table_add(ids, (gpointer)id);
+            }
+        }
+        const char *event = NULL;
+        size_t unused = 0;
+        char *event_field = g_strdup_printf("%s.event", field);
+        if (!hook_string(rule, "event", &event, &unused) || !value_in_csv(valid_events, event)) {
+            add_issue(issues, TRUE, NULL, event_field, "invalid_hook_event", "Hook event is not recognized.");
+        }
+        g_free(event_field);
+        const char *executable = NULL;
+        size_t executable_length = 0;
+        char *executable_field = g_strdup_printf("%s.executable", field);
+        if (!hook_string(rule, "executable", &executable, &executable_length) || executable_length == 0 ||
+            executable_length > MAX_STRING_BYTES || !g_path_is_absolute(executable)) {
+            add_issue(issues,
+                      TRUE,
+                      NULL,
+                      executable_field,
+                      "invalid_hook_executable",
+                      "Hook executables must use a non-empty absolute path.");
+        }
+        g_free(executable_field);
+        json_object *provider = NULL;
+        if (json_object_object_get_ex(rule, "provider", &provider) && !json_object_is_type(provider, json_type_null)) {
+            const char *provider_name = json_object_is_type(provider, json_type_string)
+                                            ? json_object_get_string(provider)
+                                            : NULL;
+            const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(provider_name);
+            if (!descriptor || !g_str_equal(descriptor->id, provider_name)) {
+                char *provider_field = g_strdup_printf("%s.provider", field);
+                add_issue(issues,
+                          TRUE,
+                          NULL,
+                          provider_field,
+                          "invalid_hook_provider",
+                          "Hook provider '%s' is not recognized.",
+                          provider_name ? provider_name : "");
+                g_free(provider_field);
+            }
+        }
+        json_object *threshold = NULL;
+        if (json_object_object_get_ex(rule, "threshold", &threshold) &&
+            !json_object_is_type(threshold, json_type_null)) {
+            double value = (json_object_is_type(threshold, json_type_double) ||
+                            json_object_is_type(threshold, json_type_int))
+                               ? json_object_get_double(threshold)
+                               : NAN;
+            if (!isfinite(value) || value <= 0 || value > 1) {
+                char *threshold_field = g_strdup_printf("%s.threshold", field);
+                add_issue(issues,
+                          TRUE,
+                          NULL,
+                          threshold_field,
+                          "invalid_hook_threshold",
+                          "Hook thresholds must be greater than 0 and at most 1.");
+                g_free(threshold_field);
+            }
+        }
+        json_object *timeout = NULL;
+        if (json_object_object_get_ex(rule, "timeoutSeconds", &timeout)) {
+            double value = (json_object_is_type(timeout, json_type_double) ||
+                            json_object_is_type(timeout, json_type_int))
+                               ? json_object_get_double(timeout)
+                               : NAN;
+            if (!isfinite(value) || value < 0.1 || value > 300) {
+                char *timeout_field = g_strdup_printf("%s.timeoutSeconds", field);
+                add_issue(issues,
+                          TRUE,
+                          NULL,
+                          timeout_field,
+                          "invalid_hook_timeout",
+                          "Hook timeouts must be between 0.1 and 300 seconds.");
+                g_free(timeout_field);
+            }
+        }
+        json_object *arguments = NULL;
+        size_t command_bytes = executable_length;
+        gboolean invalid_shape = FALSE;
+        if (json_object_object_get_ex(rule, "arguments", &arguments)) {
+            invalid_shape = !json_object_is_type(arguments, json_type_array) ||
+                            json_object_array_length(arguments) > MAX_ARGUMENTS;
+            for (size_t argument_index = 0;
+                 !invalid_shape && argument_index < json_object_array_length(arguments);
+                 argument_index++) {
+                json_object *argument = json_object_array_get_idx(arguments, argument_index);
+                size_t length = json_object_is_type(argument, json_type_string)
+                                    ? (size_t)json_object_get_string_len(argument)
+                                    : MAX_STRING_BYTES + 1;
+                invalid_shape = length > MAX_STRING_BYTES ||
+                                (json_object_is_type(argument, json_type_string) &&
+                                 strlen(json_object_get_string(argument)) != length) ||
+                                length > MAX_COMMAND_BYTES - MIN((size_t)MAX_COMMAND_BYTES, command_bytes);
+                command_bytes += MIN(length, (size_t)MAX_COMMAND_BYTES);
+            }
+        }
+        if (invalid_shape || command_bytes > MAX_COMMAND_BYTES) {
+            add_issue(issues,
+                      TRUE,
+                      NULL,
+                      field,
+                      "invalid_hook_command_size",
+                      "Hook IDs, arguments, or aggregate command size exceed supported limits.");
+        }
+        g_free(field);
+    }
+    g_hash_table_unref(ids);
+}
+
 GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
     g_return_val_if_fail(config != NULL, NULL);
     GPtrArray *issues = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_config_issue_free);
@@ -459,6 +632,7 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
                   "Unsupported config version %d.",
                   config->version);
     }
+    validate_hooks(config, issues);
     for (guint index = 0; index < config->providers->len; index++) {
         const CodexBarProviderConfig *provider = g_ptr_array_index(config->providers, index);
         const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(provider->id);

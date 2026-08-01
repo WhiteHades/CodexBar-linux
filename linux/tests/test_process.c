@@ -46,6 +46,14 @@ static int helper_capture(void) {
     return 7;
 }
 
+static int helper_stdin(void) {
+    char input[64];
+    ssize_t count = read(STDIN_FILENO, input, sizeof(input));
+    if (count < 0) return 1;
+    if (write(STDOUT_FILENO, input, (size_t)count) != count) return 2;
+    return read(STDIN_FILENO, input, sizeof(input)) == 0 ? 0 : 3;
+}
+
 static int helper_inspect(const char *expected_directory, const char *descriptor_text) {
     char directory[PATH_MAX];
     int descriptor = atoi(descriptor_text);
@@ -263,6 +271,27 @@ static void test_captures_output_and_nonzero_status(void) {
     g_assert_cmpint(result->exit_status, ==, 7);
     g_assert_cmpint(result->termination_signal, ==, 0);
     g_assert_false(codexbar_process_result_succeeded(result));
+    codexbar_process_result_free(result);
+}
+
+static void test_forwards_bounded_standard_input(void) {
+    const char payload[] = "hook payload";
+    const char *arguments[] = {test_program, "--helper-stdin", NULL};
+    CodexBarProcessRequest request = {
+        .arguments = arguments,
+        .standard_input = payload,
+        .standard_input_length = sizeof(payload) - 1,
+        .timeout_milliseconds = 2000,
+        .termination_grace_milliseconds = 100,
+        .maximum_output_bytes = 1024,
+        .new_session = TRUE,
+    };
+    GError *error = NULL;
+    CodexBarProcessResult *result = codexbar_process_run(&request, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(result);
+    g_assert_true(codexbar_process_result_succeeded(result));
+    g_assert_cmpstr(result->standard_output, ==, payload);
     codexbar_process_result_free(result);
 }
 
@@ -780,6 +809,7 @@ static void test_supervisor_death_cleans_process_group(void) {
 
 int main(int argc, char **argv) {
     if (argc == 2 && g_str_equal(argv[1], "--helper-capture")) return helper_capture();
+    if (argc == 2 && g_str_equal(argv[1], "--helper-stdin")) return helper_stdin();
     if (argc == 4 && g_str_equal(argv[1], "--helper-inspect")) return helper_inspect(argv[2], argv[3]);
     if (argc == 3 && g_str_equal(argv[1], "--helper-touch")) return helper_touch(argv[2]);
     if (argc == 3 && g_str_equal(argv[1], "--helper-environment")) return helper_environment(argv[2]);
@@ -791,6 +821,7 @@ int main(int argc, char **argv) {
     g_assert_nonnull(test_program);
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/process/captures-output-and-nonzero-status", test_captures_output_and_nonzero_status);
+    g_test_add_func("/process/forwards-bounded-standard-input", test_forwards_bounded_standard_input);
     g_test_add_func("/process/distinguishes-spawn-failure-from-exit-127", test_reports_spawn_failure_separately_from_exit_127);
     g_test_add_func(
         "/process/applies-environment-and-directory-only-to-target",

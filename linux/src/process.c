@@ -35,6 +35,7 @@ typedef struct {
 
 enum {
     MAX_CONFIGURATION_BYTES = 16 * 1024 * 1024,
+    MAX_STANDARD_INPUT_BYTES = 4096,
 };
 
 static void close_descriptor(int *descriptor) {
@@ -470,6 +471,8 @@ CodexBarProcessResult *codexbar_process_run(
     if (!request || !request->arguments || !request->arguments[0] || request->arguments[0][0] == '\0' ||
         request->maximum_output_bytes == 0 || request->maximum_output_bytes >= G_MAXUINT ||
         request->termination_grace_milliseconds > 60000 ||
+        request->standard_input_length > MAX_STANDARD_INPUT_BYTES ||
+        (request->standard_input_length > 0 && !request->standard_input) ||
         (request->working_directory && strlen(request->working_directory) > UINT32_MAX)) {
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Process request is invalid");
         return NULL;
@@ -518,15 +521,19 @@ CodexBarProcessResult *codexbar_process_run(
 
     int stdout_pipe[2] = {-1, -1};
     int stderr_pipe[2] = {-1, -1};
+    int stdin_pipe[2] = {-1, -1};
     int configuration_pipe[2] = {-1, -1};
     int startup_pipe[2] = {-1, -1};
     int acknowledgement_pipe[2] = {-1, -1};
     int child_stdout = -1;
     int child_stderr = -1;
+    int child_stdin = -1;
     int child_configuration = -1;
     int child_startup = -1;
     int child_acknowledgement = -1;
+    gboolean has_standard_input = request->standard_input != NULL;
     if (pipe2(stdout_pipe, O_CLOEXEC) < 0 || pipe2(stderr_pipe, O_CLOEXEC) < 0 ||
+        (has_standard_input && pipe2(stdin_pipe, O_CLOEXEC) < 0) ||
         pipe2(configuration_pipe, O_CLOEXEC) < 0 || pipe2(startup_pipe, O_CLOEXEC) < 0 ||
         pipe2(acknowledgement_pipe, O_CLOEXEC) < 0) {
         int code = errno;
@@ -534,6 +541,8 @@ CodexBarProcessResult *codexbar_process_run(
         close_descriptor(&stdout_pipe[1]);
         close_descriptor(&stderr_pipe[0]);
         close_descriptor(&stderr_pipe[1]);
+        close_descriptor(&stdin_pipe[0]);
+        close_descriptor(&stdin_pipe[1]);
         close_descriptor(&configuration_pipe[0]);
         close_descriptor(&configuration_pipe[1]);
         close_descriptor(&startup_pipe[0]);
@@ -544,11 +553,13 @@ CodexBarProcessResult *codexbar_process_run(
         goto arguments_failed;
     }
     if (!set_nonblocking(stdout_pipe[0], error) || !set_nonblocking(stderr_pipe[0], error) ||
+        (has_standard_input && !set_nonblocking(stdin_pipe[1], error)) ||
         !set_nonblocking(configuration_pipe[1], error) || !set_nonblocking(startup_pipe[0], error) ||
         !set_nonblocking(acknowledgement_pipe[1], error)) {
         goto setup_failed;
     }
-    child_stdout = duplicate_child_descriptor(stdout_pipe[1], error);
+    if (has_standard_input) child_stdin = duplicate_child_descriptor(stdin_pipe[0], error);
+    child_stdout = has_standard_input && child_stdin < 0 ? -1 : duplicate_child_descriptor(stdout_pipe[1], error);
     if (child_stdout >= 0) child_stderr = duplicate_child_descriptor(stderr_pipe[1], error);
     if (child_stderr >= 0) child_configuration = duplicate_child_descriptor(configuration_pipe[0], error);
     if (child_configuration >= 0) child_startup = duplicate_child_descriptor(startup_pipe[1], error);
@@ -572,7 +583,8 @@ CodexBarProcessResult *codexbar_process_run(
     }
     attributes_initialized = TRUE;
 
-    code = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    code = has_standard_input ? posix_spawn_file_actions_adddup2(&actions, child_stdin, STDIN_FILENO)
+                              : posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     if (code == 0) code = posix_spawn_file_actions_adddup2(&actions, child_stdout, STDOUT_FILENO);
     if (code == 0) code = posix_spawn_file_actions_adddup2(&actions, child_stderr, STDERR_FILENO);
     if (code == 0) code = posix_spawn_file_actions_adddup2(&actions, child_configuration, 3);
@@ -616,11 +628,13 @@ CodexBarProcessResult *codexbar_process_run(
     posix_spawn_file_actions_destroy(&actions);
     close_descriptor(&stdout_pipe[1]);
     close_descriptor(&stderr_pipe[1]);
+    close_descriptor(&stdin_pipe[0]);
     close_descriptor(&configuration_pipe[0]);
     close_descriptor(&startup_pipe[1]);
     close_descriptor(&acknowledgement_pipe[0]);
     close_descriptor(&child_stdout);
     close_descriptor(&child_stderr);
+    close_descriptor(&child_stdin);
     close_descriptor(&child_configuration);
     close_descriptor(&child_startup);
     close_descriptor(&child_acknowledgement);
@@ -632,13 +646,22 @@ CodexBarProcessResult *codexbar_process_run(
         set_spawn_error(error, "codexbar-process-supervisor", code);
         close_descriptor(&stdout_pipe[0]);
         close_descriptor(&stderr_pipe[0]);
+        close_descriptor(&stdin_pipe[1]);
         close_descriptor(&configuration_pipe[1]);
         close_descriptor(&startup_pipe[0]);
         close_descriptor(&acknowledgement_pipe[1]);
         return NULL;
     }
 
-    gboolean configured = send_configuration(
+    gboolean input_sent = !has_standard_input ||
+                          write_all(stdin_pipe[1],
+                                    request->standard_input,
+                                    request->standard_input_length,
+                                    cancellable,
+                                    timeout_at,
+                                    error);
+    close_descriptor(&stdin_pipe[1]);
+    gboolean configured = input_sent && send_configuration(
         configuration_pipe[1], request, environment_count, cancellable, timeout_at, error);
     close_descriptor(&configuration_pipe[1]);
     ProcessStartup startup = {0};
@@ -875,6 +898,8 @@ setup_failed:
     close_descriptor(&stdout_pipe[1]);
     close_descriptor(&stderr_pipe[0]);
     close_descriptor(&stderr_pipe[1]);
+    close_descriptor(&stdin_pipe[0]);
+    close_descriptor(&stdin_pipe[1]);
     close_descriptor(&configuration_pipe[0]);
     close_descriptor(&configuration_pipe[1]);
     close_descriptor(&startup_pipe[0]);
@@ -883,6 +908,7 @@ setup_failed:
     close_descriptor(&acknowledgement_pipe[1]);
     close_descriptor(&child_stdout);
     close_descriptor(&child_stderr);
+    close_descriptor(&child_stdin);
     close_descriptor(&child_configuration);
     close_descriptor(&child_startup);
     close_descriptor(&child_acknowledgement);

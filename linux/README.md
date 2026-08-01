@@ -21,6 +21,7 @@ codexbar-linux tui
 codexbar-linux status-item
 codexbar-linux usage --provider openrouter --format json --pretty
 codexbar-linux guard --provider codex --min-remaining 20
+codexbar-linux hooks list
 codexbar-linux config validate
 codexbar-linux config providers
 codexbar-linux --version
