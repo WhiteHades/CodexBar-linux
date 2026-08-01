@@ -16,13 +16,13 @@ static const CodexBarProviderDescriptor providers[] = {
     {"clinepass", "ClinePass", "clinepass", NULL, A | P, FALSE, "https://app.cline.bot/dashboard/subscription?personal=true", NULL, CODEXBAR_NATIVE_CLINEPASS},
     {"cursor", "Cursor", "cursor", NULL, A | W | C, FALSE, "https://cursor.com/dashboard?tab=usage", "https://status.cursor.com", CODEXBAR_NATIVE_CURSOR},
     {"opencode", "OpenCode", "opencode", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_OPENCODE},
-    {"opencodego", "OpenCode Go", "opencodego", NULL, A, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_OPENCODE_GO},
-    {"alibaba", "Alibaba", "alibaba-coding-plan", "alibaba,bailian", A | P, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan#/efm/coding_plan", "https://status.aliyun.com", CODEXBAR_NATIVE_ALIBABA},
+    {"opencodego", "OpenCode Go", "opencodego", NULL, A | W, FALSE, "https://opencode.ai", NULL, CODEXBAR_NATIVE_OPENCODE_GO},
+    {"alibaba", "Alibaba", "alibaba-coding-plan", "alibaba,bailian", A | W | P, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan#/efm/coding_plan", "https://status.aliyun.com", CODEXBAR_NATIVE_ALIBABA},
     {"alibabatokenplan", "Alibaba Token Plan", "alibaba-token-plan", "alibaba-token,bailian-token-plan", A | W, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=plan#/efm/subscription/token-plan", "https://status.aliyun.com", CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN},
     {"qwencloud", "Qwen Cloud", "qwen-cloud", "qwencloud,qwen,qwen-token-plan", A | W, FALSE, "https://home.qwencloud.com/billing/subscription/token-plan-individual", "https://status.alibabacloud.com", CODEXBAR_NATIVE_QWEN_CLOUD},
-    {"factory", "Droid", "factory", NULL, A | P | C, FALSE, "https://app.factory.ai/settings/billing", "https://status.factory.ai", CODEXBAR_NATIVE_FACTORY},
+    {"factory", "Droid", "factory", NULL, A | P | W | C, FALSE, "https://app.factory.ai/settings/billing", "https://status.factory.ai", CODEXBAR_NATIVE_FACTORY},
     {"gemini", "Gemini", "gemini", NULL, A | P, FALSE, "https://gemini.google.com", "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_GEMINI},
-    {"antigravity", "Antigravity", "antigravity", NULL, A | C, FALSE, NULL, "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_ANTIGRAVITY},
+    {"antigravity", "Antigravity", "antigravity", NULL, A | C | O, FALSE, NULL, "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_ANTIGRAVITY},
     {"copilot", "Copilot", "copilot", NULL, A | P, FALSE, "https://github.com/settings/copilot", "https://www.githubstatus.com/", CODEXBAR_NATIVE_COPILOT},
     {"devin", "Devin", "devin", NULL, A | W, FALSE, "https://app.devin.ai", NULL, CODEXBAR_NATIVE_DEVIN},
     {"zai", "z.ai", "zai", "z.ai", A | P, FALSE, "https://z.ai/manage-apikey/coding-plan/personal/my-plan", NULL, CODEXBAR_NATIVE_ZAI},
@@ -50,7 +50,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"sakana", "Sakana AI", "sakana", "sakana-ai", A | W, FALSE, "https://console.sakana.ai/billing", NULL, CODEXBAR_NATIVE_SAKANA},
     {"abacus", "Abacus AI", "abacusai", "abacus-ai", A | W, FALSE, "https://apps.abacus.ai/chatllm/admin/compute-points-usage", NULL, CODEXBAR_NATIVE_ABACUS},
     {"mistral", "Mistral", "mistral", "mistral-ai", A | W, FALSE, "https://admin.mistral.ai/organization/usage", "https://status.mistral.ai", CODEXBAR_NATIVE_MISTRAL},
-    {"deepseek", "DeepSeek", "deepseek", "deep-seek,ds", A | P, FALSE, "https://platform.deepseek.com/usage", "https://status.deepseek.com", CODEXBAR_NATIVE_SIMPLE},
+    {"deepseek", "DeepSeek", "deepseek", "deep-seek,ds", A | W | P, FALSE, "https://platform.deepseek.com/usage", "https://status.deepseek.com", CODEXBAR_NATIVE_SIMPLE},
     {"deepinfra", "DeepInfra", "deepinfra", "deep-infra,di", A | P, FALSE, "https://deepinfra.com/dash", "https://status.deepinfra.com", CODEXBAR_NATIVE_DEEPINFRA},
     {"codebuff", "Codebuff", "codebuff", "manicode", A | P, FALSE, "https://www.codebuff.com/usage", NULL, CODEXBAR_NATIVE_CODEBUFF},
     {"crof", "Crof", "crof", "crofai", A | P, FALSE, "https://crof.ai/dashboard", NULL, CODEXBAR_NATIVE_SIMPLE},
@@ -154,6 +154,12 @@ guint codexbar_provider_auto_source_plan(const CodexBarProviderDescriptor *provi
     }
     if (g_str_equal(provider->id, "factory")) {
         append_source("api", sources, capacity, &count);
+        append_source("web", sources, capacity, &count);
+        return count;
+    }
+    if (g_str_equal(provider->id, "antigravity")) {
+        append_source("cli", sources, capacity, &count);
+        append_source("oauth", sources, capacity, &count);
         return count;
     }
     if (g_str_equal(provider->id, "amp")) {
@@ -178,6 +184,11 @@ guint codexbar_provider_auto_source_plan(const CodexBarProviderDescriptor *provi
         return count;
     }
     if (g_str_equal(provider->id, "groq")) {
+        append_source("web", sources, capacity, &count);
+        append_source("api", sources, capacity, &count);
+        return count;
+    }
+    if (g_str_equal(provider->id, "alibaba")) {
         append_source("web", sources, capacity, &count);
         append_source("api", sources, capacity, &count);
         return count;

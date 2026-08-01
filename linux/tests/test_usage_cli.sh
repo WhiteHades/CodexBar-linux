@@ -133,11 +133,11 @@ case "$output" in
 esac
 
 set +e
-output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider deepseek --source web --json 2>/dev/null)
+output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider openai --source web --json 2>/dev/null)
 status=$?
 set -e
 [ "$status" -eq 1 ]
-[ "$output" = '[{"provider":"deepseek","source":"web","error":{"message":"Source '\''web'\'' is unavailable for deepseek on Linux. Supported sources: auto, api.","code":1,"kind":"provider"}}]' ]
+[ "$output" = '[{"provider":"openai","source":"web","error":{"message":"Source '\''web'\'' is unavailable for openai on Linux. Supported sources: auto, api.","code":1,"kind":"provider"}}]' ]
 
 if CODEXBAR_BACKEND="$backend" "$binary" usage --provider unknown >/dev/null 2>&1; then
     printf 'unknown provider unexpectedly succeeded\n' >&2
@@ -301,10 +301,11 @@ case "$output" in
     ;;
 esac
 
-output=$(env -u CODEXBAR_BACKEND HOME="$work/empty-opencode-go-home" CODEXBAR_CONFIG="$config" \
+output=$(env -u CODEXBAR_BACKEND -u OPENCODE_GO_COOKIE -u OPENCODEGO_COOKIE \
+  HOME="$work/empty-opencode-go-home" CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider opencodego --source web --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"opencodego","source":"web","error":{"message":"Source '\''web'\'' is unavailable for opencodego on Linux. Supported sources: auto.","code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"opencodego","source":"web","error":{"message":"OpenCode Go web session is missing;'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native OpenCode Go web-source output: %s\n' "$output" >&2
     exit 1

@@ -120,6 +120,30 @@ static CodexBarHttpResponse *unexpected_transport(const CodexBarHttpRequest *req
     g_assert_not_reached();
 }
 
+static guint alibaba_web_count;
+
+static CodexBarHttpResponse *alibaba_web_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)error;
+    guint index = alibaba_web_count++;
+    g_assert_cmpstr(request_header(request, "Cookie"), ==, "sec_token=cookie-token; cna=anon; csrf=csrf-token");
+    g_assert_null(request_header(request, "Authorization"));
+    if (index == 0) {
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_cmpstr(
+            request->url,
+            ==,
+            "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan#/efm/coding_plan");
+        return make_response(0);
+    }
+    g_assert_cmpuint(index, ==, 1);
+    g_assert_cmpstr(request->method, ==, "POST");
+    g_assert_true(g_str_has_prefix(
+        request->url, "https://bailian-singapore-cs.alibabacloud.com/data/api.json?"));
+    g_assert_cmpstr(request_header(request, "x-xsrf-token"), ==, "csrf-token");
+    g_assert_nonnull(strstr(request->body, "sec_token=fresh-token"));
+    return make_response(1);
+}
+
 static CodexBarHttpResponse *minimax_web_transport(const CodexBarHttpRequest *request, GError **error) {
     (void)error;
     g_assert_cmpstr(request->url,
@@ -355,6 +379,29 @@ static void test_alibaba_fetch(void) {
     g_assert_null(provider);
     g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
     g_clear_error(&error);
+
+    json_object *raw = json_object_new_object();
+    json_object_object_add(
+        raw,
+        "cookieHeader",
+        json_object_new_string("sec_token=cookie-token; cna=anon; csrf=csrf-token"));
+    config = (CodexBarProviderConfig){.raw = raw};
+    alibaba_web_count = 0;
+    fixture.statuses[0] = 200;
+    fixture.bodies[0] = "<script>window.config={SEC_TOKEN: \"fresh-token\"}</script>";
+    fixture.statuses[1] = 200;
+    fixture.bodies[1] =
+        "{\"data\":{\"codingPlanInstanceInfos\":[{\"planName\":\"Web\",\"status\":\"VALID\","
+        "\"codingPlanQuotaInfo\":{\"per5HourUsedQuota\":2,\"per5HourTotalQuota\":10}}]},"
+        "\"status_code\":0}";
+    provider = codexbar_alibaba_fetch_for_source_with_transport_and_cancellable(
+        &config, "web", alibaba_web_transport, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(alibaba_web_count, ==, 2);
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpstr(provider->plan, ==, "Web");
+    codexbar_provider_free(provider);
+    json_object_put(raw);
 }
 
 static void test_doubao_parse(void) {

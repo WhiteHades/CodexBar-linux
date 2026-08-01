@@ -1407,6 +1407,18 @@ static void test_simple_provider_parsers(void) {
     g_assert_cmpfloat_with_epsilon(balance_at(deepseek, 0)->remaining, 8.25, 0.0001);
     codexbar_provider_free(deepseek);
 
+    const char *platform_balance =
+        "{\"code\":0,\"data\":{\"biz_code\":0,\"biz_data\":{"
+        "\"normal_wallets\":[{\"currency\":\"USD\",\"balance\":\"6.5\"}],"
+        "\"bonus_wallets\":[{\"currency\":\"USD\",\"balance\":2.25}]}}}";
+    deepseek = codexbar_deepseek_parse_platform_balance(
+        platform_balance, strlen(platform_balance), &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(deepseek->source, ==, "web");
+    g_assert_cmpfloat_with_epsilon(balance_at(deepseek, 0)->remaining, 8.75, 0.0001);
+    g_assert_nonnull(strstr(codexbar_provider_quota_window(deepseek, 0)->detail, "Paid: $6.50"));
+    codexbar_provider_free(deepseek);
+
     CodexBarProvider *moonshot = codexbar_moonshot_parse(
         "{\"code\":0,\"status\":true,\"data\":{\"available_balance\":12.5}}", &error);
     g_assert_no_error(error);
@@ -1700,8 +1712,10 @@ static void test_provider_registry(void) {
     g_assert_cmpstr(plan[0], ==, "web");
     const CodexBarProviderDescriptor *factory = codexbar_provider_registry_find("factory");
     g_assert_true(codexbar_provider_supports_source(factory, "cli"));
-    g_assert_cmpuint(codexbar_provider_auto_source_plan(factory, plan, G_N_ELEMENTS(plan)), ==, 1);
+    g_assert_true(codexbar_provider_supports_source(factory, "web"));
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(factory, plan, G_N_ELEMENTS(plan)), ==, 2);
     g_assert_cmpstr(plan[0], ==, "api");
+    g_assert_cmpstr(plan[1], ==, "web");
     const CodexBarProviderDescriptor *amp = codexbar_provider_registry_find("amp");
     g_assert_cmpuint(codexbar_provider_auto_source_plan(amp, plan, G_N_ELEMENTS(plan)), ==, 3);
     g_assert_cmpstr(plan[0], ==, "cli");
@@ -1715,15 +1729,15 @@ static void test_provider_registry(void) {
     g_assert_cmpuint(codexbar_provider_auto_source_plan(grok, plan, G_N_ELEMENTS(plan)), ==, 2);
     g_assert_cmpstr(plan[0], ==, "cli");
     g_assert_cmpstr(plan[1], ==, "web");
-    const char *single_source_providers[][2] = {
-        {"alibaba", "api"},
-        {"antigravity", "cli"},
-    };
-    for (guint index = 0; index < G_N_ELEMENTS(single_source_providers); index++) {
-        const CodexBarProviderDescriptor *single = codexbar_provider_registry_find(single_source_providers[index][0]);
-        g_assert_cmpuint(codexbar_provider_auto_source_plan(single, plan, G_N_ELEMENTS(plan)), ==, 1);
-        g_assert_cmpstr(plan[0], ==, single_source_providers[index][1]);
-    }
+    const CodexBarProviderDescriptor *antigravity = codexbar_provider_registry_find("antigravity");
+    g_assert_true(codexbar_provider_supports_source(antigravity, "oauth"));
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(antigravity, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "cli");
+    g_assert_cmpstr(plan[1], ==, "oauth");
+    const CodexBarProviderDescriptor *alibaba = codexbar_provider_registry_find("alibaba");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(alibaba, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "web");
+    g_assert_cmpstr(plan[1], ==, "api");
     const CodexBarProviderDescriptor *ollama = codexbar_provider_registry_find("ollama");
     g_assert_cmpuint(codexbar_provider_auto_source_plan(ollama, plan, G_N_ELEMENTS(plan)), ==, 2);
     g_assert_cmpstr(plan[0], ==, "web");
@@ -1749,7 +1763,7 @@ static void test_provider_registry(void) {
     g_assert_cmpstr(plan[0], ==, "api");
     g_assert_cmpstr(plan[1], ==, "cli");
     g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "api"));
-    g_assert_false(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "web"));
+    g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "web"));
     const CodexBarProviderDescriptor *clinepass = codexbar_provider_registry_find("clinepass");
     g_assert_cmpstr(clinepass->dashboard_url, ==, "https://app.cline.bot/dashboard/subscription?personal=true");
     g_assert_cmpint(clinepass->native_provider, ==, CODEXBAR_NATIVE_CLINEPASS);

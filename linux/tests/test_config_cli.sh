@@ -199,7 +199,7 @@ if CODEXBAR_CONFIG="$config" "$binary" config validate >/dev/null 2>&1; then
 fi
 
 cat >"$config" <<'EOF'
-{"version":1,"providers":[{"id":"deepseek","enabled":true,"source":"web"}]}
+{"version":1,"providers":[{"id":"openai","enabled":true,"source":"web"}]}
 EOF
 if CODEXBAR_CONFIG="$config" "$binary" config validate >"$work/validate.out"; then
     printf 'invalid source unexpectedly passed validation\n' >&2
@@ -207,7 +207,7 @@ if CODEXBAR_CONFIG="$config" "$binary" config validate >"$work/validate.out"; th
 fi
 output=$(cat "$work/validate.out")
 case "$output" in
-  '[ERROR] deepseek (source): Source web is unavailable for deepseek on Linux. Supported sources: auto, api.'*) ;;
+  '[ERROR] openai (source): Source web is unavailable for openai on Linux. Supported sources: auto, api.'*) ;;
   *)
     printf 'unexpected validation output: %s\n' "$output" >&2
     exit 1

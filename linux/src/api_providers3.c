@@ -1244,6 +1244,305 @@ CodexBarProvider *codexbar_alibaba_fetch_with_transport_and_cancellable(
     return NULL;
 }
 
+static char *alibaba_cookie_value(const char *header, const char *name) {
+    if (!header || !name) return NULL;
+    char **parts = g_strsplit(header, ";", -1);
+    char *result = NULL;
+    for (size_t index = 0; parts[index] && !result; index++) {
+        char *part = g_strstrip(parts[index]);
+        char *separator = strchr(part, '=');
+        if (!separator) continue;
+        *separator = '\0';
+        if (g_str_equal(g_strstrip(part), name)) result = clean_header_value(g_strstrip(separator + 1));
+    }
+    g_strfreev(parts);
+    return result;
+}
+
+static char *alibaba_html_sec_token(const char *html, size_t length) {
+    if (!html || length == 0 || length > PROVIDER_MAXIMUM_RESPONSE_BYTES || memchr(html, '\0', length) ||
+        !g_utf8_validate(html, (gssize)length, NULL)) {
+        return NULL;
+    }
+    char *document = g_strndup(html, length);
+    static const char *const patterns[] = {
+        "SEC_TOKEN\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        "SEC_TOKEN\\s*:\\s*'([^']+)'",
+        "secToken\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        "sec_token\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        "sec_token\\s*:\\s*'([^']+)'",
+        "\\\"SEC_TOKEN\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        "\\\"sec_token\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        NULL,
+    };
+    char *result = NULL;
+    for (size_t index = 0; patterns[index] && !result; index++) {
+        GRegex *regex = g_regex_new(patterns[index], 0, 0, NULL);
+        GMatchInfo *match = NULL;
+        if (regex && g_regex_match(regex, document, 0, &match)) {
+            result = g_match_info_fetch(match, 1);
+            if (result) g_strstrip(result);
+            if (result && result[0] == '\0') g_clear_pointer(&result, g_free);
+        }
+        if (match) g_match_info_free(match);
+        if (regex) g_regex_unref(regex);
+    }
+    g_free(document);
+    return result;
+}
+
+static char *alibaba_console_body(gboolean china,
+                                  const char *sec_token,
+                                  const char *anonymous_id) {
+    const char *region = china ? "cn-beijing" : "ap-southeast-1";
+    const char *commodity = china ? "sfm_codingplan_public_cn" : "sfm_codingplan_public_intl";
+    const char *domain = china ? "bailian.console.aliyun.com" : "modelstudio.console.alibabacloud.com";
+    const char *site = china ? "BAILIAN_ALIYUN" : "MODELSTUDIO_ALIBABACLOUD";
+    const char *dashboard = china
+                                ? "https://bailian.console.aliyun.com/cn-beijing/?tab=model#/efm/coding_plan"
+                                : "https://modelstudio.console.alibabacloud.com/ap-southeast-1/"
+                                  "?tab=coding-plan#/efm/coding_plan";
+    char *trace = g_uuid_string_random();
+    json_object *params = json_object_new_object();
+    json_object_object_add(params,
+                           "Api",
+                           json_object_new_string(
+                               "zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2"));
+    json_object_object_add(params, "V", json_object_new_string("1.0"));
+    json_object *data = json_object_new_object();
+    json_object *query = json_object_new_object();
+    json_object_object_add(query, "commodityCode", json_object_new_string(commodity));
+    json_object_object_add(query, "onlyLatestOne", json_object_new_boolean(TRUE));
+    json_object_object_add(data, "queryCodingPlanInstanceInfoRequest", query);
+    json_object *cornerstone = json_object_new_object();
+    json_object_object_add(cornerstone, "feTraceId", json_object_new_string(trace));
+    json_object_object_add(cornerstone, "feURL", json_object_new_string(dashboard));
+    json_object_object_add(cornerstone, "protocol", json_object_new_string("V2"));
+    json_object_object_add(cornerstone, "console", json_object_new_string("ONE_CONSOLE"));
+    json_object_object_add(cornerstone, "productCode", json_object_new_string("p_efm"));
+    json_object_object_add(cornerstone, "domain", json_object_new_string(domain));
+    json_object_object_add(cornerstone, "consoleSite", json_object_new_string(site));
+    json_object_object_add(cornerstone, "userNickName", json_object_new_string(""));
+    json_object_object_add(cornerstone, "userPrincipalName", json_object_new_string(""));
+    json_object_object_add(cornerstone, "xsp_lang", json_object_new_string("en-US"));
+    if (anonymous_id) json_object_object_add(cornerstone, "X-Anonymous-Id", json_object_new_string(anonymous_id));
+    json_object_object_add(data, "cornerstoneParam", cornerstone);
+    json_object_object_add(params, "Data", data);
+    const char *json = json_object_to_json_string_ext(params, JSON_C_TO_STRING_PLAIN);
+    char *escaped_params = g_uri_escape_string(json, NULL, TRUE);
+    char *escaped_region = g_uri_escape_string(region, NULL, TRUE);
+    char *escaped_token = g_uri_escape_string(sec_token, NULL, TRUE);
+    char *body = g_strdup_printf("params=%s&region=%s&sec_token=%s",
+                                 escaped_params,
+                                 escaped_region,
+                                 escaped_token);
+    g_free(escaped_token);
+    g_free(escaped_region);
+    g_free(escaped_params);
+    json_object_put(params);
+    g_free(trace);
+    return body;
+}
+
+static CodexBarProvider *alibaba_web_once(gboolean china,
+                                          const char *cookie,
+                                          CodexBarApiProviders3Transport transport,
+                                          GCancellable *cancellable,
+                                          gint64 now_ms,
+                                          GError **error) {
+    const char *origin = china ? "https://bailian.console.aliyun.com"
+                               : "https://modelstudio.console.alibabacloud.com";
+    const char *dashboard = china
+                                ? "https://bailian.console.aliyun.com/cn-beijing/?tab=model#/efm/coding_plan"
+                                : "https://modelstudio.console.alibabacloud.com/ap-southeast-1/"
+                                  "?tab=coding-plan#/efm/coding_plan";
+    const char *referer = china ? "https://bailian.console.aliyun.com/cn-beijing/?tab=model"
+                                : "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan";
+    const char *url = china
+                          ? "https://bailian-cs.console.aliyun.com/data/api.json?action=BroadScopeAspnGateway&"
+                            "product=sfm_bailian&api=zeldaEasy.broadscope-bailian.codingPlan."
+                            "queryCodingPlanInstanceInfoV2&_v=undefined"
+                          : "https://bailian-singapore-cs.alibabacloud.com/data/api.json?"
+                            "action=IntlBroadScopeAspnGateway&product=sfm_bailian&api=zeldaEasy."
+                            "broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2&_v=undefined";
+    char *sec_token = alibaba_cookie_value(cookie, "sec_token");
+    const CodexBarHttpRequestHeader dashboard_headers[] = {
+        {"Cookie", cookie},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 Safari/605.1.15"},
+        {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+    };
+    const CodexBarHttpRequest dashboard_request = {
+        .url = dashboard,
+        .method = "GET",
+        .headers = dashboard_headers,
+        .header_count = G_N_ELEMENTS(dashboard_headers),
+        .timeout_seconds = PROVIDER_TIMEOUT_SECONDS,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    GError *dashboard_error = NULL;
+    CodexBarHttpResponse *dashboard_response = send_request(&dashboard_request, transport, &dashboard_error);
+    if (dashboard_response && dashboard_response->status == 200) {
+        char *fresh = alibaba_html_sec_token(dashboard_response->body, dashboard_response->body_length);
+        if (fresh) {
+            g_free(sec_token);
+            sec_token = fresh;
+        }
+    }
+    codexbar_http_response_free(dashboard_response);
+    if (dashboard_error && g_error_matches(dashboard_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        g_free(sec_token);
+        if (error) *error = dashboard_error;
+        else g_clear_error(&dashboard_error);
+        return NULL;
+    }
+    g_clear_error(&dashboard_error);
+    if (!sec_token) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                            "Alibaba Coding Plan session is missing sec_token");
+        return NULL;
+    }
+    char *anonymous_id = alibaba_cookie_value(cookie, "cna");
+    char *csrf = alibaba_cookie_value(cookie, "login_aliyunid_csrf");
+    if (!csrf) csrf = alibaba_cookie_value(cookie, "csrf");
+    char *body = alibaba_console_body(china, sec_token, anonymous_id);
+    CodexBarHttpRequestHeader headers[] = {
+        {"Content-Type", "application/x-www-form-urlencoded"},
+        {"Accept", "*/*"},
+        {"Cookie", cookie},
+        {"x-xsrf-token", csrf},
+        {"x-csrf-token", csrf},
+        {"X-Requested-With", "XMLHttpRequest"},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36"},
+        {"Origin", origin},
+        {"Referer", referer},
+    };
+    size_t header_count = G_N_ELEMENTS(headers);
+    if (!csrf) {
+        headers[3] = headers[5];
+        headers[4] = headers[6];
+        headers[5] = headers[7];
+        headers[6] = headers[8];
+        header_count -= 2;
+    }
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "POST",
+        .headers = headers,
+        .header_count = header_count,
+        .body = body,
+        .body_length = strlen(body),
+        .timeout_seconds = PROVIDER_TIMEOUT_SECONDS,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = send_request(&request, transport, error);
+    g_free(body);
+    g_free(csrf);
+    g_free(anonymous_id);
+    g_free(sec_token);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "Alibaba Coding Plan web endpoint returned HTTP %ld",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_alibaba_parse_api_usage(
+        response->body, response->body_length, now_ms, error);
+    codexbar_http_response_free(response);
+    if (provider) {
+        g_free(provider->source);
+        provider->source = g_strdup("web");
+    }
+    return provider;
+}
+
+static CodexBarProvider *alibaba_fetch_web(const CodexBarProviderConfig *config,
+                                           CodexBarApiProviders3Transport transport,
+                                           GCancellable *cancellable,
+                                           gint64 now_ms,
+                                           GError **error) {
+    static const char *const cookie_keys[] = {"ALIBABA_CODING_PLAN_COOKIE", NULL};
+    char *cookie = config_or_environment_header(config, "cookieHeader", cookie_keys);
+    if (!cookie) cookie = config_or_environment_header(config, "manualCookieHeader", cookie_keys);
+    if (!cookie) {
+        g_set_error_literal(error,
+                            G_IO_ERROR,
+                            G_IO_ERROR_NOT_FOUND,
+                            "Alibaba Coding Plan web session is missing; configure cookieHeader or ALIBABA_CODING_PLAN_COOKIE");
+        return NULL;
+    }
+    gboolean china = config && config->region && g_ascii_strcasecmp(config->region, "cn") == 0;
+    GError *first_error = NULL;
+    CodexBarProvider *provider = alibaba_web_once(
+        china, cookie, transport, cancellable, now_ms, &first_error);
+    if (!provider && !china && first_error &&
+        (g_error_matches(first_error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED) ||
+         g_error_matches(first_error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED) ||
+         g_error_matches(first_error, G_IO_ERROR, G_IO_ERROR_FAILED))) {
+        g_clear_error(&first_error);
+        provider = alibaba_web_once(TRUE, cookie, transport, cancellable, now_ms, &first_error);
+    }
+    g_free(cookie);
+    if (provider) {
+        g_clear_error(&first_error);
+        return provider;
+    }
+    if (error) *error = first_error;
+    else g_clear_error(&first_error);
+    return NULL;
+}
+
+CodexBarProvider *codexbar_alibaba_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarApiProviders3Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "api")) {
+        return codexbar_alibaba_fetch_with_transport_and_cancellable(
+            config, transport, cancellable, now_ms, error);
+    }
+    if (g_str_equal(mode, "web")) return alibaba_fetch_web(config, transport, cancellable, now_ms, error);
+    if (!g_str_equal(mode, "auto")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Alibaba source '%s' is unsupported", mode);
+        return NULL;
+    }
+    static const char *const cookie_keys[] = {"ALIBABA_CODING_PLAN_COOKIE", NULL};
+    char *cookie = config_or_environment_header(config, "cookieHeader", cookie_keys);
+    if (!cookie) cookie = config_or_environment_header(config, "manualCookieHeader", cookie_keys);
+    if (cookie) {
+        g_free(cookie);
+        GError *web_error = NULL;
+        CodexBarProvider *provider = alibaba_fetch_web(config, transport, cancellable, now_ms, &web_error);
+        if (provider) return provider;
+        if (web_error && g_error_matches(web_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            if (error) *error = web_error;
+            else g_clear_error(&web_error);
+            return NULL;
+        }
+        if (!codexbar_alibaba_has_api_key(config)) {
+            if (error) *error = web_error;
+            else g_clear_error(&web_error);
+            return NULL;
+        }
+        g_clear_error(&web_error);
+    }
+    return codexbar_alibaba_fetch_with_transport_and_cancellable(
+        config, transport, cancellable, now_ms, error);
+}
+
 CodexBarProvider *codexbar_alibaba_fetch_with_transport(const CodexBarProviderConfig *config,
                                                         CodexBarApiProviders3Transport transport,
                                                         gint64 now_ms,
@@ -1256,6 +1555,15 @@ CodexBarProvider *codexbar_alibaba_fetch_with_cancellable(const CodexBarProvider
                                                           GError **error) {
     return codexbar_alibaba_fetch_with_transport_and_cancellable(
         config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+}
+
+CodexBarProvider *codexbar_alibaba_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_alibaba_fetch_for_source_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
 }
 
 CodexBarProvider *codexbar_alibaba_fetch(const CodexBarProviderConfig *config, GError **error) {

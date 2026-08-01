@@ -168,6 +168,37 @@ static void test_part_costs_and_message_precedence(void) {
     fixture_free(&fixture);
 }
 
+static void test_web_usage_parser(void) {
+    const char *page =
+        "rollingUsage:{usagePercent:25.5,resetInSec:3600},"
+        "weeklyUsage:{usagePercent:40,resetInSec:7200},"
+        "monthlyUsage:{usagePercent:75,resetInSec:10800}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_opencode_go_parse_web_usage(
+        page, strlen(page), 1800000000000LL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpfloat(window(provider, 0, "primary")->used_percent, ==, 25.5);
+    g_assert_cmpint(window(provider, 1, "secondary")->resets_at_ms, ==, 1800007200000LL);
+    g_assert_cmpfloat(window(provider, 2, "tertiary")->used_percent, ==, 75);
+    codexbar_provider_free(provider);
+
+    const char *json =
+        "{\"payload\":{\"limits\":{"
+        "\"five_hour\":{\"used\":3,\"limit\":12,\"resetAt\":\"2027-01-15T09:00:00Z\"},"
+        "\"week\":{\"utilization\":0.4,\"reset_in_sec\":7200},"
+        "\"month\":{\"percentUsed\":75,\"resetsAt\":1800000010800}}}}";
+    provider = codexbar_opencode_go_parse_web_usage(
+        json, strlen(json), 1800000000000LL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpfloat(window(provider, 0, "primary")->used_percent, ==, 25);
+    g_assert_cmpfloat(window(provider, 1, "secondary")->used_percent, ==, 40);
+    g_assert_cmpfloat(window(provider, 2, "tertiary")->used_percent, ==, 75);
+    codexbar_provider_free(provider);
+}
+
 static void write_auth(const Fixture *fixture, const char *contents) {
     GError *error = NULL;
     g_assert_true(g_file_set_contents(fixture->auth_path, contents, -1, &error));
@@ -262,7 +293,7 @@ static void test_registry_entry(void) {
     g_assert_nonnull(descriptor);
     g_assert_cmpint(descriptor->native_provider, ==, CODEXBAR_NATIVE_OPENCODE_GO);
     g_assert_true(codexbar_provider_supports_source(descriptor, "auto"));
-    g_assert_false(codexbar_provider_supports_source(descriptor, "web"));
+    g_assert_true(codexbar_provider_supports_source(descriptor, "web"));
     const char *plan[1] = {0};
     g_assert_cmpuint(codexbar_provider_auto_source_plan(descriptor, plan, G_N_ELEMENTS(plan)), ==, 1);
     g_assert_cmpstr(plan[0], ==, "local");
@@ -272,6 +303,7 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/opencode-go/local-database", test_local_database_contract);
     g_test_add_func("/opencode-go/part-costs", test_part_costs_and_message_precedence);
+    g_test_add_func("/opencode-go/web-usage", test_web_usage_parser);
     g_test_add_func("/opencode-go/detection-errors", test_detection_errors);
     g_test_add_func("/opencode-go/schema-error", test_schema_error);
     g_test_add_func("/opencode-go/filtering", test_filters_unusable_rows);

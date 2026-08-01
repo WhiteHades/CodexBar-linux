@@ -334,7 +334,14 @@ test('codexbar-linux-api-providers3', api_providers3_test, env: normalized_test_
 
 api_providers4_test = executable(
   'codexbar-linux-api-providers4-tests',
-  files('tests/test_api_providers4.c', 'src/api_providers4.c', 'src/http.c', 'src/model.c'),
+  files(
+    'tests/test_api_providers4.c',
+    'src/api_providers4.c',
+    'src/http.c',
+    'src/local_providers.c',
+    'src/model.c',
+    'src/process.c',
+  ),
   include_directories: source_includes,
   dependencies: core_deps,
 )
@@ -541,9 +548,9 @@ test('codexbar-linux-qwen-cloud', qwen_cloud_test, env: normalized_test_env)
 
 opencode_go_test = executable(
   'codexbar-linux-opencode-go-tests',
-  files('tests/test_opencode_go.c', 'src/opencode_go.c', 'src/model.c', 'src/provider_registry.c'),
+  files('tests/test_opencode_go.c', 'src/opencode_go.c', 'src/http.c', 'src/model.c', 'src/provider_registry.c'),
   include_directories: source_includes,
-  dependencies: [glib_dep, gio_dep, json_dep, sqlite_dep, math_dep],
+  dependencies: core_deps,
 )
 test('codexbar-linux-opencode-go', opencode_go_test, env: normalized_test_env)
 

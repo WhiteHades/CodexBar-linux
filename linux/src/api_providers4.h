@@ -26,6 +26,11 @@ CodexBarProvider *codexbar_factory_fetch_with_transport_and_cancellable(
     GCancellable *cancellable,
     gint64 now_ms,
     GError **error);
+CodexBarProvider *codexbar_factory_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error);
 CodexBarProvider *codexbar_factory_fetch_with_transport(const CodexBarProviderConfig *config,
                                                         CodexBarApiProviders4Transport transport,
                                                         gint64 now_ms,
@@ -64,6 +69,29 @@ CodexBarProvider *codexbar_gemini_fetch_with_cancellable(const CodexBarProviderC
                                                          GCancellable *cancellable,
                                                          GError **error);
 CodexBarProvider *codexbar_gemini_fetch(const CodexBarProviderConfig *config, GError **error);
+
+gboolean codexbar_antigravity_has_oauth_credentials(const CodexBarProviderConfig *config);
+CodexBarProvider *codexbar_antigravity_parse_remote_usage(const char *models_json,
+                                                           size_t models_length,
+                                                           const char *quota_json,
+                                                           size_t quota_length,
+                                                           const char *id_token,
+                                                           const char *email,
+                                                           const char *code_assist_json,
+                                                           size_t code_assist_length,
+                                                           gint64 now_ms,
+                                                           GError **error);
+CodexBarProvider *codexbar_antigravity_oauth_fetch_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error);
+CodexBarProvider *codexbar_antigravity_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error);
 
 gboolean codexbar_ollama_has_api_key(const CodexBarProviderConfig *config);
 CodexBarProvider *codexbar_ollama_parse_api_tags(const char *json,

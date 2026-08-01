@@ -1,5 +1,7 @@
 #include "api_providers4.h"
 
+#include "local_providers.h"
+
 #include <errno.h>
 #include <glib/gstdio.h>
 #include <json-c/json.h>
@@ -18,6 +20,11 @@
 #define GEMINI_PROJECTS_URL "https://cloudresourcemanager.googleapis.com/v1/projects"
 #define GEMINI_QUOTA_URL "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
 #define GEMINI_REFRESH_URL "https://oauth2.googleapis.com/token"
+#define ANTIGRAVITY_CODE_ASSIST_URL "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+#define ANTIGRAVITY_ONBOARD_URL "https://cloudcode-pa.googleapis.com/v1internal:onboardUser"
+#define ANTIGRAVITY_MODELS_URL "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+#define ANTIGRAVITY_QUOTA_URL "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
+#define ANTIGRAVITY_REFRESH_URL "https://oauth2.googleapis.com/token"
 #define OLLAMA_TAGS_URL "https://ollama.com/api/tags"
 #define OLLAMA_VALIDATION_URL "https://ollama.com/api/web_search"
 #define OLLAMA_SETTINGS_URL "https://ollama.com/settings"
@@ -661,6 +668,24 @@ CodexBarProvider *codexbar_factory_fetch(const CodexBarProviderConfig *config, G
     return codexbar_factory_fetch_with_cancellable(config, NULL, error);
 }
 
+CodexBarProvider *codexbar_factory_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "web")) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                            "Factory web sessions are unavailable on Linux; configure FACTORY_API_KEY instead");
+        return NULL;
+    }
+    if (!g_str_equal(mode, "auto") && !g_str_equal(mode, "api") && !g_str_equal(mode, "cli")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Factory source '%s' is unsupported", mode);
+        return NULL;
+    }
+    return codexbar_factory_fetch_with_cancellable(config, cancellable, error);
+}
+
 typedef struct {
     char *access_token;
     char *id_token;
@@ -672,6 +697,7 @@ typedef struct {
     char *project_id;
     char *tier;
     char *paid_tier_name;
+    char *plan_type;
 } GeminiCodeAssist;
 
 static void gemini_credentials_clear(GeminiCredentials *credentials) {
@@ -685,6 +711,7 @@ static void gemini_code_assist_clear(GeminiCodeAssist *status) {
     g_free(status->project_id);
     g_free(status->tier);
     g_free(status->paid_tier_name);
+    g_free(status->plan_type);
     *status = (GeminiCodeAssist){0};
 }
 
@@ -857,6 +884,7 @@ static void gemini_parse_code_assist(const char *json, size_t length, GeminiCode
     }
     status->tier = json_string(object_member(root, "currentTier"), "id");
     status->paid_tier_name = json_string(object_member(root, "paidTier"), "name");
+    status->plan_type = json_string(object_member(root, "planInfo"), "planType");
     json_object_put(root);
 }
 
@@ -962,6 +990,7 @@ static void gemini_add_window(CodexBarProvider *provider,
 }
 
 static char *gemini_plan(const GeminiCodeAssist *status, const char *hosted_domain) {
+    if (status && status->plan_type) return g_strdup(status->plan_type);
     if (status && status->paid_tier_name) return g_strdup(status->paid_tier_name);
     if (!status || !status->tier) return NULL;
     if (g_str_equal(status->tier, "standard-tier")) return g_strdup("Paid");
@@ -1291,6 +1320,613 @@ CodexBarProvider *codexbar_gemini_fetch_with_cancellable(const CodexBarProviderC
 
 CodexBarProvider *codexbar_gemini_fetch(const CodexBarProviderConfig *config, GError **error) {
     return codexbar_gemini_fetch_with_cancellable(config, NULL, error);
+}
+
+typedef struct {
+    char *access_token;
+    char *refresh_token;
+    char *id_token;
+    char *email;
+    char *project_id;
+    char *client_id;
+    char *client_secret;
+    gint64 expiry_ms;
+} AntigravityCredentials;
+
+typedef struct {
+    char *model_id;
+    char *label;
+    double remaining;
+    gboolean has_remaining;
+    gint64 reset_ms;
+} AntigravityRemoteQuota;
+
+static void antigravity_credentials_clear(AntigravityCredentials *credentials) {
+    g_free(credentials->access_token);
+    g_free(credentials->refresh_token);
+    g_free(credentials->id_token);
+    g_free(credentials->email);
+    g_free(credentials->project_id);
+    g_free(credentials->client_id);
+    g_free(credentials->client_secret);
+    *credentials = (AntigravityCredentials){0};
+}
+
+static void antigravity_remote_quota_free(gpointer data) {
+    AntigravityRemoteQuota *quota = data;
+    if (!quota) return;
+    g_free(quota->model_id);
+    g_free(quota->label);
+    g_free(quota);
+}
+
+static char *json_alias_string(json_object *object, const char *snake, const char *camel) {
+    char *value = json_string(object, snake);
+    if (!value && camel) value = json_string(object, camel);
+    return value;
+}
+
+static gboolean antigravity_parse_credentials(const char *json,
+                                               size_t length,
+                                               AntigravityCredentials *credentials) {
+    json_object *root = parse_json_document(json, length);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        return FALSE;
+    }
+    credentials->access_token = json_alias_string(root, "access_token", "accessToken");
+    credentials->refresh_token = json_alias_string(root, "refresh_token", "refreshToken");
+    credentials->id_token = json_alias_string(root, "id_token", "idToken");
+    credentials->email = json_string(root, "email");
+    credentials->project_id = json_alias_string(root, "project_id", "projectId");
+    credentials->client_id = json_alias_string(root, "client_id", "clientId");
+    credentials->client_secret = json_alias_string(root, "client_secret", "clientSecret");
+    double expiry = 0;
+    if ((!object_number(root, "expiry_date", &expiry) && !object_number(root, "expiresAt", &expiry)) ||
+        expiry <= 0 || expiry > (double)G_MAXINT64) {
+        expiry = 0;
+    }
+    credentials->expiry_ms = (gint64)llround(expiry);
+    json_object_put(root);
+    if (credentials->access_token || credentials->refresh_token) return TRUE;
+    antigravity_credentials_clear(credentials);
+    return FALSE;
+}
+
+static char *antigravity_config_credentials(const CodexBarProviderConfig *config) {
+    if (config && config->api_key && config->api_key[0]) return g_strdup(config->api_key);
+    json_object *value = NULL;
+    if (config && config->raw &&
+        (json_object_object_get_ex(config->raw, "oauthCredentialsJSON", &value) ||
+         json_object_object_get_ex(config->raw, "oauthCredentials", &value)) &&
+        json_object_is_type(value, json_type_string)) {
+        return g_strdup(json_object_get_string(value));
+    }
+    const char *environment = g_getenv("ANTIGRAVITY_OAUTH_CREDENTIALS_JSON");
+    return environment && environment[0] ? g_strdup(environment) : NULL;
+}
+
+static gboolean antigravity_load_credentials(const CodexBarProviderConfig *config,
+                                              AntigravityCredentials *credentials,
+                                              GError **error) {
+    char *contents = antigravity_config_credentials(config);
+    gsize length = contents ? strlen(contents) : 0;
+    if (!contents) {
+        const char *home = g_getenv("HOME");
+        if (!home || !home[0]) home = g_get_home_dir();
+        char *path = home ? g_build_filename(home, ".codexbar", "antigravity", "oauth_creds.json", NULL)
+                          : NULL;
+        if (!path || !regular_file_within_limit(path, PROVIDER_MAXIMUM_CREDENTIAL_BYTES, NULL) ||
+            !g_file_get_contents(path, &contents, &length, NULL)) {
+            g_free(path);
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                "Antigravity Google auth not found. Configure an OAuth account first.");
+            return FALSE;
+        }
+        g_free(path);
+    }
+    gboolean parsed = length <= PROVIDER_MAXIMUM_CREDENTIAL_BYTES &&
+                      antigravity_parse_credentials(contents, length, credentials);
+    g_free(contents);
+    if (parsed) return TRUE;
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                        "Antigravity OAuth credentials are malformed");
+    return FALSE;
+}
+
+gboolean codexbar_antigravity_has_oauth_credentials(const CodexBarProviderConfig *config) {
+    AntigravityCredentials credentials = {0};
+    gboolean loaded = antigravity_load_credentials(config, &credentials, NULL);
+    antigravity_credentials_clear(&credentials);
+    return loaded;
+}
+
+static CodexBarHttpResponse *antigravity_request(const char *url,
+                                                 const char *authorization,
+                                                 const char *body,
+                                                 CodexBarApiProviders4Transport transport,
+                                                 GCancellable *cancellable,
+                                                 GError **error) {
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Accept", "application/json"},
+        {"Content-Type", "application/json"},
+        {"Authorization", authorization},
+        {"User-Agent", "antigravity"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "POST",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .body = body,
+        .body_length = strlen(body),
+        .timeout_seconds = 10,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    return send_request(&request, transport, error);
+}
+
+static gboolean antigravity_response_success(const CodexBarHttpResponse *response,
+                                             const char *operation,
+                                             GError **error) {
+    if (response && response->status == 200) return TRUE;
+    long status = response ? response->status : 0;
+    g_set_error(error,
+                G_IO_ERROR,
+                status == 401 || status == 403 ? G_IO_ERROR_PERMISSION_DENIED : G_IO_ERROR_FAILED,
+                "Antigravity %s request failed with HTTP %ld",
+                operation,
+                status);
+    return FALSE;
+}
+
+static AntigravityRemoteQuota *antigravity_remote_quota(json_object *value,
+                                                        const char *model_id,
+                                                        const char *fallback_label) {
+    if (!value || !json_object_is_type(value, json_type_object) || !model_id || !model_id[0]) return NULL;
+    json_object *quota_info = object_member(value, "quotaInfo");
+    if (!quota_info || !json_object_is_type(quota_info, json_type_object)) quota_info = value;
+    AntigravityRemoteQuota *quota = g_new0(AntigravityRemoteQuota, 1);
+    quota->model_id = g_strdup(model_id);
+    quota->label = json_string(value, "displayName");
+    if (!quota->label) quota->label = json_string(value, "label");
+    if (!quota->label) quota->label = g_strdup(fallback_label ? fallback_label : model_id);
+    quota->has_remaining = object_number(quota_info, "remainingFraction", &quota->remaining);
+    parse_timestamp_ms(object_member(quota_info, "resetTime"), &quota->reset_ms);
+    return quota;
+}
+
+static GPtrArray *antigravity_model_quotas(json_object *root) {
+    GPtrArray *quotas = g_ptr_array_new_with_free_func(antigravity_remote_quota_free);
+    json_object *models = object_member(root, "models");
+    if (!models || !json_object_is_type(models, json_type_object)) return quotas;
+    json_object_object_foreach(models, model_id, model) {
+        AntigravityRemoteQuota *quota = antigravity_remote_quota(model, model_id, model_id);
+        if (quota) g_ptr_array_add(quotas, quota);
+    }
+    return quotas;
+}
+
+static GPtrArray *antigravity_bucket_quotas(json_object *root) {
+    GPtrArray *quotas = g_ptr_array_new_with_free_func(antigravity_remote_quota_free);
+    json_object *buckets = object_member(root, "buckets");
+    if (!buckets || !json_object_is_type(buckets, json_type_array)) return quotas;
+    for (size_t index = 0; index < json_object_array_length(buckets); index++) {
+        json_object *bucket = json_object_array_get_idx(buckets, index);
+        char *model_id = json_string(bucket, "modelId");
+        AntigravityRemoteQuota *quota = antigravity_remote_quota(bucket, model_id, model_id);
+        g_free(model_id);
+        if (!quota || !quota->has_remaining) {
+            antigravity_remote_quota_free(quota);
+            continue;
+        }
+        gboolean merged = FALSE;
+        for (guint existing = 0; existing < quotas->len; existing++) {
+            AntigravityRemoteQuota *candidate = g_ptr_array_index(quotas, existing);
+            if (!g_ascii_strcasecmp(candidate->model_id, quota->model_id)) {
+                if (!candidate->has_remaining || quota->remaining < candidate->remaining) {
+                    candidate->has_remaining = TRUE;
+                    candidate->remaining = quota->remaining;
+                    candidate->reset_ms = quota->reset_ms;
+                }
+                merged = TRUE;
+                break;
+            }
+        }
+        antigravity_remote_quota_free(merged ? quota : NULL);
+        if (!merged) g_ptr_array_add(quotas, quota);
+    }
+    return quotas;
+}
+
+static int antigravity_remote_family(const AntigravityRemoteQuota *quota) {
+    char *combined = g_strdup_printf("%s %s", quota->model_id, quota->label);
+    char *lower = g_ascii_strdown(combined, -1);
+    g_free(combined);
+    int family = strstr(lower, "claude") || strstr(lower, "gpt") || strstr(lower, "openai")
+                     ? 1
+                     : strstr(lower, "gemini") && !strstr(lower, "image") && !strstr(lower, "lite")
+                           ? 0
+                           : 2;
+    g_free(lower);
+    return family;
+}
+
+static char *antigravity_plan(const GeminiCodeAssist *status, const char *hosted_domain) {
+    return gemini_plan(status, hosted_domain);
+}
+
+CodexBarProvider *codexbar_antigravity_parse_remote_usage(const char *models_json,
+                                                           size_t models_length,
+                                                           const char *quota_json,
+                                                           size_t quota_length,
+                                                           const char *id_token,
+                                                           const char *email,
+                                                           const char *code_assist_json,
+                                                           size_t code_assist_length,
+                                                           gint64 now_ms,
+                                                           GError **error) {
+    json_object *models_root = models_json ? parse_json_document(models_json, models_length) : NULL;
+    json_object *quota_root = quota_json ? parse_json_document(quota_json, quota_length) : NULL;
+    if (models_json && !models_root) {
+        if (quota_root) json_object_put(quota_root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Antigravity model response is malformed");
+        return NULL;
+    }
+    if (quota_json && !quota_root) {
+        if (models_root) json_object_put(models_root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Antigravity quota response is malformed");
+        return NULL;
+    }
+    GPtrArray *model_quotas = antigravity_model_quotas(models_root);
+    GPtrArray *bucket_quotas = antigravity_bucket_quotas(quota_root);
+    for (guint bucket_index = 0; bucket_index < bucket_quotas->len; bucket_index++) {
+        AntigravityRemoteQuota *bucket = g_ptr_array_index(bucket_quotas, bucket_index);
+        for (guint model_index = 0; model_index < model_quotas->len; model_index++) {
+            AntigravityRemoteQuota *model = g_ptr_array_index(model_quotas, model_index);
+            if (g_ascii_strcasecmp(bucket->model_id, model->model_id) != 0) continue;
+            g_free(bucket->label);
+            bucket->label = g_strdup(model->label);
+            if (bucket->reset_ms <= 0) bucket->reset_ms = model->reset_ms;
+            break;
+        }
+    }
+    GPtrArray *quotas = bucket_quotas->len > 0 ? bucket_quotas : model_quotas;
+    if (quotas == bucket_quotas) g_ptr_array_unref(model_quotas);
+    else g_ptr_array_unref(bucket_quotas);
+    if (models_root) json_object_put(models_root);
+    if (quota_root) json_object_put(quota_root);
+
+    GeminiCodeAssist status = {0};
+    if (code_assist_json) gemini_parse_code_assist(code_assist_json, code_assist_length, &status);
+    char *token_email = gemini_jwt_claim(id_token, "email");
+    char *hosted_domain = gemini_jwt_claim(id_token, "hd");
+    char *plan = antigravity_plan(&status, hosted_domain);
+    CodexBarProvider *provider = provider_new("antigravity", now_ms);
+    g_free(provider->source);
+    provider->source = g_strdup("oauth");
+    provider->explicit_quota_slots = TRUE;
+    provider->account = g_strdup(token_email ? token_email : email);
+    provider->plan = g_strdup(plan);
+    if (provider->account || provider->plan) {
+        provider->identity = g_new0(CodexBarProviderIdentity, 1);
+        provider->identity->login_method = g_strdup(provider->plan);
+    }
+    AntigravityRemoteQuota *representatives[2] = {NULL, NULL};
+    for (guint index = 0; index < quotas->len; index++) {
+        AntigravityRemoteQuota *quota = g_ptr_array_index(quotas, index);
+        int family = antigravity_remote_family(quota);
+        if (family < 2 && quota->has_remaining &&
+            (!representatives[family] || quota->remaining < representatives[family]->remaining)) {
+            representatives[family] = quota;
+        }
+    }
+    const char *ids[] = {"primary", "secondary"};
+    const char *titles[] = {"Gemini", "Claude/GPT"};
+    for (guint family = 0; family < 2; family++) {
+        AntigravityRemoteQuota *quota = representatives[family];
+        if (!quota) continue;
+        add_window(provider, ids[family], titles[family], (1.0 - CLAMP(quota->remaining, 0.0, 1.0)) * 100.0,
+                   0, quota->reset_ms, quota->label);
+    }
+    for (guint index = 0; index < quotas->len; index++) {
+        AntigravityRemoteQuota *quota = g_ptr_array_index(quotas, index);
+        int family = antigravity_remote_family(quota);
+        if ((family < 2 && representatives[family] == quota) || !quota->has_remaining) continue;
+        char *internal = g_strdup_printf("antigravity-extra-%u", index);
+        CodexBarQuotaWindow *window = add_window(
+            provider, internal, quota->label, (1.0 - CLAMP(quota->remaining, 0.0, 1.0)) * 100.0,
+            0, quota->reset_ms, quota->model_id);
+        g_free(internal);
+        window->output_id = g_strdup(quota->model_id);
+    }
+    g_ptr_array_unref(quotas);
+    gemini_code_assist_clear(&status);
+    g_free(hosted_domain);
+    g_free(token_email);
+    g_free(plan);
+    return provider;
+}
+
+static char *antigravity_refresh_access_token(const AntigravityCredentials *credentials,
+                                              CodexBarApiProviders4Transport transport,
+                                              GCancellable *cancellable,
+                                              GError **error) {
+    char *client_id = clean_credential(credentials->client_id);
+    char *client_secret = clean_credential(credentials->client_secret);
+    if (!client_id) client_id = clean_credential(g_getenv("ANTIGRAVITY_OAUTH_CLIENT_ID"));
+    if (!client_secret) client_secret = clean_credential(g_getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET"));
+    if (!client_id || !client_secret || !credentials->refresh_token) {
+        g_free(client_id);
+        g_free(client_secret);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "Antigravity OAuth client credentials are unavailable");
+        return NULL;
+    }
+    char *escaped_id = g_uri_escape_string(client_id, NULL, TRUE);
+    char *escaped_secret = g_uri_escape_string(client_secret, NULL, TRUE);
+    char *escaped_refresh = g_uri_escape_string(credentials->refresh_token, NULL, TRUE);
+    char *body = g_strdup_printf("client_id=%s&client_secret=%s&refresh_token=%s&grant_type=refresh_token",
+                                 escaped_id, escaped_secret, escaped_refresh);
+    g_free(escaped_refresh);
+    g_free(escaped_secret);
+    g_free(escaped_id);
+    g_free(client_secret);
+    g_free(client_id);
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Accept", "application/json"},
+        {"Content-Type", "application/x-www-form-urlencoded"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = ANTIGRAVITY_REFRESH_URL,
+        .method = "POST",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .body = body,
+        .body_length = strlen(body),
+        .timeout_seconds = 10,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = send_request(&request, transport, error);
+    g_free(body);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        codexbar_http_response_free(response);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                            "Antigravity OAuth token refresh failed");
+        return NULL;
+    }
+    json_object *root = parse_json_document(response->body, response->body_length);
+    char *access_token = json_string(root, "access_token");
+    if (root) json_object_put(root);
+    codexbar_http_response_free(response);
+    if (access_token) return access_token;
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                        "Antigravity OAuth refresh response is malformed");
+    return NULL;
+}
+
+static char *antigravity_project_body(const char *project_id) {
+    json_object *body = json_object_new_object();
+    if (project_id) json_object_object_add(body, "project", json_object_new_string(project_id));
+    char *result = g_strdup(json_object_to_json_string_ext(body, JSON_C_TO_STRING_PLAIN));
+    json_object_put(body);
+    return result;
+}
+
+static char *antigravity_onboard_tier(const CodexBarHttpResponse *assist) {
+    if (!assist || assist->status != 200) return NULL;
+    json_object *root = parse_json_document(assist->body, assist->body_length);
+    json_object *tiers = object_member(root, "allowedTiers");
+    char *first = NULL;
+    char *selected = NULL;
+    if (tiers && json_object_is_type(tiers, json_type_array)) {
+        for (size_t index = 0; index < json_object_array_length(tiers); index++) {
+            json_object *tier = json_object_array_get_idx(tiers, index);
+            char *identifier = json_string(tier, "id");
+            if (!identifier) continue;
+            if (!first) first = g_strdup(identifier);
+            json_object *is_default = object_member(tier, "isDefault");
+            if (is_default && json_object_is_type(is_default, json_type_boolean) &&
+                json_object_get_boolean(is_default)) {
+                selected = identifier;
+                break;
+            }
+            g_free(identifier);
+        }
+    }
+    if (!selected) selected = first;
+    else g_free(first);
+    if (!selected) selected = json_string(object_member(root, "paidTier"), "id");
+    if (!selected) selected = json_string(object_member(root, "currentTier"), "id");
+    if (root) json_object_put(root);
+    return selected;
+}
+
+static char *antigravity_onboard_project(const CodexBarHttpResponse *response) {
+    if (!response || response->status != 200) return NULL;
+    json_object *root = parse_json_document(response->body, response->body_length);
+    json_object *inner = object_member(root, "response");
+    json_object *project = object_member(inner, "cloudaicompanionProject");
+    char *result = NULL;
+    if (project && json_object_is_type(project, json_type_string)) result = json_string(inner, "cloudaicompanionProject");
+    else if (project) {
+        result = json_string(project, "id");
+        if (!result) result = json_string(project, "projectId");
+    }
+    if (root) json_object_put(root);
+    return result;
+}
+
+static gboolean antigravity_models_all_full(const CodexBarHttpResponse *response) {
+    if (!response || response->status != 200) return FALSE;
+    json_object *root = parse_json_document(response->body, response->body_length);
+    GPtrArray *quotas = antigravity_model_quotas(root);
+    gboolean result = quotas->len > 0;
+    for (guint index = 0; result && index < quotas->len; index++) {
+        AntigravityRemoteQuota *quota = g_ptr_array_index(quotas, index);
+        result = quota->has_remaining && quota->remaining >= 0.999;
+    }
+    g_ptr_array_unref(quotas);
+    if (root) json_object_put(root);
+    return result;
+}
+
+CodexBarProvider *codexbar_antigravity_oauth_fetch_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    if (!transport) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                            "Antigravity transport is missing");
+        return NULL;
+    }
+    AntigravityCredentials credentials = {0};
+    if (!antigravity_load_credentials(config, &credentials, error)) return NULL;
+    char *access_token = NULL;
+    if (!credentials.access_token ||
+        (credentials.expiry_ms > 0 && credentials.expiry_ms <= now_ms + 60000)) {
+        access_token = antigravity_refresh_access_token(&credentials, transport, cancellable, error);
+    } else {
+        access_token = g_strdup(credentials.access_token);
+    }
+    if (!access_token) {
+        antigravity_credentials_clear(&credentials);
+        return NULL;
+    }
+    char *authorization = g_strdup_printf("Bearer %s", access_token);
+    g_free(access_token);
+    const char *metadata = "{\"metadata\":{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"PLATFORM_UNSPECIFIED\",\"pluginType\":\"GEMINI\"}}";
+    CodexBarHttpResponse *assist = antigravity_request(
+        ANTIGRAVITY_CODE_ASSIST_URL, authorization, metadata, transport, cancellable, error);
+    if (!assist || !antigravity_response_success(assist, "account", error)) {
+        codexbar_http_response_free(assist);
+        g_free(authorization);
+        antigravity_credentials_clear(&credentials);
+        return NULL;
+    }
+    GeminiCodeAssist status = {0};
+    gemini_parse_code_assist(assist->body, assist->body_length, &status);
+    char *onboard_project = NULL;
+    if (!credentials.project_id && !status.project_id) {
+        char *tier = antigravity_onboard_tier(assist);
+        if (tier) {
+            json_object *body = json_object_new_object();
+            json_object_object_add(body, "tierId", json_object_new_string(tier));
+            json_object *request_metadata = json_object_new_object();
+            json_object_object_add(request_metadata, "ideType", json_object_new_string("ANTIGRAVITY"));
+            json_object_object_add(request_metadata, "platform", json_object_new_string("PLATFORM_UNSPECIFIED"));
+            json_object_object_add(request_metadata, "pluginType", json_object_new_string("GEMINI"));
+            json_object_object_add(body, "metadata", request_metadata);
+            const char *serialized = json_object_to_json_string_ext(body, JSON_C_TO_STRING_PLAIN);
+            CodexBarHttpResponse *onboard = antigravity_request(
+                ANTIGRAVITY_ONBOARD_URL, authorization, serialized, transport, cancellable, NULL);
+            onboard_project = antigravity_onboard_project(onboard);
+            codexbar_http_response_free(onboard);
+            json_object_put(body);
+            g_free(tier);
+        }
+    }
+    const char *project_id = credentials.project_id ? credentials.project_id
+                                                     : status.project_id ? status.project_id : onboard_project;
+    char *request_body = antigravity_project_body(project_id);
+    CodexBarHttpResponse *models = antigravity_request(
+        ANTIGRAVITY_MODELS_URL, authorization, request_body, transport, cancellable, error);
+    CodexBarHttpResponse *quota = NULL;
+    if ((models && models->status == 403) || antigravity_models_all_full(models)) {
+        if (error) g_clear_error(error);
+        quota = antigravity_request(
+            ANTIGRAVITY_QUOTA_URL, authorization, request_body, transport, cancellable, error);
+        if (quota && quota->status == 403) {
+            codexbar_http_response_free(quota);
+            quota = NULL;
+            if (error) g_clear_error(error);
+        }
+    }
+    g_free(request_body);
+    g_free(authorization);
+    if ((!models || models->status != 200) && (!quota || quota->status != 200)) {
+        long status_code = models ? models->status : 0;
+        codexbar_http_response_free(quota);
+        codexbar_http_response_free(models);
+        codexbar_http_response_free(assist);
+        gemini_code_assist_clear(&status);
+        g_free(onboard_project);
+        antigravity_credentials_clear(&credentials);
+        if (!error || !*error) {
+            g_set_error(error,
+                        G_IO_ERROR,
+                        status_code == 401 || status_code == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                 : G_IO_ERROR_FAILED,
+                        "Antigravity model request failed with HTTP %ld",
+                        status_code);
+        }
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_antigravity_parse_remote_usage(
+        models && models->status == 200 ? models->body : NULL,
+        models && models->status == 200 ? models->body_length : 0,
+        quota && quota->status == 200 ? quota->body : NULL,
+        quota && quota->status == 200 ? quota->body_length : 0,
+        credentials.id_token,
+        credentials.email,
+        assist->body,
+        assist->body_length,
+        now_ms,
+        error);
+    codexbar_http_response_free(quota);
+    codexbar_http_response_free(models);
+    codexbar_http_response_free(assist);
+    gemini_code_assist_clear(&status);
+    g_free(onboard_project);
+    antigravity_credentials_clear(&credentials);
+    return provider;
+}
+
+CodexBarProvider *codexbar_antigravity_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "cli")) {
+        return codexbar_antigravity_fetch_with_cancellable(config, cancellable, error);
+    }
+    if (g_str_equal(mode, "oauth")) {
+        return codexbar_antigravity_oauth_fetch_with_transport_and_cancellable(
+            config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+    }
+    if (!g_str_equal(mode, "auto")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                    "Antigravity source '%s' is unsupported", mode);
+        return NULL;
+    }
+    GError *local_error = NULL;
+    CodexBarProvider *provider = codexbar_antigravity_fetch_with_cancellable(
+        config, cancellable, &local_error);
+    if (provider || (local_error && g_error_matches(local_error, G_IO_ERROR, G_IO_ERROR_CANCELLED))) {
+        if (local_error) g_propagate_error(error, local_error);
+        return provider;
+    }
+    if (!codexbar_antigravity_has_oauth_credentials(config)) {
+        if (local_error) g_propagate_error(error, local_error);
+        else g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                 "Antigravity is not running and OAuth credentials are unavailable");
+        return NULL;
+    }
+    g_clear_error(&local_error);
+    return codexbar_antigravity_oauth_fetch_with_transport_and_cancellable(
+        config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
 }
 
 static const char *const ollama_environment_keys[] = {

@@ -238,7 +238,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         provider = codexbar_jetbrains_fetch(&error);
         break;
     case CODEXBAR_NATIVE_OPENCODE_GO:
-        provider = codexbar_opencode_go_fetch(&error);
+        provider = codexbar_opencode_go_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_KIMI:
         provider = codexbar_kimi_fetch_with_cancellable(
@@ -277,14 +278,16 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
             config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_ALIBABA:
-        provider = codexbar_alibaba_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_alibaba_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_DOUBAO:
         provider = codexbar_doubao_fetch_for_source_with_cancellable(
             config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_FACTORY:
-        provider = codexbar_factory_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_factory_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_GEMINI:
         provider = codexbar_gemini_fetch_with_cancellable(config, cancellable, &error);
@@ -300,7 +303,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         provider = codexbar_augment_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_ANTIGRAVITY:
-        provider = codexbar_antigravity_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_antigravity_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_CURSOR:
         provider = codexbar_cursor_fetch_with_cancellable(config, cancellable, &error);
@@ -379,7 +383,10 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         provider = codexbar_proxy_provider_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_SIMPLE:
-        provider = codexbar_simple_provider_fetch(config, &error);
+        provider = g_str_equal(descriptor->id, "deepseek")
+                       ? codexbar_deepseek_fetch_for_source_with_cancellable(
+                             config, configured_source, cancellable, &error)
+                       : codexbar_simple_provider_fetch(config, &error);
         break;
     case CODEXBAR_NATIVE_UNAVAILABLE:
         error = g_error_new(

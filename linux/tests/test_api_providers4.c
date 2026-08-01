@@ -10,6 +10,7 @@ typedef enum {
     FIXTURE_FACTORY_UNAUTHORIZED,
     FIXTURE_GEMINI,
     FIXTURE_GEMINI_UNAUTHORIZED,
+    FIXTURE_ANTIGRAVITY,
     FIXTURE_OLLAMA,
     FIXTURE_OLLAMA_LOOPBACK,
     FIXTURE_OLLAMA_UNAUTHORIZED,
@@ -123,6 +124,43 @@ static CodexBarHttpResponse *stub_transport(const CodexBarHttpRequest *request, 
         }
         g_assert_cmpuint(index, ==, 2);
         return make_response(401, "{}");
+    case FIXTURE_ANTIGRAVITY:
+        assert_common_request(request, 10, CODEXBAR_HTTP_HTTPS_ONLY);
+        g_assert_cmpstr(request_header(request, "Authorization"), ==, "Bearer ag-token");
+        g_assert_cmpstr(request_header(request, "Content-Type"), ==, "application/json");
+        g_assert_cmpstr(request_header(request, "User-Agent"), ==, "antigravity");
+        g_assert_cmpstr(request->method, ==, "POST");
+        if (index == 0) {
+            g_assert_cmpstr(request->url,
+                            ==,
+                            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
+            g_assert_nonnull(strstr(request->body, "ANTIGRAVITY"));
+            return make_response(
+                200,
+                "{\"currentTier\":{\"id\":\"standard-tier\"},"
+                "\"cloudaicompanionProject\":{\"id\":\"ag-project\"}}");
+        }
+        if (index == 1) {
+            g_assert_cmpstr(request->url,
+                            ==,
+                            "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+            g_assert_nonnull(strstr(request->body, "ag-project"));
+            return make_response(
+                200,
+                "{\"models\":{"
+                "\"gemini-3-pro\":{\"displayName\":\"Gemini 3 Pro\",\"quotaInfo\":{\"remainingFraction\":1}},"
+                "\"claude-sonnet\":{\"label\":\"Claude Sonnet\",\"quotaInfo\":{\"remainingFraction\":1}}}}");
+        }
+        g_assert_cmpuint(index, ==, 2);
+        g_assert_cmpstr(request->url,
+                        ==,
+                        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota");
+        return make_response(
+            200,
+            "{\"buckets\":["
+            "{\"modelId\":\"gemini-3-pro\",\"remainingFraction\":0.75,\"resetTime\":\"2026-08-02T00:00:00Z\"},"
+            "{\"modelId\":\"claude-sonnet\",\"remainingFraction\":0.5},"
+            "{\"modelId\":\"other-model\",\"remainingFraction\":0.9}]}");
     case FIXTURE_OLLAMA:
     case FIXTURE_OLLAMA_LOOPBACK:
     case FIXTURE_OLLAMA_UNAUTHORIZED: {
@@ -257,9 +295,53 @@ static void test_factory_transport_and_credentials(void) {
     g_assert_null(provider);
     g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
     g_clear_error(&error);
+
+    provider = codexbar_factory_fetch_for_source_with_cancellable(&config, "web", NULL, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+    g_clear_error(&error);
     if (saved_home) g_setenv("HOME", saved_home, TRUE);
     else g_unsetenv("HOME");
     g_free(saved_home);
+}
+
+static void test_antigravity_remote_parser_and_transport(void) {
+    const char *models =
+        "{\"models\":{"
+        "\"gemini-3-pro\":{\"displayName\":\"Gemini 3 Pro\",\"quotaInfo\":{\"remainingFraction\":0.75}},"
+        "\"claude-sonnet\":{\"label\":\"Claude Sonnet\",\"quotaInfo\":{\"remainingFraction\":0.5}},"
+        "\"other-model\":{\"quotaInfo\":{\"remainingFraction\":0.9}}}}";
+    const char *assist =
+        "{\"currentTier\":{\"id\":\"standard-tier\"},"
+        "\"cloudaicompanionProject\":{\"id\":\"ag-project\"}}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_antigravity_parse_remote_usage(
+        models, strlen(models), NULL, 0, NULL, "person@example.com", assist, strlen(assist), 1, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "oauth");
+    g_assert_cmpstr(provider->account, ==, "person@example.com");
+    g_assert_cmpstr(provider->plan, ==, "Paid");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 25);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 50);
+    codexbar_provider_free(provider);
+
+    const char *credentials =
+        "{\"access_token\":\"ag-token\",\"expiry_date\":9999999999999,"
+        "\"email\":\"person@example.com\"}";
+    CodexBarProviderConfig config = {.api_key = (char *)credentials};
+    g_assert_true(codexbar_antigravity_has_oauth_credentials(&config));
+    reset_fixture(FIXTURE_ANTIGRAVITY);
+    provider = codexbar_antigravity_oauth_fetch_with_transport_and_cancellable(
+        &config, stub_transport, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(fixture.count, ==, 3);
+    g_assert_cmpstr(provider->source, ==, "oauth");
+    g_assert_cmpstr(provider->account, ==, "person@example.com");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 25);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 50);
+    codexbar_provider_free(provider);
 }
 
 static char *make_id_token(void) {
@@ -448,6 +530,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/api-providers4/factory/transport", test_factory_transport_and_credentials);
     g_test_add_func("/api-providers4/gemini/parser", test_gemini_parser);
     g_test_add_func("/api-providers4/gemini/transport", test_gemini_transport_unauthorized_and_cancellation);
+    g_test_add_func("/api-providers4/antigravity/remote", test_antigravity_remote_parser_and_transport);
     g_test_add_func("/api-providers4/ollama/api", test_ollama_parser_transport_and_security);
     g_test_add_func("/api-providers4/ollama/web", test_ollama_web_parser_and_source_routing);
     return g_test_run();

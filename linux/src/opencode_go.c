@@ -4,9 +4,12 @@
 #include <json-c/json.h>
 #include <math.h>
 #include <sqlite3.h>
+#include <string.h>
 
 #define FIVE_HOURS_MILLISECONDS (5LL * 60LL * 60LL * 1000LL)
 #define WEEK_MILLISECONDS (7LL * 24LL * 60LL * 60LL * 1000LL)
+#define WEB_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
+#define OPENCODE_GO_WORKSPACES_SERVER_ID "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
 
 typedef struct {
     gint64 created_ms;
@@ -17,6 +20,13 @@ typedef struct {
     gint64 start_ms;
     gint64 end_ms;
 } MonthBounds;
+
+typedef struct {
+    double percent;
+    gint64 reset_seconds;
+    char *path;
+    guint order;
+} WebWindowCandidate;
 
 static const char message_usage_sql[] =
     "SELECT "
@@ -281,6 +291,551 @@ static CodexBarQuotaWindow *make_window(const char *id,
     window->has_resets_at = TRUE;
     window->resets_at_ms = now_ms + reset_seconds * 1000;
     return window;
+}
+
+static gboolean opencode_go_capture_number(const char *text,
+                                           const char *label,
+                                           const char *key,
+                                           double *result) {
+    char *pattern = g_strdup_printf(
+        "%s[^}]*?%s\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)", label, key);
+    GRegex *regex = g_regex_new(pattern, G_REGEX_CASELESS | G_REGEX_DOTALL, 0, NULL);
+    g_free(pattern);
+    if (!regex) return FALSE;
+    GMatchInfo *match = NULL;
+    gboolean found = g_regex_match(regex, text, 0, &match);
+    char *capture = found ? g_match_info_fetch(match, 1) : NULL;
+    g_match_info_free(match);
+    g_regex_unref(regex);
+    if (!capture) return FALSE;
+    char *end = NULL;
+    double value = g_ascii_strtod(capture, &end);
+    gboolean valid = capture[0] && end && *end == '\0' && isfinite(value);
+    g_free(capture);
+    if (valid) *result = value;
+    return valid;
+}
+
+static gboolean opencode_go_web_window(const char *text,
+                                       const char *label,
+                                       double *percent,
+                                       gint64 *reset_seconds) {
+    double reset = 0;
+    if (!opencode_go_capture_number(text, label, "usagePercent", percent) ||
+        !opencode_go_capture_number(text, label, "resetInSec", &reset) || reset < 0 || reset > G_MAXINT64) {
+        return FALSE;
+    }
+    *percent = CLAMP(*percent, 0.0, 100.0);
+    *reset_seconds = (gint64)llround(reset);
+    return TRUE;
+}
+
+static void web_window_candidate_free(gpointer data) {
+    WebWindowCandidate *candidate = data;
+    if (!candidate) return;
+    g_free(candidate->path);
+    g_free(candidate);
+}
+
+static gboolean opencode_go_json_number(json_object *object, const char *key, double *result) {
+    json_object *value = NULL;
+    if (!object || !json_object_is_type(object, json_type_object) ||
+        !json_object_object_get_ex(object, key, &value) || json_object_is_type(value, json_type_null) ||
+        json_object_is_type(value, json_type_boolean)) {
+        return FALSE;
+    }
+    double number = 0;
+    if (json_object_is_type(value, json_type_int) || json_object_is_type(value, json_type_double)) {
+        number = json_object_get_double(value);
+    } else if (json_object_is_type(value, json_type_string)) {
+        const char *raw = json_object_get_string(value);
+        char *end = NULL;
+        number = g_ascii_strtod(raw, &end);
+        if (!raw[0] || !end || *end) return FALSE;
+    } else {
+        return FALSE;
+    }
+    if (!isfinite(number)) return FALSE;
+    *result = number;
+    return TRUE;
+}
+
+static gboolean opencode_go_reset_at(json_object *object,
+                                     const char *key,
+                                     gint64 now_ms,
+                                     gint64 *result) {
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(object, key, &value) || json_object_is_type(value, json_type_null)) {
+        return FALSE;
+    }
+    gint64 reset_ms = 0;
+    if (json_object_is_type(value, json_type_string)) {
+        const char *raw = json_object_get_string(value);
+        GDateTime *time = g_date_time_new_from_iso8601(raw, NULL);
+        if (time) {
+            reset_ms = date_time_ms(time);
+            g_date_time_unref(time);
+        } else {
+            char *end = NULL;
+            double numeric = g_ascii_strtod(raw, &end);
+            if (!raw[0] || !end || *end || !isfinite(numeric)) return FALSE;
+            reset_ms = numeric > 100000000000.0 ? (gint64)llround(numeric)
+                                                 : (gint64)llround(numeric * 1000.0);
+        }
+    } else if (json_object_is_type(value, json_type_int) || json_object_is_type(value, json_type_double)) {
+        double numeric = json_object_get_double(value);
+        if (!isfinite(numeric)) return FALSE;
+        reset_ms = numeric > 100000000000.0 ? (gint64)llround(numeric)
+                                             : (gint64)llround(numeric * 1000.0);
+    } else {
+        return FALSE;
+    }
+    *result = MAX((reset_ms - now_ms) / 1000, 0);
+    return TRUE;
+}
+
+static gboolean opencode_go_json_window(json_object *object,
+                                        gint64 now_ms,
+                                        double *percent,
+                                        gint64 *reset_seconds) {
+    static const char *const percent_keys[] = {
+        "usagePercent", "usedPercent", "percentUsed", "percent", "usage_percent", "used_percent",
+        "utilization", "utilizationPercent", "utilization_percent", "usage",
+    };
+    static const char *const used_keys[] = {"used", "usage", "consumed", "count", "usedTokens"};
+    static const char *const limit_keys[] = {"limit", "total", "quota", "max", "cap", "tokenLimit"};
+    static const char *const reset_in_keys[] = {
+        "resetInSec", "resetInSeconds", "resetSeconds", "reset_sec", "reset_in_sec",
+        "resetsInSec", "resetsInSeconds", "resetIn", "resetSec",
+    };
+    static const char *const reset_at_keys[] = {
+        "resetAt", "resetsAt", "reset_at", "resets_at", "nextReset", "next_reset", "renewAt", "renew_at",
+    };
+    gboolean direct = FALSE;
+    for (guint index = 0; index < G_N_ELEMENTS(percent_keys) && !direct; index++) {
+        direct = opencode_go_json_number(object, percent_keys[index], percent);
+    }
+    if (!direct) {
+        double used = 0, limit = 0;
+        gboolean has_used = FALSE, has_limit = FALSE;
+        for (guint index = 0; index < G_N_ELEMENTS(used_keys) && !has_used; index++) {
+            has_used = opencode_go_json_number(object, used_keys[index], &used);
+        }
+        for (guint index = 0; index < G_N_ELEMENTS(limit_keys) && !has_limit; index++) {
+            has_limit = opencode_go_json_number(object, limit_keys[index], &limit);
+        }
+        if (!has_used || !has_limit || limit <= 0) return FALSE;
+        *percent = used / limit * 100.0;
+    } else if (*percent >= 0 && *percent <= 1.0) {
+        *percent *= 100.0;
+    }
+    *percent = CLAMP(*percent, 0.0, 100.0);
+    double reset = 0;
+    gboolean has_reset = FALSE;
+    for (guint index = 0; index < G_N_ELEMENTS(reset_in_keys) && !has_reset; index++) {
+        has_reset = opencode_go_json_number(object, reset_in_keys[index], &reset);
+    }
+    if (has_reset) {
+        *reset_seconds = MAX((gint64)llround(reset), 0);
+        return TRUE;
+    }
+    for (guint index = 0; index < G_N_ELEMENTS(reset_at_keys); index++) {
+        if (opencode_go_reset_at(object, reset_at_keys[index], now_ms, reset_seconds)) return TRUE;
+    }
+    *reset_seconds = 0;
+    return TRUE;
+}
+
+static void opencode_go_collect_windows(json_object *value,
+                                        gint64 now_ms,
+                                        const char *path,
+                                        guint depth,
+                                        GPtrArray *candidates) {
+    if (!value || depth > 20) return;
+    if (json_object_is_type(value, json_type_object)) {
+        double percent = 0;
+        gint64 reset = 0;
+        if (opencode_go_json_window(value, now_ms, &percent, &reset)) {
+            WebWindowCandidate *candidate = g_new0(WebWindowCandidate, 1);
+            candidate->percent = percent;
+            candidate->reset_seconds = reset;
+            candidate->path = g_ascii_strdown(path ? path : "", -1);
+            candidate->order = candidates->len;
+            g_ptr_array_add(candidates, candidate);
+        }
+        json_object_object_foreach(value, key, child) {
+            char *child_path = path && path[0] ? g_strdup_printf("%s.%s", path, key) : g_strdup(key);
+            opencode_go_collect_windows(child, now_ms, child_path, depth + 1, candidates);
+            g_free(child_path);
+        }
+    } else if (json_object_is_type(value, json_type_array)) {
+        for (size_t index = 0; index < json_object_array_length(value); index++) {
+            char *child_path = g_strdup_printf("%s[%zu]", path ? path : "", index);
+            opencode_go_collect_windows(
+                json_object_array_get_idx(value, index), now_ms, child_path, depth + 1, candidates);
+            g_free(child_path);
+        }
+    }
+}
+
+static gboolean path_has(const char *path, const char *const *needles, guint count) {
+    for (guint index = 0; index < count; index++) {
+        if (strstr(path, needles[index])) return TRUE;
+    }
+    return FALSE;
+}
+
+static WebWindowCandidate *opencode_go_pick_window(GPtrArray *candidates,
+                                                    int family,
+                                                    gboolean allow_fallback,
+                                                    const WebWindowCandidate *exclude_a,
+                                                    const WebWindowCandidate *exclude_b) {
+    static const char *const rolling_names[] = {"rolling", "hour", "5h", "5-hour"};
+    static const char *const weekly_names[] = {"weekly", "week"};
+    static const char *const monthly_names[] = {"monthly", "month"};
+    const char *const *names = family == 0 ? rolling_names : family == 1 ? weekly_names : monthly_names;
+    guint count = family == 0 ? G_N_ELEMENTS(rolling_names)
+                              : family == 1 ? G_N_ELEMENTS(weekly_names) : G_N_ELEMENTS(monthly_names);
+    WebWindowCandidate *best = NULL;
+    for (guint pass = 0; pass < (allow_fallback ? 2U : 1U); pass++) {
+        for (guint index = 0; index < candidates->len; index++) {
+            WebWindowCandidate *candidate = g_ptr_array_index(candidates, index);
+            if (candidate == exclude_a || candidate == exclude_b) continue;
+            gboolean named = path_has(candidate->path, names, count);
+            if ((pass == 0 && !named) || (pass == 1 && named)) continue;
+            if (!best || (family == 0 ? candidate->reset_seconds < best->reset_seconds
+                                      : candidate->reset_seconds > best->reset_seconds) ||
+                (candidate->reset_seconds == best->reset_seconds && candidate->percent > best->percent)) {
+                best = candidate;
+            }
+        }
+        if (best) return best;
+    }
+    return NULL;
+}
+
+static gboolean opencode_go_json_windows(const char *text,
+                                         size_t length,
+                                         gint64 now_ms,
+                                         WebWindowCandidate **rolling,
+                                         WebWindowCandidate **weekly,
+                                         WebWindowCandidate **monthly,
+                                         GPtrArray **storage) {
+    if (length > G_MAXINT) return FALSE;
+    json_tokener *tokener = json_tokener_new();
+    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    json_object *root = json_tokener_parse_ex(tokener, text, (int)length);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < length && g_ascii_isspace(text[consumed])) consumed++;
+    gboolean valid = json_tokener_get_error(tokener) == json_tokener_success && root && consumed == length;
+    json_tokener_free(tokener);
+    if (!valid) {
+        if (root) json_object_put(root);
+        return FALSE;
+    }
+    GPtrArray *candidates = g_ptr_array_new_with_free_func(web_window_candidate_free);
+    opencode_go_collect_windows(root, now_ms, "", 0, candidates);
+    json_object_put(root);
+    *rolling = opencode_go_pick_window(candidates, 0, TRUE, NULL, NULL);
+    *weekly = opencode_go_pick_window(candidates, 1, FALSE, *rolling, NULL);
+    *monthly = opencode_go_pick_window(candidates, 2, FALSE, *rolling, *weekly);
+    *storage = candidates;
+    return *rolling != NULL;
+}
+
+CodexBarProvider *codexbar_opencode_go_parse_web_usage(const char *text,
+                                                       size_t length,
+                                                       gint64 now_ms,
+                                                       GError **error) {
+    if (!text || length == 0 || length > WEB_MAXIMUM_RESPONSE_BYTES || memchr(text, '\0', length) ||
+        !g_utf8_validate(text, (gssize)length, NULL)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "OpenCode Go usage response is invalid");
+        return NULL;
+    }
+    char *document = g_strndup(text, length);
+    double rolling = 0, weekly = 0, monthly = 0;
+    gint64 rolling_reset = 0, weekly_reset = 0, monthly_reset = 0;
+    WebWindowCandidate *rolling_json = NULL, *weekly_json = NULL, *monthly_json = NULL;
+    GPtrArray *json_candidates = NULL;
+    gboolean has_rolling = opencode_go_json_windows(
+        document, length, now_ms, &rolling_json, &weekly_json, &monthly_json, &json_candidates);
+    gboolean has_weekly = FALSE, has_monthly = FALSE;
+    if (has_rolling) {
+        rolling = rolling_json->percent;
+        rolling_reset = rolling_json->reset_seconds;
+        if (weekly_json) {
+            has_weekly = TRUE;
+            weekly = weekly_json->percent;
+            weekly_reset = weekly_json->reset_seconds;
+        }
+        if (monthly_json) {
+            has_monthly = TRUE;
+            monthly = monthly_json->percent;
+            monthly_reset = monthly_json->reset_seconds;
+        }
+    } else {
+        if (json_candidates) g_ptr_array_unref(json_candidates);
+        json_candidates = NULL;
+        has_rolling = opencode_go_web_window(document, "rollingUsage", &rolling, &rolling_reset);
+        has_weekly = opencode_go_web_window(document, "weeklyUsage", &weekly, &weekly_reset);
+        has_monthly = opencode_go_web_window(document, "monthlyUsage", &monthly, &monthly_reset);
+    }
+    if (!has_rolling) {
+        char *lower = g_ascii_strdown(document, -1);
+        gboolean signed_out = strstr(lower, "login") || strstr(lower, "sign in") ||
+                              strstr(lower, "auth/authorize") ||
+                              strstr(lower, "not associated with an account") ||
+                              strstr(lower, "actor of type \"public\"");
+        g_free(lower);
+        if (json_candidates) g_ptr_array_unref(json_candidates);
+        g_free(document);
+        g_set_error_literal(error,
+                            G_IO_ERROR,
+                            signed_out ? G_IO_ERROR_PERMISSION_DENIED : G_IO_ERROR_INVALID_DATA,
+                            signed_out ? "OpenCode Go session is invalid or expired"
+                                       : "OpenCode Go usage response is missing usage fields");
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_provider_new();
+    provider->provider = g_strdup("opencodego");
+    provider->source = g_strdup("web");
+    provider->dashboard_url = g_strdup("https://opencode.ai");
+    provider->has_updated_at = TRUE;
+    provider->updated_at_ms = now_ms;
+    provider->explicit_quota_slots = TRUE;
+    codexbar_provider_add_quota_window(
+        provider, make_window("primary", "5-hour", rolling, 300, rolling_reset, now_ms));
+    if (has_weekly) {
+        codexbar_provider_add_quota_window(
+            provider, make_window("secondary", "Weekly", weekly, 10080, weekly_reset, now_ms));
+    }
+    if (has_monthly) {
+        codexbar_provider_add_quota_window(
+            provider, make_window("tertiary", "Monthly", monthly, 43200, monthly_reset, now_ms));
+    }
+    if (json_candidates) g_ptr_array_unref(json_candidates);
+    g_free(document);
+    return provider;
+}
+
+static char *opencode_go_config_string(const CodexBarProviderConfig *config, const char *key) {
+    json_object *value = NULL;
+    if (!config || !config->raw || !json_object_object_get_ex(config->raw, key, &value) ||
+        !json_object_is_type(value, json_type_string)) {
+        return NULL;
+    }
+    const char *raw = json_object_get_string(value);
+    if (!raw || strlen(raw) > 16384 || !g_utf8_validate(raw, -1, NULL)) return NULL;
+    char *clean = g_strdup(raw);
+    g_strstrip(clean);
+    for (const unsigned char *cursor = (const unsigned char *)clean; *cursor; cursor++) {
+        if (*cursor < 32 || *cursor == 127) {
+            g_free(clean);
+            return NULL;
+        }
+    }
+    if (clean[0]) return clean;
+    g_free(clean);
+    return NULL;
+}
+
+static char *opencode_go_cookie(const CodexBarProviderConfig *config) {
+    char *cookie = opencode_go_config_string(config, "cookieHeader");
+    if (!cookie) cookie = opencode_go_config_string(config, "manualCookieHeader");
+    if (!cookie) {
+        const char *raw = g_getenv("OPENCODE_GO_COOKIE");
+        if (!raw) raw = g_getenv("OPENCODEGO_COOKIE");
+        if (raw) {
+            CodexBarProviderConfig environment = {0};
+            environment.raw = json_object_new_object();
+            json_object_object_add(environment.raw, "cookieHeader", json_object_new_string(raw));
+            cookie = opencode_go_config_string(&environment, "cookieHeader");
+            json_object_put(environment.raw);
+        }
+    }
+    return cookie;
+}
+
+static char *opencode_go_workspace(const CodexBarProviderConfig *config) {
+    char *raw = opencode_go_config_string(config, "workspaceID");
+    if (!raw) raw = g_strdup(g_getenv("CODEXBAR_OPENCODEGO_WORKSPACE_ID"));
+    if (!raw) return NULL;
+    GRegex *regex = g_regex_new("wrk_[A-Za-z0-9]+", 0, 0, NULL);
+    GMatchInfo *match = NULL;
+    char *workspace = regex && g_regex_match(regex, raw, 0, &match) ? g_match_info_fetch(match, 0) : NULL;
+    if (match) g_match_info_free(match);
+    if (regex) g_regex_unref(regex);
+    g_free(raw);
+    return workspace;
+}
+
+static CodexBarHttpResponse *opencode_go_send(const CodexBarHttpRequest *request,
+                                              CodexBarOpenCodeGoTransport transport,
+                                              GError **error) {
+    if (request->cancellable && g_cancellable_set_error_if_cancelled(request->cancellable, error)) return NULL;
+    CodexBarHttpResponse *response = transport(request, error);
+    if (request->cancellable && g_cancellable_is_cancelled(request->cancellable)) {
+        codexbar_http_response_free(response);
+        if (error && *error) g_clear_error(error);
+        g_cancellable_set_error_if_cancelled(request->cancellable, error);
+        return NULL;
+    }
+    if (!response && error && !*error) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "OpenCode Go request failed");
+    }
+    return response;
+}
+
+static char *opencode_go_discover_workspace(const char *cookie,
+                                            CodexBarOpenCodeGoTransport transport,
+                                            GCancellable *cancellable,
+                                            GError **error) {
+    char *instance = g_uuid_string_random();
+    char *server_instance = g_strconcat("server-fn:", instance, NULL);
+    g_free(instance);
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Cookie", cookie},
+        {"X-Server-Id", OPENCODE_GO_WORKSPACES_SERVER_ID},
+        {"X-Server-Instance", server_instance},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36"},
+        {"Origin", "https://opencode.ai"},
+        {"Referer", "https://opencode.ai"},
+        {"Accept", "text/javascript, application/json;q=0.9, */*;q=0.8"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = "https://opencode.ai/_server?id=" OPENCODE_GO_WORKSPACES_SERVER_ID,
+        .method = "GET",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .timeout_seconds = 15,
+        .maximum_response_bytes = WEB_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = opencode_go_send(&request, transport, error);
+    g_free(server_instance);
+    if (!response) return NULL;
+    if (response->status != 200 || !g_utf8_validate(response->body, (gssize)response->body_length, NULL)) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "OpenCode Go workspace endpoint returned HTTP %ld",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    char *body = g_strndup(response->body, response->body_length);
+    codexbar_http_response_free(response);
+    GRegex *regex = g_regex_new("wrk_[A-Za-z0-9]+", 0, 0, NULL);
+    GMatchInfo *match = NULL;
+    char *workspace = regex && g_regex_match(regex, body, 0, &match) ? g_match_info_fetch(match, 0) : NULL;
+    if (match) g_match_info_free(match);
+    if (regex) g_regex_unref(regex);
+    g_free(body);
+    if (!workspace) g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                        "OpenCode Go workspace response is missing workspace id");
+    return workspace;
+}
+
+static CodexBarProvider *opencode_go_fetch_web(const CodexBarProviderConfig *config,
+                                               CodexBarOpenCodeGoTransport transport,
+                                               GCancellable *cancellable,
+                                               gint64 now_ms,
+                                               GError **error) {
+    char *cookie = opencode_go_cookie(config);
+    if (!cookie) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "OpenCode Go web session is missing; configure cookieHeader");
+        return NULL;
+    }
+    char *workspace = opencode_go_workspace(config);
+    if (!workspace) workspace = opencode_go_discover_workspace(cookie, transport, cancellable, error);
+    if (!workspace) {
+        g_free(cookie);
+        return NULL;
+    }
+    char *url = g_strdup_printf("https://opencode.ai/workspace/%s/go", workspace);
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Cookie", cookie},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36"},
+        {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .timeout_seconds = 15,
+        .maximum_response_bytes = WEB_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = opencode_go_send(&request, transport, error);
+    g_free(url);
+    g_free(workspace);
+    g_free(cookie);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "OpenCode Go usage page returned HTTP %ld",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_opencode_go_parse_web_usage(
+        response->body, response->body_length, now_ms, error);
+    codexbar_http_response_free(response);
+    return provider;
+}
+
+CodexBarProvider *codexbar_opencode_go_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarOpenCodeGoTransport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "web")) return opencode_go_fetch_web(config, transport, cancellable, now_ms, error);
+    if (!g_str_equal(mode, "auto")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "OpenCode Go source '%s' is unsupported", mode);
+        return NULL;
+    }
+    char *workspace = opencode_go_workspace(config);
+    char *cookie = opencode_go_cookie(config);
+    gboolean web_first = workspace != NULL;
+    g_free(workspace);
+    if (web_first) {
+        g_free(cookie);
+        return opencode_go_fetch_web(config, transport, cancellable, now_ms, error);
+    }
+    GError *local_error = NULL;
+    CodexBarProvider *provider = codexbar_opencode_go_fetch_from_home(g_get_home_dir(), now_ms, &local_error);
+    if (provider || !cookie) {
+        g_free(cookie);
+        if (provider) g_clear_error(&local_error);
+        else if (error) *error = local_error;
+        else g_clear_error(&local_error);
+        return provider;
+    }
+    g_free(cookie);
+    g_clear_error(&local_error);
+    return opencode_go_fetch_web(config, transport, cancellable, now_ms, error);
+}
+
+CodexBarProvider *codexbar_opencode_go_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_opencode_go_fetch_for_source_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
 }
 
 CodexBarProvider *codexbar_opencode_go_fetch_from_home(

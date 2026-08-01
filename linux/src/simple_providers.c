@@ -6,6 +6,31 @@
 #include <math.h>
 #include <string.h>
 
+#define SIMPLE_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
+
+static gboolean json_whitespace(char character) {
+    return character == ' ' || character == '\t' || character == '\n' || character == '\r';
+}
+
+static json_object *parse_json_bytes(const char *json, size_t length) {
+    if (!json || length == 0 || length > G_MAXINT || length > SIMPLE_MAXIMUM_RESPONSE_BYTES ||
+        memchr(json, '\0', length) || !g_utf8_validate(json, (gssize)length, NULL)) {
+        return NULL;
+    }
+    json_tokener *tokener = json_tokener_new();
+    if (!tokener) return NULL;
+    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    json_object *root = json_tokener_parse_ex(tokener, json, (int)length);
+    enum json_tokener_error parse_error = json_tokener_get_error(tokener);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < length && json_whitespace(json[consumed])) consumed++;
+    gboolean valid = parse_error == json_tokener_success && root && consumed == length;
+    json_tokener_free(tokener);
+    if (valid) return root;
+    if (root) json_object_put(root);
+    return NULL;
+}
+
 static GQuark provider_error_quark(void) {
     return g_quark_from_static_string("codexbar-simple-provider-error");
 }
@@ -154,6 +179,148 @@ CodexBarProvider *codexbar_deepseek_parse(const char *json, GError **error) {
     CodexBarQuotaWindow *window = add_window(provider, "primary", "session");
     window->used_percent = balance > 0.0 ? 0.0 : 100.0;
     window->detail = g_strdup_printf("balance %.2f", balance);
+    json_object_put(root);
+    return provider;
+}
+
+typedef struct {
+    char *currency;
+    double paid;
+    double granted;
+} DeepSeekWalletTotal;
+
+static void deepseek_wallet_total_free(gpointer data) {
+    DeepSeekWalletTotal *total = data;
+    g_free(total->currency);
+    g_free(total);
+}
+
+static DeepSeekWalletTotal *deepseek_wallet_total(GPtrArray *totals, const char *currency) {
+    for (guint index = 0; index < totals->len; index++) {
+        DeepSeekWalletTotal *total = g_ptr_array_index(totals, index);
+        if (g_str_equal(total->currency, currency)) return total;
+    }
+    DeepSeekWalletTotal *total = g_new0(DeepSeekWalletTotal, 1);
+    total->currency = g_strdup(currency);
+    g_ptr_array_add(totals, total);
+    return total;
+}
+
+static gboolean deepseek_add_wallets(GPtrArray *totals,
+                                     json_object *wallets,
+                                     gboolean bonus,
+                                     GError **error) {
+    if (!wallets || !json_object_is_type(wallets, json_type_array)) {
+        g_set_error_literal(error, provider_error_quark(), 1, "DeepSeek platform balance response is malformed");
+        return FALSE;
+    }
+    size_t count = json_object_array_length(wallets);
+    for (size_t index = 0; index < count; index++) {
+        json_object *wallet = json_object_array_get_idx(wallets, index);
+        json_object *currency_value = NULL;
+        const char *currency = NULL;
+        double balance = 0;
+        if (!wallet || !json_object_is_type(wallet, json_type_object) ||
+            !json_object_object_get_ex(wallet, "currency", &currency_value) ||
+            !json_object_is_type(currency_value, json_type_string) ||
+            !(currency = json_object_get_string(currency_value)) || currency[0] == '\0' ||
+            !number_member(wallet, "balance", &balance) || balance < 0) {
+            g_set_error_literal(error, provider_error_quark(), 1, "DeepSeek platform balance response is malformed");
+            return FALSE;
+        }
+        DeepSeekWalletTotal *total = deepseek_wallet_total(totals, currency);
+        if (bonus) total->granted += balance;
+        else total->paid += balance;
+        if (!isfinite(total->paid) || !isfinite(total->granted)) {
+            g_set_error_literal(error, provider_error_quark(), 1, "DeepSeek platform balance response is malformed");
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+CodexBarProvider *codexbar_deepseek_parse_platform_balance(const char *json,
+                                                           size_t length,
+                                                           GError **error) {
+    json_object *root = parse_json_bytes(json, length);
+    json_object *data = NULL, *summary = NULL, *normal = NULL, *bonus = NULL;
+    json_object *code = root ? json_object_object_get(root, "code") : NULL;
+    json_object *biz_code = NULL;
+    if (code && json_object_get_int(code) != 0) {
+        int value = json_object_get_int(code);
+        json_object_put(root);
+        g_set_error(error,
+                    provider_error_quark(),
+                    value == 40002 || value == 40003 ? 6 : 1,
+                    "DeepSeek platform user summary returned code %d",
+                    value);
+        return NULL;
+    }
+    if (!root || !json_object_is_type(root, json_type_object) ||
+        !json_object_object_get_ex(root, "data", &data) || !json_object_is_type(data, json_type_object)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, provider_error_quark(), 1, "DeepSeek platform balance response is malformed");
+        return NULL;
+    }
+    biz_code = json_object_object_get(data, "biz_code");
+    if (biz_code && json_object_get_int(biz_code) != 0) {
+        int value = json_object_get_int(biz_code);
+        json_object_put(root);
+        g_set_error(error,
+                    provider_error_quark(),
+                    value == 40002 || value == 40003 ? 6 : 1,
+                    "DeepSeek platform user summary returned biz_code %d",
+                    value);
+        return NULL;
+    }
+    if (!json_object_object_get_ex(data, "biz_data", &summary) ||
+        !json_object_is_type(summary, json_type_object) ||
+        !json_object_object_get_ex(summary, "normal_wallets", &normal) ||
+        !json_object_object_get_ex(summary, "bonus_wallets", &bonus)) {
+        json_object_put(root);
+        g_set_error_literal(error, provider_error_quark(), 1, "DeepSeek platform balance response is malformed");
+        return NULL;
+    }
+    GPtrArray *totals = g_ptr_array_new_with_free_func(deepseek_wallet_total_free);
+    if (!deepseek_add_wallets(totals, normal, FALSE, error) ||
+        !deepseek_add_wallets(totals, bonus, TRUE, error)) {
+        g_ptr_array_free(totals, TRUE);
+        json_object_put(root);
+        return NULL;
+    }
+    DeepSeekWalletTotal *selected = NULL;
+    for (guint index = 0; index < totals->len; index++) {
+        DeepSeekWalletTotal *candidate = g_ptr_array_index(totals, index);
+        if (g_str_equal(candidate->currency, "USD") && candidate->paid + candidate->granted > 0) {
+            selected = candidate;
+            break;
+        }
+    }
+    for (guint index = 0; !selected && index < totals->len; index++) {
+        DeepSeekWalletTotal *candidate = g_ptr_array_index(totals, index);
+        if (candidate->paid + candidate->granted > 0) selected = candidate;
+    }
+    for (guint index = 0; !selected && index < totals->len; index++) {
+        DeepSeekWalletTotal *candidate = g_ptr_array_index(totals, index);
+        if (g_str_equal(candidate->currency, "USD")) selected = candidate;
+    }
+    if (!selected && totals->len > 0) selected = g_ptr_array_index(totals, 0);
+    const char *currency = selected ? selected->currency : "USD";
+    double paid = selected ? selected->paid : 0;
+    double granted = selected ? selected->granted : 0;
+    double total = paid + granted;
+    CodexBarProvider *provider = provider_new("deepseek");
+    g_free(provider->source);
+    provider->source = g_strdup("web");
+    add_balance(provider, "credits", "credits", total, currency);
+    CodexBarQuotaWindow *window = add_window(provider, "primary", "Balance");
+    window->used_percent = total > 0 ? 0 : 100;
+    const char *symbol = g_str_equal(currency, "CNY") ? "¥" : "$";
+    window->detail = total > 0
+                         ? g_strdup_printf("%s%.2f (Paid: %s%.2f / Granted: %s%.2f)",
+                                           symbol, total, symbol, paid, symbol, granted)
+                         : g_strdup_printf("%s0.00 — add credits at platform.deepseek.com", symbol);
+    g_ptr_array_free(totals, TRUE);
     json_object_put(root);
     return provider;
 }
@@ -425,6 +592,137 @@ static char *clean_token(const char *raw) {
     if (clean[0] != '\0') return clean;
     g_free(clean);
     return NULL;
+}
+
+static char *deepseek_config_string(const CodexBarProviderConfig *config, const char *key) {
+    json_object *value = NULL;
+    if (!config || !config->raw || !json_object_object_get_ex(config->raw, key, &value) ||
+        !json_object_is_type(value, json_type_string)) {
+        return NULL;
+    }
+    return clean_token(json_object_get_string(value));
+}
+
+static char *deepseek_api_token(const CodexBarProviderConfig *config) {
+    char *token = clean_token(config ? config->api_key : NULL);
+    if (!token) token = clean_token(g_getenv("DEEPSEEK_API_KEY"));
+    if (!token) token = clean_token(g_getenv("DEEPSEEK_KEY"));
+    return token;
+}
+
+static char *deepseek_platform_token(const CodexBarProviderConfig *config) {
+    char *token = deepseek_config_string(config, "platformToken");
+    if (!token) token = deepseek_config_string(config, "userToken");
+    if (!token) token = clean_token(g_getenv("DEEPSEEK_PLATFORM_TOKEN"));
+    if (!token) token = clean_token(g_getenv("DEEPSEEK_USER_TOKEN"));
+    return token;
+}
+
+static CodexBarProvider *deepseek_request(const char *url,
+                                          const char *token,
+                                          gboolean platform,
+                                          CodexBarSimpleProviderTransport transport,
+                                          GCancellable *cancellable,
+                                          GError **error) {
+    if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
+    char *authorization = g_strdup_printf("Bearer %s", token);
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Authorization", authorization},
+        {"Accept", "application/json"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .timeout_seconds = 15,
+        .maximum_response_bytes = SIMPLE_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = transport(&request, error);
+    g_free(authorization);
+    if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+        codexbar_http_response_free(response);
+        if (error && *error) g_clear_error(error);
+        g_cancellable_set_error_if_cancelled(cancellable, error);
+        return NULL;
+    }
+    if (!response) {
+        if (error && !*error) g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "DeepSeek request failed");
+        return NULL;
+    }
+    if (response->status != 200) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "DeepSeek %s endpoint returned HTTP %ld",
+                    platform ? "platform" : "balance",
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    CodexBarProvider *provider = platform
+                                     ? codexbar_deepseek_parse_platform_balance(
+                                           response->body, response->body_length, error)
+                                     : codexbar_deepseek_parse(response->body, error);
+    codexbar_http_response_free(response);
+    return provider;
+}
+
+CodexBarProvider *codexbar_deepseek_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarSimpleProviderTransport transport,
+    GCancellable *cancellable,
+    GError **error) {
+    g_return_val_if_fail(transport != NULL, NULL);
+    const char *mode = source && source[0] ? source : "auto";
+    if (!g_str_equal(mode, "auto") && !g_str_equal(mode, "api") && !g_str_equal(mode, "web")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "DeepSeek source '%s' is unsupported", mode);
+        return NULL;
+    }
+    char *api_token = deepseek_api_token(config);
+    gboolean use_api = g_str_equal(mode, "api") || (g_str_equal(mode, "auto") && api_token);
+    if (use_api) {
+        if (!api_token) {
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Missing DeepSeek API key");
+            return NULL;
+        }
+        CodexBarProvider *provider = deepseek_request(
+            "https://api.deepseek.com/user/balance", api_token, FALSE, transport, cancellable, error);
+        g_free(api_token);
+        return provider;
+    }
+    g_free(api_token);
+    char *platform_token = deepseek_platform_token(config);
+    if (!platform_token) {
+        g_set_error_literal(error,
+                            G_IO_ERROR,
+                            G_IO_ERROR_NOT_FOUND,
+                            "DeepSeek Platform session is missing; configure platformToken or DEEPSEEK_PLATFORM_TOKEN");
+        return NULL;
+    }
+    CodexBarProvider *provider = deepseek_request(
+        "https://platform.deepseek.com/api/v0/users/get_user_summary",
+        platform_token,
+        TRUE,
+        transport,
+        cancellable,
+        error);
+    g_free(platform_token);
+    return provider;
+}
+
+CodexBarProvider *codexbar_deepseek_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_deepseek_fetch_for_source_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, error);
 }
 
 static char *resolved_token(const char *primary, const char *secondary, const char *fallback) {
