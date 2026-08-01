@@ -162,12 +162,15 @@ static char *read_response(
     return NULL;
 }
 
-CodexBarProvider *codexbar_codex_fetch(GError **error) {
+CodexBarProvider *codexbar_codex_fetch_with_home(const char *home_path, GError **error) {
     const char *binary = g_getenv("CODEX_CLI_PATH");
     if (!binary || binary[0] == '\0') binary = "codex";
     const char *argv[] = {binary, "-s", "read-only", "-a", "untrusted", "app-server", NULL};
-    GSubprocess *process = g_subprocess_newv(
-        argv, G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE, error);
+    GSubprocessLauncher *launcher = g_subprocess_launcher_new(
+        G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE);
+    if (home_path) g_subprocess_launcher_setenv(launcher, "CODEX_HOME", home_path, TRUE);
+    GSubprocess *process = g_subprocess_launcher_spawnv(launcher, argv, error);
+    g_object_unref(launcher);
     if (!process) return NULL;
     GOutputStream *input = g_subprocess_get_stdin_pipe(process);
     GInputStream *raw_output = g_subprocess_get_stdout_pipe(process);
@@ -205,4 +208,8 @@ CodexBarProvider *codexbar_codex_fetch(GError **error) {
     g_object_unref(output);
     g_object_unref(process);
     return provider;
+}
+
+CodexBarProvider *codexbar_codex_fetch(GError **error) {
+    return codexbar_codex_fetch_with_home(NULL, error);
 }

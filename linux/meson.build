@@ -26,6 +26,7 @@ core_sources = files(
   'src/cli_diagnose.c',
   'src/cli_guard.c',
   'src/cli_hooks.c',
+  'src/cli_managed_codex.c',
   'src/cli_sessions.c',
   'src/cli_serve.c',
   'src/cli_usage.c',
@@ -45,6 +46,7 @@ core_sources = files(
   'src/kilo.c',
   'src/kimi.c',
   'src/local_providers.c',
+  'src/managed_codex.c',
   'src/model.c',
   'src/neuralwatt.c',
   'src/openai_api.c',
@@ -121,6 +123,17 @@ refresh_test = executable(
   dependencies: [glib_dep],
 )
 test('codexbar-linux-refresh', refresh_test, env: normalized_test_env)
+
+managed_codex_test = executable(
+  'codexbar-linux-managed-codex-tests',
+  files('tests/test_managed_codex.c', 'src/managed_codex.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, json_dep],
+)
+test('codexbar-linux-managed-codex', managed_codex_test, env: normalized_test_env)
+
+managed_codex_cli_test = find_program('tests/test_managed_codex_cli.sh')
+test('codexbar-linux-managed-codex-cli', managed_codex_cli_test, args: [codexbar_linux])
 
 serialization_test = executable(
   'codexbar-linux-usage-serialization-tests',

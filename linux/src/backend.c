@@ -19,6 +19,7 @@
 #include "kilo.h"
 #include "kimi.h"
 #include "local_providers.h"
+#include "managed_codex.h"
 #include "neuralwatt.h"
 #include "openai_api.h"
 #include "opencode_go.h"
@@ -459,6 +460,41 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     return provider ? provider : provider_error(config, error_source, error);
 }
 
+static gboolean append_managed_codex_accounts(CodexBarSnapshot *snapshot,
+                                              const CodexBarProviderConfig *config,
+                                              GCancellable *cancellable,
+                                              GError **fatal_error) {
+    GError *error = NULL;
+    CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(FALSE, &error);
+    if (!store) {
+        g_ptr_array_add(snapshot->providers, provider_error(config, "cli", error));
+        return TRUE;
+    }
+    GPtrArray *accounts = codexbar_managed_codex_accounts(store);
+    for (guint index = 0; index < accounts->len; index++) {
+        if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, fatal_error)) {
+            codexbar_managed_codex_store_free(store);
+            return FALSE;
+        }
+        CodexBarManagedCodexAccount *account = g_ptr_array_index(accounts, index);
+        error = NULL;
+        CodexBarProvider *provider = codexbar_codex_fetch_with_home(account->managed_home_path, &error);
+        if (!provider) provider = provider_error(config, "cli", error);
+        g_free(provider->account);
+        provider->account = g_strdup(account->email);
+        if (!provider->identity) provider->identity = g_new0(CodexBarProviderIdentity, 1);
+        g_free(provider->identity->account_id);
+        g_free(provider->identity->organization);
+        g_free(provider->identity->login_method);
+        provider->identity->account_id = g_strdup(account->provider_account_id);
+        provider->identity->organization = g_strdup(account->workspace_label);
+        provider->identity->login_method = g_strdup("Managed Codex account");
+        g_ptr_array_add(snapshot->providers, provider);
+    }
+    codexbar_managed_codex_store_free(store);
+    return TRUE;
+}
+
 CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
     return codexbar_backend_fetch_with_cancellable(NULL, error);
 }
@@ -493,6 +529,12 @@ CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancella
             return NULL;
         }
         g_ptr_array_add(snapshot->providers, provider);
+        if (g_str_equal(provider_config->id, "codex") &&
+            !append_managed_codex_accounts(snapshot, provider_config, cancellable, error)) {
+            codexbar_snapshot_free(snapshot);
+            codexbar_config_free(config);
+            return NULL;
+        }
     }
     codexbar_config_free(config);
     return snapshot;
@@ -509,6 +551,9 @@ CodexBarSnapshot *codexbar_backend_fetch_all(GError **error) {
         const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_at(index);
         CodexBarProviderConfig *provider_config = codexbar_config_provider(config, descriptor->id);
         g_ptr_array_add(snapshot->providers, fetch_provider(provider_config, NULL));
+        if (g_str_equal(provider_config->id, "codex")) {
+            append_managed_codex_accounts(snapshot, provider_config, NULL, NULL);
+        }
     }
     codexbar_config_free(config);
     return snapshot;
