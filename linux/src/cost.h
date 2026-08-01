@@ -55,7 +55,6 @@ typedef struct {
     gint64 total_tokens;
     gboolean cost_known;
     double total_cost_usd;
-    guint skipped_fork_files;
 } CodexBarCostReport;
 
 CodexBarCostReport *codexbar_cost_scan(const char *provider, int history_days, GError **error);

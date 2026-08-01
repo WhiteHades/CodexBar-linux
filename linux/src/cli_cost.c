@@ -153,11 +153,6 @@ static void print_report_text(const CodexBarCostReport *report, gboolean group_p
     }
     puts(codex ? "Not a subscription bill or plan value; local usage times public API prices"
                : "Estimate from local usage and public API prices");
-    if (report->skipped_fork_files > 0) {
-        fprintf(stderr,
-                "Warning: skipped %u fork or subagent log files until lineage accounting is available in C.\n",
-                report->skipped_fork_files);
-    }
 }
 
 static json_object *day_json(const CodexBarCostDay *day) {
@@ -308,7 +303,6 @@ static json_object *report_json(const CodexBarCostReport *report) {
                            "totalCost",
                            report->cost_known ? cost_json_value(report->total_cost_usd) : NULL);
     json_object_object_add(object, "totals", totals);
-    json_object_object_add(object, "skippedForkFiles", json_object_new_int64(report->skipped_fork_files));
     return object;
 }
 

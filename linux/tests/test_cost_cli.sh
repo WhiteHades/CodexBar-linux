@@ -26,6 +26,20 @@ cat >"$codex/previous.jsonl" <<EOF
 {"timestamp":"$previous_timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20},"total_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20}}}}
 EOF
 
+cat >"$codex/subagent.jsonl" <<EOF
+{"timestamp":"$timestamp","type":"session_meta","payload":{"id":"session-subagent","cwd":"$work/project","forked_from_id":"session-1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"session-1"}}}}}
+{"timestamp":"$timestamp","type":"turn_context","payload":{"model":"gpt-5"}}
+{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}}}
+{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":50,"cached_input_tokens":10,"output_tokens":5},"total_token_usage":{"input_tokens":150,"cached_input_tokens":30,"output_tokens":15}}}}
+EOF
+
+cat >"$codex/fork.jsonl" <<EOF
+{"timestamp":"$timestamp","type":"session_meta","payload":{"id":"session-fork","cwd":"$work/project","forked_from_id":"session-1","parent_thread_id":"session-1","source":"cli"}}
+{"timestamp":"$timestamp","type":"turn_context","payload":{"model":"gpt-5"}}
+{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100}}}}
+{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":50,"cached_input_tokens":10,"output_tokens":5},"total_token_usage":{"input_tokens":1050,"cached_input_tokens":210,"output_tokens":105}}}}
+EOF
+
 cat >"$claude/session.jsonl" <<EOF
 {"timestamp":"$timestamp","type":"assistant","requestId":"request-1","message":{"id":"message-1","model":"claude-sonnet-4-6","usage":{"input_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":5,"output_tokens":2}}}
 {"timestamp":"$timestamp","type":"assistant","requestId":"request-1","message":{"id":"message-1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"cache_read_input_tokens":20,"cache_creation_input_tokens":10,"output_tokens":5}}}
@@ -34,7 +48,7 @@ EOF
 output=$(CODEXBAR_COST_CODEX_ROOT="$codex" CODEXBAR_COST_CLAUDE_ROOT="$work/claude" \
   "$binary" cost --provider codex --format json)
 case "$output" in
-  '[{"provider":"codex"'*'"sessionTokens":1650'*'"sessionCostUSD":0.0030375'*'"models":[{"id":"gpt-5"'*'"rawAliases":[" OpenAI\/GPT-5 ","gpt-5"]'*'"reasoningTokens":60'*'"totalTokens":1650'*'"sessionReferences":1'*'"pricedTokens":1650'*'"kind":"new"'*'"id":"gpt-5-mini"'*'"previousTotalTokens":100'*'"kind":"ended"'*'"activeModelCount":1'*'"skippedForkFiles":0'*) ;;
+  '[{"provider":"codex"'*'"sessionTokens":1870'*'"sessionCostUSD":0.0034425'*'"models":[{"id":"gpt-5"'*'"rawAliases":[" OpenAI\/GPT-5 ","gpt-5"]'*'"reasoningTokens":60'*'"totalTokens":1870'*'"sessionReferences":3'*'"pricedTokens":1870'*'"kind":"new"'*'"id":"gpt-5-mini"'*'"previousTotalTokens":100'*'"kind":"ended"'*'"activeModelCount":1'*) ;;
   *)
     printf 'unexpected Codex cost output: %s\n' "$output" >&2
     exit 1
@@ -43,13 +57,13 @@ esac
 
 output=$(CODEXBAR_COST_CODEX_ROOT="$codex" "$binary" cost --provider codex --group-by model)
 case "$output" in
-  *'Models (Last 30 days):'*'gpt-5: $0.0030 known, 1.6K tokens, 1 session refs'*) ;;
+  *'Models (Last 30 days):'*'gpt-5: $0.0034 known, 1.9K tokens, 3 session refs'*) ;;
   *) printf 'unexpected model output: %s\n' "$output" >&2; exit 1 ;;
 esac
 
 output=$(CODEXBAR_COST_CODEX_ROOT="$codex" "$binary" cost --provider codex --group-by project)
 case "$output" in
-  *'Projects (Last 30 days):'*'project: $0.0030, 1.6K tokens'*"$work/project"*) ;;
+  *'Projects (Last 30 days):'*'project: $0.0034, 1.9K tokens'*"$work/project"*) ;;
   *)
     printf 'unexpected project output: %s\n' "$output" >&2
     exit 1

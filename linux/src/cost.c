@@ -692,6 +692,7 @@ typedef struct {
     char *project;
     char *session_id;
     gboolean forked;
+    gboolean independent_fork;
     gboolean has_counted;
     TokenTotals counted;
     gboolean has_baseline;
@@ -734,11 +735,23 @@ static gboolean codex_line(json_object *object, const char *path, gpointer user_
             file->session_id = g_strdup(session_id);
         }
         if (string_field(payload, "forked_from_id") || string_field(payload, "forkedFromId") ||
-            string_field(payload, "parent_session_id") || string_field(payload, "parentSessionId")) {
+            string_field(payload, "parent_session_id") || string_field(payload, "parentSessionId") ||
+            string_field(payload, "parent_thread_id") || string_field(payload, "parentThreadId")) {
             file->forked = TRUE;
         }
-        const char *source = string_field(payload, "source");
-        if (source && g_ascii_strcasecmp(source, "subagent") == 0) file->forked = TRUE;
+        json_object *source_value = object_field(payload, "source");
+        const char *source = source_value && json_object_is_type(source_value, json_type_string)
+                                 ? json_object_get_string(source_value)
+                                 : NULL;
+        gboolean subagent = source && g_ascii_strcasecmp(source, "subagent") == 0;
+        if (source_value && json_object_is_type(source_value, json_type_object)) {
+            json_object *nested = NULL;
+            subagent = json_object_object_get_ex(source_value, "subagent", &nested);
+        }
+        if (subagent) {
+            file->forked = TRUE;
+            file->independent_fork = TRUE;
+        }
         return TRUE;
     }
     if (g_strcmp0(type, "turn_context") == 0) {
@@ -756,7 +769,6 @@ static gboolean codex_line(json_object *object, const char *path, gpointer user_
     if (g_strcmp0(type, "event_msg") != 0 || g_strcmp0(string_field(payload, "type"), "token_count") != 0) {
         return TRUE;
     }
-    if (file->forked) return TRUE;
     char *day = timestamp_day(string_field(object, "timestamp"));
     if (!day || !day_in_range(day, file->scan->since, file->scan->report->today)) {
         g_free(day);
@@ -784,6 +796,15 @@ static gboolean codex_line(json_object *object, const char *path, gpointer user_
         file->interleaved = TRUE;
     }
     TokenTotals baseline = file->has_watermark ? file->watermark : (file->has_baseline ? file->baseline : (TokenTotals){0});
+    if (file->forked && !file->independent_fork && !has_last) {
+        if (has_total) {
+            remember_totals(file, total);
+            file->baseline = total;
+            file->has_baseline = TRUE;
+        }
+        g_free(day);
+        return TRUE;
+    }
     TokenTotals delta = {0};
     if (has_total && file->interleaved) {
         TokenTotals counted = file->has_counted ? file->counted : (TokenTotals){0};
@@ -853,7 +874,6 @@ static gboolean scan_codex_file(const char *path, gpointer user_data, GError **e
         .seen = g_array_new(FALSE, FALSE, sizeof(TokenTotals)),
     };
     gboolean result = scan_jsonl_file(path, codex_line, &file, error);
-    if (file.forked) scan->report->skipped_fork_files++;
     g_array_unref(file.seen);
     g_free(file.model);
     g_free(file.project);
