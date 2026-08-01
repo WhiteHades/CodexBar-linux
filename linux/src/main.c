@@ -2,6 +2,7 @@
 #include "cli_cache.h"
 #include "cli_cards.h"
 #include "cli_config.h"
+#include "cli_cookie.h"
 #include "cli_cost.h"
 #include "cli_diagnose.h"
 #include "cli_guard.h"
@@ -29,6 +30,7 @@ static int print_usage(const char *program) {
     fprintf(stderr, "       %s diagnose --provider <name|all> --format json\n", program);
     fprintf(stderr, "       %s guard --provider <name> [--window session|weekly] [--min-remaining <percent>]\n", program);
     fprintf(stderr, "       %s hooks <list|enable|disable|test>\n", program);
+    fprintf(stderr, "       %s cookie refresh (--provider <name>|--all)\n", program);
     fprintf(stderr, "       %s <waybar|tui|status-item>\n", program);
     fprintf(stderr, "       %s config <validate|dump|providers|enable|disable|set-api-key>\n", program);
     fprintf(stderr, "       %s --version\n", program);
@@ -45,6 +47,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc >= 2 && strcmp(argv[1], "config") == 0) return codexbar_cli_config_run(argc - 2, argv + 2);
+    if (argc >= 2 && strcmp(argv[1], "cookie") == 0) return codexbar_cli_cookie_run(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "cards") == 0) return codexbar_cli_cards_run(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "cost") == 0) return codexbar_cli_cost_run(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "sessions") == 0) return codexbar_cli_sessions_run(argc - 2, argv + 2);
