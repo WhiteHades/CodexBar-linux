@@ -492,6 +492,9 @@ static json_object *pace_json(const CodexBarPace *pace) {
     if (pace->has_runout_probability) {
         json_object_object_add(object, "runOutProbability", json_object_new_double(pace->runout_probability));
     }
+    if (pace->has_speed_multiplier) {
+        json_object_object_add(object, "speedMultiplierToReset", json_object_new_double(pace->speed_multiplier));
+    }
     if (pace->summary) json_object_object_add(object, "summary", json_object_new_string(pace->summary));
     return object;
 }

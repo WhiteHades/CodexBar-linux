@@ -5,6 +5,7 @@
 #include "history.h"
 #include "hooks.h"
 #include "notifications.h"
+#include "pace.h"
 #include "provider_registry.h"
 #include "transitions.h"
 
@@ -885,6 +886,7 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
         dispatch_status_hook(runtime, hooks, request, fresh);
         codexbar_service_status_free(status);
     }
+    codexbar_pace_attach_snapshot(snapshot, g_get_real_time() / 1000);
     dispatch_snapshot_hooks(runtime, hooks, warnings, snapshot);
     if (!environment_flag("CODEXBAR_DISABLE_HISTORY")) {
         codexbar_history_store_record(runtime->history,

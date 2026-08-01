@@ -37,6 +37,8 @@ typedef struct {
     double eta_seconds;
     gboolean has_runout_probability;
     double runout_probability;
+    gboolean has_speed_multiplier;
+    double speed_multiplier;
     char *summary;
 } CodexBarPace;
 

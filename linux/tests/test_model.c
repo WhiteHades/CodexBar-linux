@@ -5,6 +5,7 @@
 #include "kimi.h"
 #include "model.h"
 #include "openrouter.h"
+#include "pace.h"
 #include "provider_registry.h"
 #include "proxy_providers.h"
 #include "render.h"
@@ -1838,6 +1839,74 @@ static void test_provider_registry(void) {
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }
 
+static void test_linear_pace_matches_upstream_thresholds(void) {
+    const gint64 now = 1800000000000LL;
+    CodexBarQuotaWindow *window = codexbar_quota_window_new("weekly", "Weekly");
+    window->usage_known = TRUE;
+    window->used_percent = 60;
+    window->has_window_minutes = TRUE;
+    window->window_minutes = 10080;
+    window->has_resets_at = TRUE;
+    window->resets_at_ms = now + 3 * 24 * 60 * 60 * 1000LL;
+    CodexBarPace *pace = codexbar_pace_calculate(window, now, 0);
+    g_assert_nonnull(pace);
+    g_assert_cmpfloat_with_epsilon(pace->expected_used_percent, 57.142857, 0.0001);
+    g_assert_cmpint(pace->stage, ==, CODEXBAR_PACE_SLIGHTLY_AHEAD);
+    g_assert_false(pace->will_last);
+    g_assert_true(pace->has_eta);
+    g_assert_cmpfloat_with_epsilon(pace->eta_seconds, 230400, 0.01);
+    g_assert_nonnull(strstr(pace->summary, "3% in deficit"));
+    codexbar_pace_free(pace);
+    codexbar_quota_window_free(window);
+
+    window = codexbar_quota_window_new("session", "5-hour");
+    window->usage_known = TRUE;
+    window->used_percent = 20;
+    window->has_window_minutes = TRUE;
+    window->window_minutes = 300;
+    window->has_resets_at = TRUE;
+    window->resets_at_ms = now + 60 * 60 * 1000LL;
+    pace = codexbar_pace_calculate(window, now, 0);
+    g_assert_nonnull(pace);
+    g_assert_cmpfloat_with_epsilon(pace->expected_used_percent, 80, 0.0001);
+    g_assert_cmpint(pace->stage, ==, CODEXBAR_PACE_FAR_BEHIND);
+    g_assert_true(pace->will_last);
+    g_assert_true(pace->has_speed_multiplier);
+    g_assert_cmpfloat_with_epsilon(pace->speed_multiplier, 16, 0.0001);
+    g_assert_nonnull(strstr(pace->summary, "1.5x headroom"));
+    codexbar_pace_free(pace);
+    codexbar_quota_window_free(window);
+}
+
+static void test_pace_snapshot_provider_rules(void) {
+    const gint64 now = 1800000000000LL;
+    CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
+    snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
+    CodexBarProvider *provider = codexbar_provider_new();
+    provider->provider = g_strdup("openrouter");
+    CodexBarQuotaWindow *session = codexbar_quota_window_new("session", "Session");
+    session->usage_known = TRUE;
+    session->used_percent = 40;
+    session->has_window_minutes = TRUE;
+    session->window_minutes = 300;
+    session->has_resets_at = TRUE;
+    session->resets_at_ms = now + 2 * 60 * 60 * 1000LL;
+    codexbar_provider_add_quota_window(provider, session);
+    CodexBarQuotaWindow *weekly = codexbar_quota_window_new("weekly", "Weekly");
+    weekly->usage_known = TRUE;
+    weekly->used_percent = 50;
+    weekly->has_window_minutes = TRUE;
+    weekly->window_minutes = 10080;
+    weekly->has_resets_at = TRUE;
+    weekly->resets_at_ms = now + 4 * 24 * 60 * 60 * 1000LL;
+    codexbar_provider_add_quota_window(provider, weekly);
+    g_ptr_array_add(snapshot->providers, provider);
+    codexbar_pace_attach_snapshot(snapshot, now);
+    g_assert_null(session->pace);
+    g_assert_nonnull(weekly->pace);
+    codexbar_snapshot_free(snapshot);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/usage-percent-display-normalization", test_usage_percent_display_normalization);
@@ -1871,5 +1940,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
     g_test_add_func("/provider/codex-source-planner", test_codex_source_planner);
     g_test_add_func("/provider/registry", test_provider_registry);
+    g_test_add_func("/pace/linear", test_linear_pace_matches_upstream_thresholds);
+    g_test_add_func("/pace/provider-rules", test_pace_snapshot_provider_rules);
     return g_test_run();
 }

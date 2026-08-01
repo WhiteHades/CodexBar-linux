@@ -56,6 +56,7 @@ core_sources = files(
   'src/openai_api.c',
   'src/opencode_go.c',
   'src/openrouter.c',
+  'src/pace.c',
   'src/process.c',
   'src/provider_registry.c',
   'src/proxy_providers.c',

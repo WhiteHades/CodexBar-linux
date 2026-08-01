@@ -417,6 +417,7 @@ static CodexBarPace *parse_pace(json_object *object) {
     pace->will_last = will_last;
     pace->has_eta = parse_number(object, "etaSeconds", &pace->eta_seconds);
     pace->has_runout_probability = parse_number(object, "runOutProbability", &pace->runout_probability);
+    pace->has_speed_multiplier = parse_number(object, "speedMultiplierToReset", &pace->speed_multiplier);
     pace->summary = duplicate_json_string(object, "summary");
     g_free(stage);
     return pace;
