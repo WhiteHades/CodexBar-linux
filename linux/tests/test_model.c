@@ -1555,6 +1555,9 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("mini-max")->native_provider, ==, CODEXBAR_NATIVE_MINIMAX);
     g_assert_cmpint(codexbar_provider_registry_find("bailian")->native_provider, ==, CODEXBAR_NATIVE_ALIBABA);
     g_assert_cmpint(codexbar_provider_registry_find("ark")->native_provider, ==, CODEXBAR_NATIVE_DOUBAO);
+    g_assert_cmpint(codexbar_provider_registry_find("factory")->native_provider, ==, CODEXBAR_NATIVE_FACTORY);
+    g_assert_cmpint(codexbar_provider_registry_find("gemini")->native_provider, ==, CODEXBAR_NATIVE_GEMINI);
+    g_assert_cmpint(codexbar_provider_registry_find("ollama")->native_provider, ==, CODEXBAR_NATIVE_OLLAMA);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }

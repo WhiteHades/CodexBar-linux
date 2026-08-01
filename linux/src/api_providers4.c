@@ -1,0 +1,1510 @@
+#include "api_providers4.h"
+
+#include <errno.h>
+#include <glib/gstdio.h>
+#include <json-c/json.h>
+#include <math.h>
+#include <string.h>
+#include <sys/stat.h>
+
+#define PROVIDER_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
+#define PROVIDER_MAXIMUM_CREDENTIAL_BYTES 16384U
+#define PROVIDER_TIMEOUT_SECONDS 15
+#define OLLAMA_TIMEOUT_SECONDS 20
+
+#define FACTORY_API_BASE "https://api.factory.ai"
+#define FACTORY_APP_BASE "https://app.factory.ai"
+#define GEMINI_CODE_ASSIST_URL "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+#define GEMINI_PROJECTS_URL "https://cloudresourcemanager.googleapis.com/v1/projects"
+#define GEMINI_QUOTA_URL "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
+#define GEMINI_REFRESH_URL "https://oauth2.googleapis.com/token"
+#define OLLAMA_TAGS_URL "https://ollama.com/api/tags"
+#define OLLAMA_VALIDATION_URL "https://ollama.com/api/web_search"
+
+static gboolean json_whitespace(char character) {
+    return character == ' ' || character == '\t' || character == '\n' || character == '\r';
+}
+
+static json_object *parse_json_document(const char *json, size_t length) {
+    if (!json || length == 0 || length > G_MAXINT || length > PROVIDER_MAXIMUM_RESPONSE_BYTES ||
+        !g_utf8_validate(json, (gssize)length, NULL) || memchr(json, '\0', length)) {
+        return NULL;
+    }
+    json_tokener *tokener = json_tokener_new();
+    if (!tokener) return NULL;
+    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    json_object *root = json_tokener_parse_ex(tokener, json, (int)length);
+    enum json_tokener_error parse_error = json_tokener_get_error(tokener);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < length && json_whitespace(json[consumed])) consumed++;
+    gboolean valid = parse_error == json_tokener_success && root && consumed == length;
+    json_tokener_free(tokener);
+    if (valid) return root;
+    if (root) json_object_put(root);
+    return NULL;
+}
+
+static json_object *object_member(json_object *object, const char *key) {
+    json_object *value = NULL;
+    return object && json_object_is_type(object, json_type_object) &&
+                   json_object_object_get_ex(object, key, &value)
+               ? value
+               : NULL;
+}
+
+static void strip_unicode_whitespace(char *value) {
+    char *start = value;
+    while (*start && g_unichar_isspace(g_utf8_get_char(start))) start = g_utf8_next_char(start);
+    char *end = value + strlen(value);
+    while (end > start) {
+        char *previous = g_utf8_find_prev_char(start, end);
+        if (!previous || !g_unichar_isspace(g_utf8_get_char(previous))) break;
+        end = previous;
+    }
+    size_t length = (size_t)(end - start);
+    memmove(value, start, length);
+    value[length] = '\0';
+}
+
+static char *clean_credential(const char *raw) {
+    if (!raw || !g_utf8_validate(raw, -1, NULL) || strlen(raw) > PROVIDER_MAXIMUM_CREDENTIAL_BYTES) return NULL;
+    char *value = g_strdup(raw);
+    strip_unicode_whitespace(value);
+    size_t length = strlen(value);
+    if (length >= 2 && ((value[0] == '\'' && value[length - 1] == '\'') ||
+                        (value[0] == '"' && value[length - 1] == '"'))) {
+        value[length - 1] = '\0';
+        memmove(value, value + 1, length - 1);
+        strip_unicode_whitespace(value);
+    }
+    for (const unsigned char *cursor = (const unsigned char *)value; *cursor; cursor++) {
+        if (*cursor < 33 || *cursor == 127) {
+            g_free(value);
+            return NULL;
+        }
+    }
+    if (value[0] != '\0') return value;
+    g_free(value);
+    return NULL;
+}
+
+static char *json_string(json_object *object, const char *key) {
+    json_object *value = object_member(object, key);
+    if (!value || !json_object_is_type(value, json_type_string)) return NULL;
+    const char *raw = json_object_get_string(value);
+    size_t length = (size_t)json_object_get_string_len(value);
+    if (!raw || memchr(raw, '\0', length) || !g_utf8_validate(raw, (gssize)length, NULL)) return NULL;
+    char *copy = g_strndup(raw, length);
+    strip_unicode_whitespace(copy);
+    if (copy[0] != '\0') return copy;
+    g_free(copy);
+    return NULL;
+}
+
+static gboolean json_number(json_object *value, double *result) {
+    if (!value || json_object_is_type(value, json_type_null) || json_object_is_type(value, json_type_boolean)) {
+        return FALSE;
+    }
+    double number = 0;
+    if (json_object_is_type(value, json_type_int) || json_object_is_type(value, json_type_double)) {
+        number = json_object_get_double(value);
+    } else if (json_object_is_type(value, json_type_string)) {
+        const char *raw = json_object_get_string(value);
+        size_t length = (size_t)json_object_get_string_len(value);
+        if (!raw || memchr(raw, '\0', length)) return FALSE;
+        char *copy = g_strndup(raw, length);
+        g_strstrip(copy);
+        char *end = NULL;
+        number = g_ascii_strtod(copy, &end);
+        gboolean valid = copy[0] != '\0' && end && *end == '\0' && isfinite(number);
+        g_free(copy);
+        if (!valid) return FALSE;
+    } else {
+        return FALSE;
+    }
+    if (!isfinite(number)) return FALSE;
+    *result = number;
+    return TRUE;
+}
+
+static gboolean object_number(json_object *object, const char *key, double *result) {
+    return json_number(object_member(object, key), result);
+}
+
+static gboolean object_boolean(json_object *object, const char *key, gboolean fallback) {
+    json_object *value = object_member(object, key);
+    return value && json_object_is_type(value, json_type_boolean) ? json_object_get_boolean(value) : fallback;
+}
+
+static gboolean parse_timestamp_ms(json_object *value, gint64 *result) {
+    double number = 0;
+    if (json_number(value, &number)) {
+        if (number <= 0 || number > (double)G_MAXINT64) return FALSE;
+        if (number < 1000000000000.0) number *= 1000.0;
+        if (number > (double)G_MAXINT64) return FALSE;
+        *result = (gint64)llround(number);
+        return TRUE;
+    }
+    if (!value || !json_object_is_type(value, json_type_string)) return FALSE;
+    const char *raw = json_object_get_string(value);
+    size_t length = (size_t)json_object_get_string_len(value);
+    if (!raw || memchr(raw, '\0', length)) return FALSE;
+    char *copy = g_strndup(raw, length);
+    GDateTime *date = g_date_time_new_from_iso8601(copy, NULL);
+    g_free(copy);
+    if (!date) return FALSE;
+    *result = g_date_time_to_unix(date) * 1000 + g_date_time_get_microsecond(date) / 1000;
+    g_date_time_unref(date);
+    return TRUE;
+}
+
+static gboolean check_cancelled(GCancellable *cancellable, GError **error) {
+    return cancellable && g_cancellable_set_error_if_cancelled(cancellable, error);
+}
+
+static CodexBarHttpResponse *send_request(const CodexBarHttpRequest *request,
+                                          CodexBarApiProviders4Transport transport,
+                                          GError **error) {
+    if (check_cancelled(request->cancellable, error)) return NULL;
+    CodexBarHttpResponse *response = transport(request, error);
+    if (request->cancellable && g_cancellable_is_cancelled(request->cancellable)) {
+        codexbar_http_response_free(response);
+        if (error && *error) g_clear_error(error);
+        g_cancellable_set_error_if_cancelled(request->cancellable, error);
+        return NULL;
+    }
+    if (!response && error && !*error) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Provider network request failed");
+    }
+    return response;
+}
+
+static CodexBarProvider *provider_new(const char *id, gint64 now_ms) {
+    CodexBarProvider *provider = codexbar_provider_new();
+    provider->provider = g_strdup(id);
+    provider->source = g_strdup("api");
+    provider->has_updated_at = TRUE;
+    provider->updated_at_ms = now_ms;
+    return provider;
+}
+
+static CodexBarQuotaWindow *add_window(CodexBarProvider *provider,
+                                       const char *id,
+                                       const char *title,
+                                       double used_percent,
+                                       gint64 window_minutes,
+                                       gint64 resets_at_ms,
+                                       const char *detail) {
+    CodexBarQuotaWindow *window = codexbar_quota_window_new(id, title);
+    window->usage_known = TRUE;
+    window->used_percent = CLAMP(used_percent, 0.0, 100.0);
+    if (window_minutes > 0) {
+        window->has_window_minutes = TRUE;
+        window->window_minutes = window_minutes;
+    }
+    if (resets_at_ms > 0) {
+        window->has_resets_at = TRUE;
+        window->resets_at_ms = resets_at_ms;
+    }
+    window->detail = g_strdup(detail);
+    codexbar_provider_add_quota_window(provider, window);
+    return window;
+}
+
+static char *factory_dotenv_api_key(void) {
+    const char *home = g_getenv("HOME");
+    if (!home || home[0] == '\0') return NULL;
+    char *path = g_build_filename(home, ".factory", ".env", NULL);
+    GStatBuf status;
+    if (g_stat(path, &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0 ||
+        (guint64)status.st_size > PROVIDER_MAXIMUM_RESPONSE_BYTES) {
+        g_free(path);
+        return NULL;
+    }
+    char *contents = NULL;
+    gsize length = 0;
+    gboolean loaded = g_file_get_contents(path, &contents, &length, NULL);
+    g_free(path);
+    if (!loaded || length == 0 || length > PROVIDER_MAXIMUM_RESPONSE_BYTES) {
+        g_free(contents);
+        return NULL;
+    }
+    char *result = NULL;
+    char **lines = g_strsplit(contents, "\n", -1);
+    for (size_t index = 0; lines[index] && !result; index++) {
+        char *line = g_strstrip(lines[index]);
+        if (line[0] == '\0' || line[0] == '#') continue;
+        if (g_str_has_prefix(line, "export ")) line = g_strstrip(line + strlen("export "));
+        char *separator = strchr(line, '=');
+        if (!separator) continue;
+        *separator = '\0';
+        if (!g_str_equal(g_strstrip(line), "FACTORY_API_KEY")) continue;
+        result = clean_credential(separator + 1);
+    }
+    g_strfreev(lines);
+    g_free(contents);
+    return result;
+}
+
+static char *factory_api_key(const CodexBarProviderConfig *config) {
+    char *key = clean_credential(config ? config->api_key : NULL);
+    if (!key) key = clean_credential(g_getenv("FACTORY_API_KEY"));
+    if (!key) key = factory_dotenv_api_key();
+    return key;
+}
+
+gboolean codexbar_factory_has_api_key(const CodexBarProviderConfig *config) {
+    char *key = factory_api_key(config);
+    gboolean present = key != NULL;
+    g_free(key);
+    return present;
+}
+
+static void factory_add_identity(CodexBarProvider *provider, json_object *auth) {
+    json_object *organization = object_member(auth, "organization");
+    json_object *subscription = object_member(organization, "subscription");
+    json_object *orb = object_member(subscription, "orbSubscription");
+    json_object *plan_object = object_member(orb, "plan");
+    char *plan = json_string(plan_object, "name");
+    char *tier = json_string(subscription, "factoryTier");
+    char *organization_name = json_string(organization, "name");
+    GString *method = g_string_new(NULL);
+    if (tier) {
+        char *title = g_ascii_strdown(tier, -1);
+        title[0] = g_ascii_toupper(title[0]);
+        g_string_append_printf(method, "Factory %s", title);
+        g_free(title);
+    }
+    char *lower_plan = plan ? g_ascii_strdown(plan, -1) : NULL;
+    if (plan && !strstr(lower_plan, "factory")) {
+        if (method->len > 0) g_string_append(method, " - ");
+        g_string_append(method, plan);
+    }
+    provider->plan = plan ? g_strdup(plan) : NULL;
+    if (method->len > 0 || organization_name) {
+        provider->identity = g_new0(CodexBarProviderIdentity, 1);
+        provider->identity->organization = g_strdup(organization_name);
+        provider->identity->login_method = method->len > 0 ? g_strdup(method->str) : NULL;
+    }
+    g_string_free(method, TRUE);
+    g_free(lower_plan);
+    g_free(organization_name);
+    g_free(tier);
+    g_free(plan);
+}
+
+static double factory_legacy_percent(json_object *pool) {
+    double used = 0;
+    double allowance = 0;
+    double ratio = 0;
+    gboolean has_used = object_number(pool, "userTokens", &used);
+    gboolean has_allowance = object_number(pool, "totalAllowance", &allowance);
+    gboolean has_ratio = object_number(pool, "usedRatio", &ratio);
+    const double unlimited_threshold = 1000000000000.0;
+    if (has_ratio && !(ratio == 0 && has_used && used > 0 && has_allowance && allowance > 0 &&
+                       allowance <= unlimited_threshold)) {
+        if (ratio >= -0.001 && ratio <= 1.001) return CLAMP(ratio * 100.0, 0.0, 100.0);
+        if ((!has_allowance || allowance <= 0 || allowance > unlimited_threshold) && ratio >= -0.1 &&
+            ratio <= 100.1) {
+            return CLAMP(ratio, 0.0, 100.0);
+        }
+    }
+    if (has_allowance && allowance > unlimited_threshold) return CLAMP(used / 100000000.0 * 100.0, 0.0, 100.0);
+    return has_used && has_allowance && allowance > 0 ? CLAMP(used / allowance * 100.0, 0.0, 100.0) : 0;
+}
+
+static gboolean factory_parse_roots(const char *auth_json,
+                                    size_t auth_length,
+                                    const char *data_json,
+                                    size_t data_length,
+                                    const char *kind,
+                                    json_object **auth,
+                                    json_object **data,
+                                    GError **error) {
+    *auth = parse_json_document(auth_json, auth_length);
+    *data = parse_json_document(data_json, data_length);
+    if (*auth && json_object_is_type(*auth, json_type_object) && *data &&
+        json_object_is_type(*data, json_type_object)) {
+        return TRUE;
+    }
+    if (*auth) json_object_put(*auth);
+    if (*data) json_object_put(*data);
+    *auth = NULL;
+    *data = NULL;
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Factory %s response is malformed", kind);
+    return FALSE;
+}
+
+CodexBarProvider *codexbar_factory_parse_legacy_usage(const char *auth_json,
+                                                      size_t auth_length,
+                                                      const char *usage_json,
+                                                      size_t usage_length,
+                                                      gint64 now_ms,
+                                                      GError **error) {
+    json_object *auth = NULL;
+    json_object *root = NULL;
+    if (!factory_parse_roots(auth_json, auth_length, usage_json, usage_length, "usage", &auth, &root, error)) {
+        return NULL;
+    }
+    json_object *usage = object_member(root, "usage");
+    if (usage && !json_object_is_type(usage, json_type_object)) usage = NULL;
+    json_object *standard = object_member(usage, "standard");
+    json_object *premium = object_member(usage, "premium");
+    gint64 resets_at_ms = 0;
+    parse_timestamp_ms(object_member(usage, "endDate"), &resets_at_ms);
+
+    CodexBarProvider *provider = provider_new("factory", now_ms);
+    provider->explicit_quota_slots = TRUE;
+    factory_add_identity(provider, auth);
+    add_window(provider, "primary", "Standard", factory_legacy_percent(standard), 0, resets_at_ms, NULL);
+    add_window(provider, "secondary", "Premium", factory_legacy_percent(premium), 0, resets_at_ms, NULL);
+    json_object_put(root);
+    json_object_put(auth);
+    return provider;
+}
+
+static gboolean factory_add_billing_window(CodexBarProvider *provider,
+                                           json_object *pool,
+                                           const char *key,
+                                           const char *id,
+                                           const char *title,
+                                           gint64 minutes,
+                                           gint64 now_ms) {
+    json_object *window = object_member(pool, key);
+    if (!window || !json_object_is_type(window, json_type_object)) return FALSE;
+    double used_percent = 0;
+    if (!object_number(window, "usedPercent", &used_percent)) return FALSE;
+    gint64 reset_ms = 0;
+    double seconds_remaining = 0;
+    gboolean has_seconds = object_number(window, "secondsRemaining", &seconds_remaining);
+    if (has_seconds && seconds_remaining > 0 &&
+        seconds_remaining <= (double)(G_MAXINT64 - now_ms) / 1000.0) {
+        reset_ms = now_ms + (gint64)llround(seconds_remaining * 1000.0);
+    } else {
+        gint64 end_ms = 0;
+        if (parse_timestamp_ms(object_member(window, "windowEnd"), &end_ms) && end_ms > now_ms) reset_ms = end_ms;
+        if (object_member(window, "windowEnd") && !has_seconds && reset_ms == 0) used_percent = 0;
+    }
+    add_window(provider, id, title, used_percent, minutes, reset_ms, NULL);
+    return TRUE;
+}
+
+static gboolean factory_pool_has_usage_data(json_object *pool) {
+    const char *keys[] = {"fiveHour", "weekly", "monthly"};
+    for (size_t index = 0; index < G_N_ELEMENTS(keys); index++) {
+        json_object *window = object_member(pool, keys[index]);
+        double used_percent = 0;
+        if (object_number(window, "usedPercent", &used_percent) && used_percent > 0) return TRUE;
+        if (object_member(window, "windowEnd") || object_member(window, "secondsRemaining")) return TRUE;
+    }
+    return FALSE;
+}
+
+CodexBarProvider *codexbar_factory_parse_billing_limits(const char *auth_json,
+                                                        size_t auth_length,
+                                                        const char *limits_json,
+                                                        size_t limits_length,
+                                                        gint64 now_ms,
+                                                        GError **error) {
+    json_object *auth = NULL;
+    json_object *root = NULL;
+    if (!factory_parse_roots(auth_json, auth_length, limits_json, limits_length, "billing limits", &auth, &root,
+                             error)) {
+        return NULL;
+    }
+    json_object *limits = object_member(root, "limits");
+    json_object *standard = object_member(limits, "standard");
+    if (!object_boolean(root, "usesTokenRateLimitsBilling", FALSE) || !standard ||
+        !json_object_is_type(standard, json_type_object)) {
+        json_object_put(root);
+        json_object_put(auth);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Factory billing limits are unavailable");
+        return NULL;
+    }
+    CodexBarProvider *provider = provider_new("factory", now_ms);
+    provider->explicit_quota_slots = TRUE;
+    factory_add_identity(provider, auth);
+    char *overage_preference = json_string(root, "overagePreference");
+    if (overage_preference) {
+        if (!provider->identity) provider->identity = g_new0(CodexBarProviderIdentity, 1);
+        char *method = provider->identity->login_method
+                           ? g_strdup_printf("%s - Fallback: %s", provider->identity->login_method,
+                                             overage_preference)
+                           : g_strdup_printf("Fallback: %s", overage_preference);
+        g_free(provider->identity->login_method);
+        provider->identity->login_method = method;
+    }
+    gboolean valid = factory_add_billing_window(provider, standard, "fiveHour", "primary", "5h", 300, now_ms) &&
+                     factory_add_billing_window(provider, standard, "weekly", "secondary", "7-day", 10080,
+                                                now_ms) &&
+                     factory_add_billing_window(provider, standard, "monthly", "tertiary", "Monthly", 0,
+                                                now_ms);
+    json_object *core = object_member(limits, "core");
+    if (core && json_object_is_type(core, json_type_object) && factory_pool_has_usage_data(core)) {
+        gboolean core_valid = factory_add_billing_window(
+                                  provider, core, "fiveHour", "factory-core-5h", "Core 5h", 300, now_ms) &&
+                              factory_add_billing_window(
+                                  provider, core, "weekly", "factory-core-7d", "Core 7-day", 10080, now_ms) &&
+                              factory_add_billing_window(
+                                  provider, core, "monthly", "factory-core-monthly", "Core Monthly", 0, now_ms);
+        valid = valid && core_valid;
+    }
+    double balance_cents = 0;
+    object_number(root, "extraUsageBalanceCents", &balance_cents);
+    provider->provider_cost = g_new0(CodexBarProviderCost, 1);
+    provider->provider_cost->used = balance_cents / 100.0;
+    provider->provider_cost->currency = g_strdup("USD");
+    provider->provider_cost->period = g_strdup("Extra usage balance");
+    provider->provider_cost->has_updated_at = TRUE;
+    provider->provider_cost->updated_at_ms = now_ms;
+    g_free(overage_preference);
+    json_object_put(root);
+    json_object_put(auth);
+    if (valid) return provider;
+    codexbar_provider_free(provider);
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Factory billing limits are malformed");
+    return NULL;
+}
+
+static CodexBarHttpResponse *factory_request(const char *url,
+                                             const char *authorization,
+                                             CodexBarApiProviders4Transport transport,
+                                             GCancellable *cancellable,
+                                             GError **error) {
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Accept", "application/json"},
+        {"Content-Type", "application/json"},
+        {"Origin", FACTORY_APP_BASE},
+        {"Referer", FACTORY_APP_BASE "/"},
+        {"x-factory-client", "web-app"},
+        {"Authorization", authorization},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .timeout_seconds = PROVIDER_TIMEOUT_SECONDS,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    return send_request(&request, transport, error);
+}
+
+static gboolean require_success(CodexBarHttpResponse *response, const char *provider, GError **error) {
+    if (response->status == 401 || response->status == 403) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "%s authentication failed", provider);
+        return FALSE;
+    }
+    if (response->status < 200 || response->status >= 300) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "%s request failed with HTTP %ld", provider,
+                    response->status);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static char *factory_user_id(json_object *auth) {
+    return json_string(object_member(auth, "userProfile"), "id");
+}
+
+static CodexBarProvider *factory_fetch_base(const char *base,
+                                            const char *authorization,
+                                            CodexBarApiProviders4Transport transport,
+                                            GCancellable *cancellable,
+                                            gint64 now_ms,
+                                            GError **error) {
+    char *auth_url = g_strdup_printf("%s/api/app/auth/me", base);
+    CodexBarHttpResponse *auth_response = factory_request(auth_url, authorization, transport, cancellable, error);
+    g_free(auth_url);
+    if (!auth_response) return NULL;
+    if (!require_success(auth_response, "Factory", error)) {
+        codexbar_http_response_free(auth_response);
+        return NULL;
+    }
+    json_object *auth_root = parse_json_document(auth_response->body, auth_response->body_length);
+    if (!auth_root || !json_object_is_type(auth_root, json_type_object)) {
+        if (auth_root) json_object_put(auth_root);
+        codexbar_http_response_free(auth_response);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Factory auth response is malformed");
+        return NULL;
+    }
+    char *user_id = factory_user_id(auth_root);
+    json_object_put(auth_root);
+
+    GError *billing_error = NULL;
+    CodexBarHttpResponse *billing = factory_request(FACTORY_API_BASE "/api/billing/limits", authorization,
+                                                    transport, cancellable, &billing_error);
+    if (billing && billing->status == 200) {
+        GError *parse_error = NULL;
+        CodexBarProvider *provider = codexbar_factory_parse_billing_limits(
+            auth_response->body, auth_response->body_length, billing->body, billing->body_length, now_ms,
+            &parse_error);
+        codexbar_http_response_free(billing);
+        if (provider) {
+            g_free(user_id);
+            codexbar_http_response_free(auth_response);
+            return provider;
+        }
+        g_clear_error(&parse_error);
+    } else {
+        codexbar_http_response_free(billing);
+    }
+    if (billing_error && g_error_matches(billing_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        g_free(user_id);
+        codexbar_http_response_free(auth_response);
+        g_propagate_error(error, billing_error);
+        return NULL;
+    }
+    g_clear_error(&billing_error);
+
+    char *escaped_user = user_id ? g_uri_escape_string(user_id, NULL, TRUE) : NULL;
+    char *usage_url = escaped_user
+                          ? g_strdup_printf("%s/api/organization/subscription/usage?useCache=true&userId=%s", base,
+                                            escaped_user)
+                          : g_strdup_printf("%s/api/organization/subscription/usage?useCache=true", base);
+    g_free(escaped_user);
+    g_free(user_id);
+    CodexBarHttpResponse *usage = factory_request(usage_url, authorization, transport, cancellable, error);
+    g_free(usage_url);
+    if (!usage) {
+        codexbar_http_response_free(auth_response);
+        return NULL;
+    }
+    if (!require_success(usage, "Factory", error)) {
+        codexbar_http_response_free(usage);
+        codexbar_http_response_free(auth_response);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_factory_parse_legacy_usage(
+        auth_response->body, auth_response->body_length, usage->body, usage->body_length, now_ms, error);
+    codexbar_http_response_free(usage);
+    codexbar_http_response_free(auth_response);
+    return provider;
+}
+
+CodexBarProvider *codexbar_factory_fetch_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    if (!transport) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Factory transport is missing");
+        return NULL;
+    }
+    char *key = factory_api_key(config);
+    if (!key) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "Factory API key missing. Set FACTORY_API_KEY or configure api_key.");
+        return NULL;
+    }
+    char *authorization = g_strdup_printf("Bearer %s", key);
+    g_free(key);
+    const char *bases[] = {FACTORY_API_BASE, FACTORY_APP_BASE};
+    GError *last_error = NULL;
+    GError *auth_error = NULL;
+    CodexBarProvider *provider = NULL;
+    for (size_t index = 0; index < G_N_ELEMENTS(bases) && !provider; index++) {
+        GError *candidate_error = NULL;
+        provider = factory_fetch_base(bases[index], authorization, transport, cancellable, now_ms,
+                                      &candidate_error);
+        if (candidate_error && g_error_matches(candidate_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            g_clear_error(&last_error);
+            g_clear_error(&auth_error);
+            g_free(authorization);
+            g_propagate_error(error, candidate_error);
+            return NULL;
+        }
+        if (candidate_error && g_error_matches(candidate_error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED) &&
+            !auth_error) {
+            auth_error = g_error_copy(candidate_error);
+        }
+        g_clear_error(&last_error);
+        last_error = candidate_error;
+    }
+    g_free(authorization);
+    if (provider) {
+        g_clear_error(&last_error);
+        g_clear_error(&auth_error);
+        return provider;
+    }
+    if (auth_error) {
+        g_clear_error(&last_error);
+        g_propagate_error(error, auth_error);
+    } else if (last_error) {
+        g_propagate_error(error, last_error);
+    } else {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Factory request failed");
+    }
+    return NULL;
+}
+
+CodexBarProvider *codexbar_factory_fetch_with_transport(const CodexBarProviderConfig *config,
+                                                        CodexBarApiProviders4Transport transport,
+                                                        gint64 now_ms,
+                                                        GError **error) {
+    return codexbar_factory_fetch_with_transport_and_cancellable(config, transport, NULL, now_ms, error);
+}
+
+CodexBarProvider *codexbar_factory_fetch_with_cancellable(const CodexBarProviderConfig *config,
+                                                          GCancellable *cancellable,
+                                                          GError **error) {
+    return codexbar_factory_fetch_with_transport_and_cancellable(
+        config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+}
+
+CodexBarProvider *codexbar_factory_fetch(const CodexBarProviderConfig *config, GError **error) {
+    return codexbar_factory_fetch_with_cancellable(config, NULL, error);
+}
+
+typedef struct {
+    char *access_token;
+    char *id_token;
+    char *refresh_token;
+    gint64 expiry_ms;
+} GeminiCredentials;
+
+typedef struct {
+    char *project_id;
+    char *tier;
+    char *paid_tier_name;
+} GeminiCodeAssist;
+
+static void gemini_credentials_clear(GeminiCredentials *credentials) {
+    g_free(credentials->access_token);
+    g_free(credentials->id_token);
+    g_free(credentials->refresh_token);
+    *credentials = (GeminiCredentials){0};
+}
+
+static void gemini_code_assist_clear(GeminiCodeAssist *status) {
+    g_free(status->project_id);
+    g_free(status->tier);
+    g_free(status->paid_tier_name);
+    *status = (GeminiCodeAssist){0};
+}
+
+static gboolean regular_file_within_limit(const char *path, gsize maximum, GError **error) {
+    GStatBuf status;
+    if (g_stat(path, &status) != 0) {
+        if (error) {
+            int saved_errno = errno;
+            g_set_error(error, G_IO_ERROR, g_io_error_from_errno(saved_errno), "Credentials not found at %s", path);
+        }
+        return FALSE;
+    }
+    if (!S_ISREG(status.st_mode) || status.st_size <= 0 || (guint64)status.st_size > maximum) {
+        if (error) g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Credentials are invalid at %s", path);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static gboolean gemini_auth_type_supported(const char *home, GError **error) {
+    char *path = g_build_filename(home, ".gemini", "settings.json", NULL);
+    if (!regular_file_within_limit(path, PROVIDER_MAXIMUM_RESPONSE_BYTES, NULL)) {
+        g_free(path);
+        return TRUE;
+    }
+    char *contents = NULL;
+    gsize length = 0;
+    gboolean loaded = g_file_get_contents(path, &contents, &length, NULL);
+    g_free(path);
+    if (!loaded || length == 0 || length > PROVIDER_MAXIMUM_RESPONSE_BYTES) {
+        g_free(contents);
+        return TRUE;
+    }
+    json_object *root = parse_json_document(contents, length);
+    g_free(contents);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        return TRUE;
+    }
+    char *selected = json_string(object_member(object_member(root, "security"), "auth"), "selectedType");
+    json_object_put(root);
+    gboolean supported = !selected || (!g_str_equal(selected, "api-key") &&
+                                       !g_str_equal(selected, "gemini-api-key") &&
+                                       !g_str_equal(selected, "vertex-ai"));
+    if (!supported && error) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                    "Gemini %s auth is unsupported; use Google account OAuth instead",
+                    g_str_equal(selected, "vertex-ai") ? "Vertex AI" : "API key");
+    }
+    g_free(selected);
+    return supported;
+}
+
+static gboolean gemini_load_credentials(GeminiCredentials *credentials, GError **error) {
+    const char *home = g_getenv("HOME");
+    if (!home || home[0] == '\0') home = g_get_home_dir();
+    if (!home || home[0] == '\0') {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Gemini home directory is unavailable");
+        return FALSE;
+    }
+    if (!gemini_auth_type_supported(home, error)) return FALSE;
+    char *path = g_build_filename(home, ".gemini", "oauth_creds.json", NULL);
+    if (!regular_file_within_limit(path, PROVIDER_MAXIMUM_RESPONSE_BYTES, error)) {
+        if (error) g_prefix_error(error, "Gemini OAuth ");
+        g_free(path);
+        return FALSE;
+    }
+    char *contents = NULL;
+    gsize length = 0;
+    if (!g_file_get_contents(path, &contents, &length, error)) {
+        if (error) g_prefix_error(error, "Gemini OAuth credentials are unreadable at %s: ", path);
+        g_free(path);
+        return FALSE;
+    }
+    g_free(path);
+    json_object *root = parse_json_document(contents, length);
+    g_free(contents);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Gemini OAuth credentials are malformed");
+        return FALSE;
+    }
+    credentials->access_token = json_string(root, "access_token");
+    credentials->id_token = json_string(root, "id_token");
+    credentials->refresh_token = json_string(root, "refresh_token");
+    double expiry = 0;
+    if (object_number(root, "expiry_date", &expiry) && expiry > 0 && expiry <= (double)G_MAXINT64) {
+        credentials->expiry_ms = (gint64)llround(expiry);
+    }
+    json_object_put(root);
+    if (credentials->access_token || credentials->refresh_token) return TRUE;
+    gemini_credentials_clear(credentials);
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                        "Gemini OAuth credentials are missing; run `gemini` to authenticate");
+    return FALSE;
+}
+
+gboolean codexbar_gemini_has_oauth_credentials(const CodexBarProviderConfig *config) {
+    (void)config;
+    GeminiCredentials credentials = {0};
+    gboolean loaded = gemini_load_credentials(&credentials, NULL);
+    gemini_credentials_clear(&credentials);
+    return loaded;
+}
+
+static gboolean response_is_consumer_deprecation(const CodexBarHttpResponse *response) {
+    if (!response || !response->body || response->body_length == 0 ||
+        !g_utf8_validate(response->body, (gssize)response->body_length, NULL)) {
+        return FALSE;
+    }
+    char *lower = g_ascii_strdown(response->body, (gssize)response->body_length);
+    gboolean result = strstr(lower, "unsupported_client") || strstr(lower, "ineligibletiererror") ||
+                      (strstr(lower, "no longer supported") && strstr(lower, "gemini code assist")) ||
+                      (strstr(lower, "migrate") && strstr(lower, "antigravity") && strstr(lower, "gemini"));
+    g_free(lower);
+    return result;
+}
+
+static char *gemini_bearer(const char *token, GError **error) {
+    char *clean = clean_credential(token);
+    if (!clean) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Gemini OAuth token is invalid");
+        return NULL;
+    }
+    char *authorization = g_strdup_printf("Bearer %s", clean);
+    g_free(clean);
+    return authorization;
+}
+
+static CodexBarHttpResponse *gemini_request(const char *url,
+                                            const char *method,
+                                            const char *authorization,
+                                            const char *body,
+                                            CodexBarApiProviders4Transport transport,
+                                            GCancellable *cancellable,
+                                            GError **error) {
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Accept", "application/json"},
+        {"Content-Type", "application/json"},
+        {"Authorization", authorization},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = method,
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .body = body,
+        .body_length = body ? strlen(body) : 0,
+        .timeout_seconds = 10,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    return send_request(&request, transport, error);
+}
+
+static void gemini_parse_code_assist(const char *json, size_t length, GeminiCodeAssist *status) {
+    json_object *root = parse_json_document(json, length);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        return;
+    }
+    json_object *project = object_member(root, "cloudaicompanionProject");
+    if (project && json_object_is_type(project, json_type_string)) {
+        status->project_id = json_string(root, "cloudaicompanionProject");
+    } else if (project && json_object_is_type(project, json_type_object)) {
+        status->project_id = json_string(project, "id");
+        if (!status->project_id) status->project_id = json_string(project, "projectId");
+    }
+    status->tier = json_string(object_member(root, "currentTier"), "id");
+    status->paid_tier_name = json_string(object_member(root, "paidTier"), "name");
+    json_object_put(root);
+}
+
+static char *gemini_discover_project(const CodexBarHttpResponse *response) {
+    if (!response || response->status != 200) return NULL;
+    json_object *root = parse_json_document(response->body, response->body_length);
+    json_object *projects = object_member(root, "projects");
+    if (!root || !projects || !json_object_is_type(projects, json_type_array)) {
+        if (root) json_object_put(root);
+        return NULL;
+    }
+    char *result = NULL;
+    size_t count = json_object_array_length(projects);
+    for (size_t index = 0; index < count && !result; index++) {
+        json_object *project = json_object_array_get_idx(projects, index);
+        char *project_id = json_string(project, "projectId");
+        if (!project_id) continue;
+        gboolean selected = g_str_has_prefix(project_id, "gen-lang-client");
+        json_object *labels = object_member(project, "labels");
+        if (!selected && labels && json_object_is_type(labels, json_type_object) &&
+            object_member(labels, "generative-language")) {
+            selected = TRUE;
+        }
+        if (selected) result = project_id;
+        else g_free(project_id);
+    }
+    json_object_put(root);
+    return result;
+}
+
+static char *gemini_jwt_claim(const char *token, const char *claim) {
+    if (!token) return NULL;
+    char **parts = g_strsplit(token, ".", 3);
+    if (!parts[0] || !parts[1]) {
+        g_strfreev(parts);
+        return NULL;
+    }
+    char *payload = g_strdup(parts[1]);
+    for (char *cursor = payload; *cursor; cursor++) {
+        if (*cursor == '-') *cursor = '+';
+        else if (*cursor == '_') *cursor = '/';
+    }
+    size_t length = strlen(payload);
+    size_t padding = (4 - length % 4) % 4;
+    char *padded = g_strconcat(payload, padding >= 1 ? "=" : "", padding >= 2 ? "=" : "", NULL);
+    g_free(payload);
+    gsize decoded_length = 0;
+    guchar *decoded = g_base64_decode(padded, &decoded_length);
+    g_free(padded);
+    g_strfreev(parts);
+    json_object *root = parse_json_document((const char *)decoded, decoded_length);
+    g_free(decoded);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        return NULL;
+    }
+    char *value = json_string(root, claim);
+    json_object_put(root);
+    return value;
+}
+
+typedef struct {
+    gboolean set;
+    double remaining_fraction;
+    char *model_id;
+    gint64 reset_ms;
+} GeminiQuotaTier;
+
+static void gemini_quota_tier_clear(GeminiQuotaTier *tier) {
+    g_free(tier->model_id);
+    *tier = (GeminiQuotaTier){0};
+}
+
+static void gemini_consider_quota(GeminiQuotaTier *tier,
+                                  const char *model_id,
+                                  double remaining_fraction,
+                                  json_object *reset_value) {
+    if (tier->set && remaining_fraction >= tier->remaining_fraction) return;
+    tier->set = TRUE;
+    tier->remaining_fraction = remaining_fraction;
+    g_free(tier->model_id);
+    tier->model_id = g_strdup(model_id);
+    tier->reset_ms = 0;
+    parse_timestamp_ms(reset_value, &tier->reset_ms);
+}
+
+static void gemini_add_window(CodexBarProvider *provider,
+                              const char *id,
+                              const char *title,
+                              const GeminiQuotaTier *tier,
+                              gint64 now_ms) {
+    CodexBarQuotaWindow *window = add_window(provider, id, title,
+                                             (1.0 - tier->remaining_fraction) * 100.0, 1440,
+                                             tier->reset_ms, tier->model_id);
+    if (tier->reset_ms <= 0) return;
+    gint64 remaining_minutes = MAX((tier->reset_ms - now_ms) / 60000, 0);
+    window->reset_description = remaining_minutes >= 60
+                                    ? g_strdup_printf("Resets in %" G_GINT64_FORMAT "h %" G_GINT64_FORMAT "m",
+                                                      remaining_minutes / 60, remaining_minutes % 60)
+                                    : remaining_minutes > 0
+                                          ? g_strdup_printf("Resets in %" G_GINT64_FORMAT "m", remaining_minutes)
+                                          : g_strdup("Resets soon");
+}
+
+static char *gemini_plan(const GeminiCodeAssist *status, const char *hosted_domain) {
+    if (status && status->paid_tier_name) return g_strdup(status->paid_tier_name);
+    if (!status || !status->tier) return NULL;
+    if (g_str_equal(status->tier, "standard-tier")) return g_strdup("Paid");
+    if (g_str_equal(status->tier, "free-tier")) return g_strdup(hosted_domain ? "Workspace" : "Free");
+    if (g_str_equal(status->tier, "legacy-tier")) return g_strdup("Legacy");
+    return NULL;
+}
+
+CodexBarProvider *codexbar_gemini_parse_quota(const char *quota_json,
+                                             size_t quota_length,
+                                             const char *id_token,
+                                             const char *code_assist_json,
+                                             size_t code_assist_length,
+                                             gint64 now_ms,
+                                             GError **error) {
+    json_object *root = parse_json_document(quota_json, quota_length);
+    json_object *buckets = object_member(root, "buckets");
+    if (!root || !buckets || !json_object_is_type(buckets, json_type_array) ||
+        json_object_array_length(buckets) == 0) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Gemini quota response has no quota buckets");
+        return NULL;
+    }
+    GeminiQuotaTier pro = {0};
+    GeminiQuotaTier flash = {0};
+    GeminiQuotaTier flash_lite = {0};
+    size_t count = json_object_array_length(buckets);
+    for (size_t index = 0; index < count; index++) {
+        json_object *bucket = json_object_array_get_idx(buckets, index);
+        char *model_id = json_string(bucket, "modelId");
+        double fraction = 0;
+        if (!model_id || !object_number(bucket, "remainingFraction", &fraction)) {
+            g_free(model_id);
+            continue;
+        }
+        char *lower = g_ascii_strdown(model_id, -1);
+        if (strstr(lower, "flash-lite")) {
+            gemini_consider_quota(&flash_lite, model_id, fraction, object_member(bucket, "resetTime"));
+        } else if (strstr(lower, "flash")) {
+            gemini_consider_quota(&flash, model_id, fraction, object_member(bucket, "resetTime"));
+        } else if (strstr(lower, "pro")) {
+            gemini_consider_quota(&pro, model_id, fraction, object_member(bucket, "resetTime"));
+        }
+        g_free(lower);
+        g_free(model_id);
+    }
+    json_object_put(root);
+
+    GeminiCodeAssist status = {0};
+    if (code_assist_json && code_assist_length > 0) {
+        gemini_parse_code_assist(code_assist_json, code_assist_length, &status);
+    }
+    char *email = gemini_jwt_claim(id_token, "email");
+    char *hosted_domain = gemini_jwt_claim(id_token, "hd");
+    char *plan = gemini_plan(&status, hosted_domain);
+    CodexBarProvider *provider = provider_new("gemini", now_ms);
+    provider->explicit_quota_slots = TRUE;
+    provider->account = g_strdup(email);
+    provider->plan = g_strdup(plan);
+    if (email || plan) {
+        provider->identity = g_new0(CodexBarProviderIdentity, 1);
+        provider->identity->login_method = g_strdup(plan);
+    }
+    if (pro.set) gemini_add_window(provider, "primary", "Pro", &pro, now_ms);
+    if (flash.set) gemini_add_window(provider, "secondary", "Flash", &flash, now_ms);
+    if (flash_lite.set) gemini_add_window(provider, "tertiary", "Flash Lite", &flash_lite, now_ms);
+    gemini_quota_tier_clear(&pro);
+    gemini_quota_tier_clear(&flash);
+    gemini_quota_tier_clear(&flash_lite);
+    gemini_code_assist_clear(&status);
+    g_free(hosted_domain);
+    g_free(email);
+    g_free(plan);
+    return provider;
+}
+
+CodexBarProvider *codexbar_gemini_fetch_access_token_with_transport_and_cancellable(
+    const char *access_token,
+    const char *id_token,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    if (!transport) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Gemini transport is missing");
+        return NULL;
+    }
+    char *authorization = gemini_bearer(access_token, error);
+    if (!authorization) return NULL;
+    const char *metadata = "{\"metadata\":{\"ideType\":\"GEMINI_CLI\",\"pluginType\":\"GEMINI\"}}";
+    GError *assist_error = NULL;
+    CodexBarHttpResponse *assist = gemini_request(GEMINI_CODE_ASSIST_URL, "POST", authorization, metadata,
+                                                  transport, cancellable, &assist_error);
+    if (!assist && assist_error && g_error_matches(assist_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        g_free(authorization);
+        g_propagate_error(error, assist_error);
+        return NULL;
+    }
+    g_clear_error(&assist_error);
+    if (assist && assist->status != 200 && response_is_consumer_deprecation(assist)) {
+        codexbar_http_response_free(assist);
+        g_free(authorization);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                            "Gemini Code Assist consumer tier is no longer supported; migrate to Antigravity");
+        return NULL;
+    }
+    GeminiCodeAssist assist_status = {0};
+    if (assist && assist->status == 200) {
+        gemini_parse_code_assist(assist->body, assist->body_length, &assist_status);
+    }
+    if (!assist_status.project_id) {
+        GError *projects_error = NULL;
+        CodexBarHttpResponse *projects = gemini_request(GEMINI_PROJECTS_URL, "GET", authorization, NULL,
+                                                        transport, cancellable, &projects_error);
+        if (!projects && projects_error && g_error_matches(projects_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            codexbar_http_response_free(assist);
+            gemini_code_assist_clear(&assist_status);
+            g_free(authorization);
+            g_propagate_error(error, projects_error);
+            return NULL;
+        }
+        g_clear_error(&projects_error);
+        assist_status.project_id = gemini_discover_project(projects);
+        codexbar_http_response_free(projects);
+    }
+    char *quota_body = NULL;
+    if (assist_status.project_id) {
+        json_object *body = json_object_new_object();
+        json_object_object_add(body, "project", json_object_new_string(assist_status.project_id));
+        quota_body = g_strdup(json_object_to_json_string_ext(body, JSON_C_TO_STRING_PLAIN));
+        json_object_put(body);
+    } else {
+        quota_body = g_strdup("{}");
+    }
+    CodexBarHttpResponse *quota = gemini_request(GEMINI_QUOTA_URL, "POST", authorization, quota_body,
+                                                 transport, cancellable, error);
+    g_free(quota_body);
+    g_free(authorization);
+    if (!quota) {
+        codexbar_http_response_free(assist);
+        gemini_code_assist_clear(&assist_status);
+        return NULL;
+    }
+    if (quota->status == 401 || quota->status == 403) {
+        gboolean deprecated = response_is_consumer_deprecation(quota);
+        codexbar_http_response_free(quota);
+        codexbar_http_response_free(assist);
+        gemini_code_assist_clear(&assist_status);
+        g_set_error_literal(error, G_IO_ERROR,
+                            deprecated ? G_IO_ERROR_NOT_SUPPORTED : G_IO_ERROR_PERMISSION_DENIED,
+                            deprecated ? "Gemini Code Assist consumer tier is no longer supported; migrate to Antigravity"
+                                       : "Gemini OAuth authentication failed");
+        return NULL;
+    }
+    if (quota->status != 200) {
+        long status_code = quota->status;
+        gboolean deprecated = response_is_consumer_deprecation(quota);
+        codexbar_http_response_free(quota);
+        codexbar_http_response_free(assist);
+        gemini_code_assist_clear(&assist_status);
+        if (deprecated) {
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                                "Gemini Code Assist consumer tier is no longer supported; migrate to Antigravity");
+        } else {
+            g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Gemini quota request failed with HTTP %ld",
+                        status_code);
+        }
+        return NULL;
+    }
+    const char *assist_json = assist && assist->status == 200 ? assist->body : NULL;
+    size_t assist_length = assist_json ? assist->body_length : 0;
+    CodexBarProvider *provider = codexbar_gemini_parse_quota(
+        quota->body, quota->body_length, id_token, assist_json, assist_length, now_ms, error);
+    codexbar_http_response_free(quota);
+    codexbar_http_response_free(assist);
+    gemini_code_assist_clear(&assist_status);
+    return provider;
+}
+
+static gboolean gemini_oauth_client(char **client_id, char **client_secret) {
+    *client_id = clean_credential(g_getenv("GEMINI_OAUTH_CLIENT_ID"));
+    *client_secret = clean_credential(g_getenv("GEMINI_OAUTH_CLIENT_SECRET"));
+    if (*client_id && *client_secret) return TRUE;
+    g_clear_pointer(client_id, g_free);
+    g_clear_pointer(client_secret, g_free);
+    const char *path = g_getenv("GEMINI_OAUTH2_JS_PATH");
+    if (!path || !regular_file_within_limit(path, PROVIDER_MAXIMUM_RESPONSE_BYTES, NULL)) return FALSE;
+    char *contents = NULL;
+    gsize length = 0;
+    if (!g_file_get_contents(path, &contents, &length, NULL) || length == 0 ||
+        length > PROVIDER_MAXIMUM_RESPONSE_BYTES) {
+        g_free(contents);
+        return FALSE;
+    }
+    GRegex *id_regex = g_regex_new("(?:const|let|var)?\\s*OAUTH_CLIENT_ID\\s*=\\s*['\"]([A-Za-z0-9_.-]+)['\"]\\s*;",
+                                   0, 0, NULL);
+    GRegex *secret_regex = g_regex_new(
+        "(?:const|let|var)?\\s*OAUTH_CLIENT_SECRET\\s*=\\s*['\"]([A-Za-z0-9_-]+)['\"]\\s*;", 0, 0,
+        NULL);
+    GMatchInfo *match = NULL;
+    if (id_regex && g_regex_match(id_regex, contents, 0, &match)) *client_id = g_match_info_fetch(match, 1);
+    g_clear_pointer(&match, g_match_info_free);
+    if (secret_regex && g_regex_match(secret_regex, contents, 0, &match)) {
+        *client_secret = g_match_info_fetch(match, 1);
+    }
+    g_clear_pointer(&match, g_match_info_free);
+    g_clear_pointer(&id_regex, g_regex_unref);
+    g_clear_pointer(&secret_regex, g_regex_unref);
+    g_free(contents);
+    if (*client_id && *client_secret) return TRUE;
+    g_clear_pointer(client_id, g_free);
+    g_clear_pointer(client_secret, g_free);
+    return FALSE;
+}
+
+static char *gemini_refresh_access_token(const char *refresh_token,
+                                         CodexBarApiProviders4Transport transport,
+                                         GCancellable *cancellable,
+                                         GError **error) {
+    char *client_id = NULL;
+    char *client_secret = NULL;
+    if (!gemini_oauth_client(&client_id, &client_secret)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "Gemini OAuth client credentials are unavailable; set GEMINI_OAUTH_CLIENT_ID and "
+                            "GEMINI_OAUTH_CLIENT_SECRET");
+        return NULL;
+    }
+    char *escaped_id = g_uri_escape_string(client_id, NULL, TRUE);
+    char *escaped_secret = g_uri_escape_string(client_secret, NULL, TRUE);
+    char *escaped_refresh = g_uri_escape_string(refresh_token, NULL, TRUE);
+    char *body = g_strdup_printf("client_id=%s&client_secret=%s&refresh_token=%s&grant_type=refresh_token",
+                                 escaped_id, escaped_secret, escaped_refresh);
+    g_free(escaped_refresh);
+    g_free(escaped_secret);
+    g_free(escaped_id);
+    g_free(client_secret);
+    g_free(client_id);
+    const CodexBarHttpRequestHeader headers[] = {
+        {"Accept", "application/json"},
+        {"Content-Type", "application/x-www-form-urlencoded"},
+    };
+    const CodexBarHttpRequest request = {
+        .url = GEMINI_REFRESH_URL,
+        .method = "POST",
+        .headers = headers,
+        .header_count = G_N_ELEMENTS(headers),
+        .body = body,
+        .body_length = strlen(body),
+        .timeout_seconds = 10,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = send_request(&request, transport, error);
+    g_free(body);
+    if (!response) return NULL;
+    if (response->status != 200) {
+        gboolean deprecated = response_is_consumer_deprecation(response);
+        codexbar_http_response_free(response);
+        g_set_error_literal(error, G_IO_ERROR,
+                            deprecated ? G_IO_ERROR_NOT_SUPPORTED : G_IO_ERROR_PERMISSION_DENIED,
+                            deprecated ? "Gemini Code Assist consumer tier is no longer supported; migrate to Antigravity"
+                                       : "Gemini OAuth token refresh failed");
+        return NULL;
+    }
+    json_object *root = parse_json_document(response->body, response->body_length);
+    char *access_token = json_string(root, "access_token");
+    if (root) json_object_put(root);
+    codexbar_http_response_free(response);
+    if (access_token) return access_token;
+    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                        "Gemini OAuth refresh response is malformed");
+    return NULL;
+}
+
+CodexBarProvider *codexbar_gemini_fetch_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    (void)config;
+    if (!transport) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Gemini transport is missing");
+        return NULL;
+    }
+    GeminiCredentials credentials = {0};
+    if (!gemini_load_credentials(&credentials, error)) return NULL;
+    char *access_token = NULL;
+    if (!credentials.access_token || (credentials.expiry_ms > 0 && credentials.expiry_ms < now_ms)) {
+        if (!credentials.refresh_token) {
+            gemini_credentials_clear(&credentials);
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                                "Gemini OAuth token expired; run `gemini` to authenticate");
+            return NULL;
+        }
+        access_token = gemini_refresh_access_token(credentials.refresh_token, transport, cancellable, error);
+        if (!access_token) {
+            gemini_credentials_clear(&credentials);
+            return NULL;
+        }
+    } else {
+        access_token = g_strdup(credentials.access_token);
+    }
+    CodexBarProvider *provider = codexbar_gemini_fetch_access_token_with_transport_and_cancellable(
+        access_token, credentials.id_token, transport, cancellable, now_ms, error);
+    g_free(access_token);
+    gemini_credentials_clear(&credentials);
+    return provider;
+}
+
+CodexBarProvider *codexbar_gemini_fetch_with_transport(const CodexBarProviderConfig *config,
+                                                       CodexBarApiProviders4Transport transport,
+                                                       gint64 now_ms,
+                                                       GError **error) {
+    return codexbar_gemini_fetch_with_transport_and_cancellable(config, transport, NULL, now_ms, error);
+}
+
+CodexBarProvider *codexbar_gemini_fetch_with_cancellable(const CodexBarProviderConfig *config,
+                                                         GCancellable *cancellable,
+                                                         GError **error) {
+    return codexbar_gemini_fetch_with_transport_and_cancellable(
+        config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+}
+
+CodexBarProvider *codexbar_gemini_fetch(const CodexBarProviderConfig *config, GError **error) {
+    return codexbar_gemini_fetch_with_cancellable(config, NULL, error);
+}
+
+static const char *const ollama_environment_keys[] = {
+    "OLLAMA_API_KEY",
+    "OLLAMA_KEY",
+    NULL,
+};
+
+static char *ollama_api_key(const CodexBarProviderConfig *config) {
+    char *key = clean_credential(config ? config->api_key : NULL);
+    for (size_t index = 0; !key && ollama_environment_keys[index]; index++) {
+        key = clean_credential(g_getenv(ollama_environment_keys[index]));
+    }
+    return key;
+}
+
+gboolean codexbar_ollama_has_api_key(const CodexBarProviderConfig *config) {
+    char *key = ollama_api_key(config);
+    gboolean present = key != NULL;
+    g_free(key);
+    return present;
+}
+
+CodexBarProvider *codexbar_ollama_parse_api_tags(const char *json,
+                                                size_t length,
+                                                gint64 now_ms,
+                                                GError **error) {
+    json_object *root = parse_json_document(json, length);
+    json_object *models = object_member(root, "models");
+    if (!root || !models || !json_object_is_type(models, json_type_array)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Ollama model catalog response is malformed");
+        return NULL;
+    }
+    CodexBarProvider *provider = provider_new("ollama", now_ms);
+    provider->identity = g_new0(CodexBarProviderIdentity, 1);
+    provider->identity->login_method = g_strdup("API key");
+    provider->plan = g_strdup("API key");
+    json_object_put(root);
+    return provider;
+}
+
+static int uri_effective_port(GUri *uri) {
+    int port = g_uri_get_port(uri);
+    if (port >= 0) return port;
+    const char *scheme = g_uri_get_scheme(uri);
+    return scheme && g_ascii_strcasecmp(scheme, "https") == 0 ? 443 : 80;
+}
+
+static gboolean ollama_same_origin(const char *lhs, const char *rhs) {
+    GUri *left = g_uri_parse(lhs, G_URI_FLAGS_NONE, NULL);
+    GUri *right = g_uri_parse(rhs, G_URI_FLAGS_NONE, NULL);
+    gboolean same = left && right &&
+                    g_ascii_strcasecmp(g_uri_get_scheme(left), g_uri_get_scheme(right)) == 0 &&
+                    g_ascii_strcasecmp(g_uri_get_host(left), g_uri_get_host(right)) == 0 &&
+                    uri_effective_port(left) == uri_effective_port(right);
+    if (left) g_uri_unref(left);
+    if (right) g_uri_unref(right);
+    return same;
+}
+
+static CodexBarHttpProtocolPolicy ollama_protocol_policy(const char *url) {
+    return g_ascii_strncasecmp(url, "http://", strlen("http://")) == 0
+               ? CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP
+               : CODEXBAR_HTTP_HTTPS_ONLY;
+}
+
+CodexBarProvider *codexbar_ollama_fetch_endpoints_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *tags_url,
+    const char *validation_url,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    if (!transport) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Ollama transport is missing");
+        return NULL;
+    }
+    char *key = ollama_api_key(config);
+    if (!key) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "Ollama API key missing. Set OLLAMA_API_KEY or configure api_key.");
+        return NULL;
+    }
+    char *normalized_tags = codexbar_http_normalize_endpoint(
+        tags_url, CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP, error);
+    char *normalized_validation = normalized_tags
+                                      ? codexbar_http_normalize_endpoint(
+                                            validation_url, CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP, error)
+                                      : NULL;
+    if (!normalized_tags || !normalized_validation ||
+        !ollama_same_origin(normalized_tags, normalized_validation)) {
+        if (normalized_tags && normalized_validation && error && !*error) {
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                                "Ollama validation and model catalog endpoints must share an origin");
+        }
+        g_free(normalized_validation);
+        g_free(normalized_tags);
+        g_free(key);
+        return NULL;
+    }
+    char *authorization = g_strdup_printf("Bearer %s", key);
+    g_free(key);
+    const CodexBarHttpRequestHeader validation_headers[] = {
+        {"Accept", "application/json"},
+        {"Content-Type", "application/json"},
+        {"User-Agent", "CodexBar/1.0"},
+        {"Authorization", authorization},
+    };
+    static const char validation_body[] = "{\"query\":\"\"}";
+    const CodexBarHttpRequest validation_request = {
+        .url = normalized_validation,
+        .method = "POST",
+        .headers = validation_headers,
+        .header_count = G_N_ELEMENTS(validation_headers),
+        .body = validation_body,
+        .body_length = sizeof(validation_body) - 1,
+        .timeout_seconds = OLLAMA_TIMEOUT_SECONDS,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = ollama_protocol_policy(normalized_validation),
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *validation = send_request(&validation_request, transport, error);
+    if (!validation) {
+        g_free(authorization);
+        g_free(normalized_validation);
+        g_free(normalized_tags);
+        return NULL;
+    }
+    if (validation->status == 401 || validation->status == 403) {
+        codexbar_http_response_free(validation);
+        g_free(authorization);
+        g_free(normalized_validation);
+        g_free(normalized_tags);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                            "Ollama API key is invalid or revoked");
+        return NULL;
+    }
+    if (validation->status != 200 && validation->status != 400) {
+        long status = validation->status;
+        codexbar_http_response_free(validation);
+        g_free(authorization);
+        g_free(normalized_validation);
+        g_free(normalized_tags);
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "Ollama API key validation failed with HTTP %ld", status);
+        return NULL;
+    }
+    codexbar_http_response_free(validation);
+    const CodexBarHttpRequestHeader tags_headers[] = {
+        {"Accept", "application/json"},
+        {"User-Agent", "CodexBar/1.0"},
+        {"Authorization", authorization},
+    };
+    const CodexBarHttpRequest tags_request = {
+        .url = normalized_tags,
+        .method = "GET",
+        .headers = tags_headers,
+        .header_count = G_N_ELEMENTS(tags_headers),
+        .timeout_seconds = OLLAMA_TIMEOUT_SECONDS,
+        .maximum_response_bytes = PROVIDER_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = ollama_protocol_policy(normalized_tags),
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *tags = send_request(&tags_request, transport, error);
+    g_free(authorization);
+    g_free(normalized_validation);
+    g_free(normalized_tags);
+    if (!tags) return NULL;
+    if (tags->status == 401 || tags->status == 403) {
+        codexbar_http_response_free(tags);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                            "Ollama API key is invalid or revoked");
+        return NULL;
+    }
+    if (tags->status != 200) {
+        long status = tags->status;
+        codexbar_http_response_free(tags);
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Ollama model catalog failed with HTTP %ld", status);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_ollama_parse_api_tags(
+        tags->body, tags->body_length, now_ms, error);
+    codexbar_http_response_free(tags);
+    return provider;
+}
+
+CodexBarProvider *codexbar_ollama_fetch_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    CodexBarApiProviders4Transport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    return codexbar_ollama_fetch_endpoints_with_transport_and_cancellable(
+        config, OLLAMA_TAGS_URL, OLLAMA_VALIDATION_URL, transport, cancellable, now_ms, error);
+}
+
+CodexBarProvider *codexbar_ollama_fetch_with_transport(const CodexBarProviderConfig *config,
+                                                       CodexBarApiProviders4Transport transport,
+                                                       gint64 now_ms,
+                                                       GError **error) {
+    return codexbar_ollama_fetch_with_transport_and_cancellable(config, transport, NULL, now_ms, error);
+}
+
+CodexBarProvider *codexbar_ollama_fetch_with_cancellable(const CodexBarProviderConfig *config,
+                                                         GCancellable *cancellable,
+                                                         GError **error) {
+    return codexbar_ollama_fetch_with_transport_and_cancellable(
+        config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+}
+
+CodexBarProvider *codexbar_ollama_fetch(const CodexBarProviderConfig *config, GError **error) {
+    return codexbar_ollama_fetch_with_cancellable(config, NULL, error);
+}
