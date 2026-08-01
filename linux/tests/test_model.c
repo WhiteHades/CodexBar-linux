@@ -1583,6 +1583,10 @@ static void test_provider_registry(void) {
                     ==,
                     CODEXBAR_NATIVE_PERPLEXITY);
     g_assert_cmpint(codexbar_provider_registry_find("long-cat")->native_provider, ==, CODEXBAR_NATIVE_LONGCAT);
+    g_assert_cmpint(codexbar_provider_registry_find("alibaba-token")->native_provider,
+                    ==,
+                    CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN);
+    g_assert_cmpint(codexbar_provider_registry_find("xiaomi-mimo")->native_provider, ==, CODEXBAR_NATIVE_MIMO);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }

@@ -63,6 +63,7 @@ core_sources = files(
   'src/web_providers2.c',
   'src/web_providers3.c',
   'src/web_providers4.c',
+  'src/web_providers5.c',
   'src/xai.c',
   'src/zai.c',
   'src/zoommate.c',
@@ -304,6 +305,14 @@ web_providers4_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-web-providers4', web_providers4_test, env: normalized_test_env)
+
+web_providers5_test = executable(
+  'codexbar-linux-web-providers5-tests',
+  files('tests/test_web_providers5.c', 'src/web_providers5.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-web-providers5', web_providers5_test, env: normalized_test_env)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',

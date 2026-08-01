@@ -32,6 +32,7 @@
 #include "web_providers2.h"
 #include "web_providers3.h"
 #include "web_providers4.h"
+#include "web_providers5.h"
 #include "xai.h"
 #include "zai.h"
 #include "zoommate.h"
@@ -191,6 +192,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     case CODEXBAR_NATIVE_QODER:
     case CODEXBAR_NATIVE_PERPLEXITY:
     case CODEXBAR_NATIVE_LONGCAT:
+    case CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN:
+    case CODEXBAR_NATIVE_MIMO:
         native_source = "web";
         break;
     case CODEXBAR_NATIVE_COPILOT:
@@ -392,6 +395,12 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_LONGCAT:
         provider = codexbar_longcat_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN:
+        provider = codexbar_alibaba_token_plan_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_MIMO:
+        provider = codexbar_mimo_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_LITELLM:
         provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);
