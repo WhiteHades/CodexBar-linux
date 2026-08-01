@@ -9,7 +9,8 @@ Releases are Linux C23 artifacts for `x86_64` and `aarch64`.
 3. Run `make check` with GCC and Clang locally.
 4. Run `make sanitize` with leak detection enabled.
 5. Run `make release` and stage an install with a non-system `DESTDIR`.
-6. Run `make package` on x86-64 and aarch64 Linux hosts; inspect each tar listing and validate its SHA-256 file.
+6. Run `make package` in native or emulated x86-64 and aarch64 Linux environments; inspect each tar listing and
+   validate its SHA-256 file.
 7. Run the packaged binary’s `--version`, fixture-backed `usage`, and TUI/status-item smoke tests.
 
 ## Tag
