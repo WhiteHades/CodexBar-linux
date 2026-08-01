@@ -13,6 +13,7 @@ typedef struct {
     gboolean json;
     gboolean pretty;
     gboolean group_projects;
+    gboolean group_models;
     int days;
 } CostOptions;
 
@@ -60,11 +61,13 @@ static gboolean parse_options(int argc, char **argv, CostOptions *options, GErro
         } else if (g_str_equal(argument, "--group-by")) {
             const char *group = value_option(argc, argv, &index, error);
             if (!group) return FALSE;
-            if (!g_str_equal(group, "project")) {
-                g_set_error_literal(error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE, "--group-by must be project.");
+            if (!g_str_equal(group, "project") && !g_str_equal(group, "model")) {
+                g_set_error_literal(error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE,
+                                    "--group-by must be project or model.");
                 return FALSE;
             }
-            options->group_projects = TRUE;
+            options->group_projects = g_str_equal(group, "project");
+            options->group_models = g_str_equal(group, "model");
         } else if (g_str_equal(argument, "--log-level")) {
             if (!value_option(argc, argv, &index, error)) return FALSE;
         } else if (g_str_equal(argument, "--refresh") || g_str_equal(argument, "--no-color") ||
@@ -73,7 +76,7 @@ static gboolean parse_options(int argc, char **argv, CostOptions *options, GErro
             continue;
         } else if (g_str_equal(argument, "--help") || g_str_equal(argument, "-h")) {
             puts("Usage: codexbar-linux cost [--provider <codex|claude|both|all>] [--format <text|json>]\n"
-                 "                           [--days <1..365>] [--group-by project] [--refresh]");
+                 "                           [--days <1..365>] [--group-by project|model] [--refresh]");
             return FALSE;
         } else {
             g_set_error(error, G_OPTION_ERROR, G_OPTION_ERROR_UNKNOWN_OPTION, "Unknown argument: %s", argument);
@@ -107,10 +110,23 @@ static json_object *cost_json_value(double cost) {
     return json_object_new_double_s(cost, text);
 }
 
-static void print_report_text(const CodexBarCostReport *report, gboolean group_projects) {
+static void print_report_text(const CodexBarCostReport *report, gboolean group_projects, gboolean group_models) {
     gboolean codex = g_str_equal(report->provider, "codex");
     printf("%s %s\n", codex ? "Codex" : "Claude", codex ? "API-equivalent estimate (not billed)" : "Cost (API-rate estimate)");
-    if (group_projects && codex) {
+    if (group_models) {
+        printf("Models (Last %d days):\n", report->history_days);
+        if (report->models->len == 0) puts("-");
+        for (guint index = 0; index < report->models->len; index++) {
+            const CodexBarCostModel *model = g_ptr_array_index(report->models, index);
+            char *tokens = token_text(model->total_tokens);
+            printf("%s: $%.4f known, %s tokens, %u session refs\n",
+                   model->display_name,
+                   model->known_cost_usd,
+                   tokens,
+                   model->session_ids->len);
+            g_free(tokens);
+        }
+    } else if (group_projects && codex) {
         printf("Projects (Last %d days):\n", report->history_days);
         if (report->projects->len == 0) puts("-");
         for (guint index = 0; index < report->projects->len; index++) {
@@ -156,6 +172,87 @@ static json_object *day_json(const CodexBarCostDay *day) {
     return object;
 }
 
+static const char *comparison(gint64 current, gint64 previous) {
+    if (current == 0 && previous == 0) return "unchanged";
+    if (previous == 0) return "new";
+    if (current == 0) return "ended";
+    if (current == previous) return "unchanged";
+    return "percent";
+}
+
+static json_object *comparison_json(gint64 current, gint64 previous) {
+    const char *kind = comparison(current, previous);
+    json_object *object = json_object_new_object();
+    json_object_object_add(object, "kind", json_object_new_string(kind));
+    if (g_str_equal(kind, "percent")) {
+        json_object_object_add(object,
+                               "value",
+                               json_object_new_double(((double)current - (double)previous) / (double)previous));
+    }
+    return object;
+}
+
+static json_object *model_cost_json(const CodexBarCostModel *model, gboolean previous) {
+    gint64 priced = previous ? model->previous_priced_tokens : model->priced_tokens;
+    gint64 unpriced = previous ? model->previous_unpriced_tokens : model->unpriced_tokens;
+    double known = previous ? model->previous_known_cost_usd : model->known_cost_usd;
+    json_object *cost = json_object_new_object();
+    json_object_object_add(cost, "knownAmount", cost_json_value(known));
+    json_object_object_add(cost, "pricedTokens", json_object_new_int64(priced));
+    json_object_object_add(cost, "unpricedTokens", json_object_new_int64(unpriced));
+    json_object_object_add(cost, "currencyCode", json_object_new_string("USD"));
+    json_object_object_add(cost,
+                           "coverage",
+                           json_object_new_double(priced + unpriced == 0
+                                                      ? 1
+                                                      : (double)priced / (double)(priced + unpriced)));
+    return cost;
+}
+
+static json_object *string_array(const GPtrArray *values) {
+    json_object *array = json_object_new_array_ext((int)values->len);
+    for (guint index = 0; index < values->len; index++) {
+        json_object_array_add(array, json_object_new_string(g_ptr_array_index((GPtrArray *)values, index)));
+    }
+    return array;
+}
+
+static json_object *model_json(const CodexBarCostModel *model, gint64 report_tokens) {
+    json_object *object = json_object_new_object();
+    json_object_object_add(object, "id", json_object_new_string(model->id));
+    json_object_object_add(object, "displayName", json_object_new_string(model->display_name));
+    json_object_object_add(object, "rawAliases", string_array(model->raw_aliases));
+    json_object_object_add(object, "inputTokens", json_object_new_int64(model->input_tokens));
+    json_object_object_add(object, "cachedInputTokens", json_object_new_int64(model->cached_input_tokens));
+    json_object_object_add(object, "outputTokens", json_object_new_int64(model->output_tokens));
+    json_object_object_add(object,
+                           "reasoningTokens",
+                           model->has_reasoning_tokens ? json_object_new_int64(model->reasoning_tokens) : NULL);
+    json_object_object_add(object, "totalTokens", json_object_new_int64(model->total_tokens));
+    json_object_object_add(object,
+                           "share",
+                           json_object_new_double(report_tokens == 0
+                                                      ? 0
+                                                      : (double)model->total_tokens / (double)report_tokens));
+    json_object_object_add(object, "sessionReferences", json_object_new_int64(model->session_ids->len));
+    json_object_object_add(object, "associatedSessionIDs", string_array(model->session_ids));
+    json_object_object_add(object, "cost", model_cost_json(model, FALSE));
+    json_object_object_add(object, "previousTotalTokens", json_object_new_int64(model->previous_total_tokens));
+    json_object_object_add(object, "previousCost", model_cost_json(model, TRUE));
+    json_object_object_add(object,
+                           "previousSessionReferences",
+                           json_object_new_int64(model->previous_session_references));
+    json_object_object_add(object,
+                           "tokenComparison",
+                           comparison_json(model->total_tokens, model->previous_total_tokens));
+    json_object *daily = json_object_new_array_ext((int)model->days->len);
+    for (guint index = 0; index < model->days->len; index++) {
+        json_object_array_add(daily, day_json(g_ptr_array_index(model->days, index)));
+    }
+    json_object_object_add(object, "daily", daily);
+    return object;
+}
+
 static json_object *report_json(const CodexBarCostReport *report) {
     json_object *object = json_object_new_object();
     json_object_object_add(object, "provider", json_object_new_string(report->provider));
@@ -193,6 +290,18 @@ static json_object *report_json(const CodexBarCostReport *report) {
         json_object_array_add(projects, item);
     }
     json_object_object_add(object, "projects", projects);
+    json_object *models = json_object_new_array_ext((int)report->models->len);
+    guint session_references = 0;
+    guint active_models = 0;
+    for (guint index = 0; index < report->models->len; index++) {
+        const CodexBarCostModel *model = g_ptr_array_index(report->models, index);
+        if (model->total_tokens > 0) active_models++;
+        session_references += model->session_ids->len;
+        json_object_array_add(models, model_json(model, report->total_tokens));
+    }
+    json_object_object_add(object, "models", models);
+    json_object_object_add(object, "activeModelCount", json_object_new_int64(active_models));
+    json_object_object_add(object, "sessionReferenceTotal", json_object_new_int64(session_references));
     json_object *totals = json_object_new_object();
     json_object_object_add(totals, "totalTokens", json_object_new_int64(report->total_tokens));
     json_object_object_add(totals,
@@ -218,7 +327,7 @@ static int run_reports(const CostOptions *options, const char *const *providers,
             json_object_array_add(array, report_json(report));
         } else {
             if (index > 0) putchar('\n');
-            print_report_text(report, options->group_projects);
+            print_report_text(report, options->group_projects, options->group_models);
         }
         codexbar_cost_report_free(report);
     }

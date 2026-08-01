@@ -1,5 +1,6 @@
 #include "cli_sessions.h"
 
+#include "config.h"
 #include "sessions.h"
 
 #include <json-c/json.h>
@@ -25,6 +26,9 @@ static json_object *session_json(const CodexBarAgentSession *session) {
     json_object_object_add(object,
                            "projectName",
                            session->project_name ? json_object_new_string(session->project_name) : NULL);
+    json_object_object_add(object,
+                           "sessionName",
+                           session->session_name ? json_object_new_string(session->session_name) : NULL);
     char *started = session->has_started_at ? iso_time(session->started_at) : NULL;
     char *activity = session->has_last_activity_at ? iso_time(session->last_activity_at) : NULL;
     json_object_object_add(object, "startedAt", started ? json_object_new_string(started) : NULL);
@@ -81,7 +85,7 @@ static int list_sessions(int argc, char **argv) {
             pretty = TRUE;
         } else if (g_str_equal(argv[index], "--help") || g_str_equal(argv[index], "-h")) {
             puts("Usage: codexbar-linux sessions [list] [--json] [--pretty]\n"
-                 "       codexbar-linux sessions focus <id>");
+                 "       codexbar-linux sessions focus <id> [--host <host>]");
             return 0;
         } else {
             fprintf(stderr, "Unknown argument: %s\n", argv[index]);
@@ -95,6 +99,41 @@ static int list_sessions(int argc, char **argv) {
         g_clear_error(&error);
         return 1;
     }
+    CodexBarConfig *config = codexbar_config_load(&error);
+    if (!config) {
+        fprintf(stderr, "Error: %s\n", error ? error->message : "Could not load config.");
+        g_clear_error(&error);
+        g_ptr_array_unref(sessions);
+        return 1;
+    }
+    if (config->agent_sessions_enabled && !g_getenv("CODEXBAR_REMOTE_SESSIONS_LOCAL_ONLY")) {
+        GPtrArray *manual = codexbar_session_hosts_from_csv(config->agent_sessions_manual_hosts);
+        GPtrArray *discovered = codexbar_remote_sessions_discover(NULL, NULL);
+        GPtrArray *hosts = g_ptr_array_new_with_free_func(g_free);
+        for (guint index = 0; index < manual->len; index++) {
+            g_ptr_array_add(hosts, g_strdup(g_ptr_array_index(manual, index)));
+        }
+        for (guint index = 0; index < discovered->len; index++) {
+            g_ptr_array_add(hosts, g_strdup(g_ptr_array_index(discovered, index)));
+        }
+        GPtrArray *remote = codexbar_remote_sessions_fetch(
+            (const char *const *)hosts->pdata, hosts->len, NULL, NULL);
+        for (guint index = 0; index < remote->len; index++) {
+            CodexBarRemoteSessionHostResult *host_result = g_ptr_array_index(remote, index);
+            if (host_result->error) {
+                fprintf(stderr, "Remote host %s: %s\n", host_result->host, host_result->error);
+                continue;
+            }
+            while (host_result->sessions->len > 0) {
+                g_ptr_array_add(sessions, g_ptr_array_steal_index(host_result->sessions, 0));
+            }
+        }
+        g_ptr_array_unref(remote);
+        g_ptr_array_unref(hosts);
+        g_ptr_array_unref(discovered);
+        g_ptr_array_unref(manual);
+    }
+    codexbar_config_free(config);
     if (json) {
         json_object *array = json_object_new_array_ext((int)sessions->len);
         for (guint index = 0; index < sessions->len; index++) {
@@ -110,9 +149,19 @@ static int list_sessions(int argc, char **argv) {
 }
 
 static int focus_session(int argc, char **argv) {
-    if (argc != 1 || argv[0][0] == '\0') {
+    if ((argc != 1 && argc != 3) || argv[0][0] == '\0' ||
+        (argc == 3 && (!g_str_equal(argv[1], "--host") || argv[2][0] == '\0'))) {
         fputs("Missing session id.\n", stderr);
         return 1;
+    }
+    if (argc == 3) {
+        GError *error = NULL;
+        if (!codexbar_remote_session_focus(argv[0], argv[2], NULL, NULL, &error)) {
+            fprintf(stderr, "Error: %s\n", error ? error->message : "Remote session focus failed.");
+            g_clear_error(&error);
+            return 1;
+        }
+        return 0;
     }
     GError *error = NULL;
     GPtrArray *sessions = codexbar_sessions_scan(&error);

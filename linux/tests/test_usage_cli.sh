@@ -137,7 +137,7 @@ output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider deepseek --sourc
 status=$?
 set -e
 [ "$status" -eq 1 ]
-[ "$output" = '[{"provider":"deepseek","source":"web","error":{"message":"Source '\''web'\'' is not supported for deepseek.","code":1,"kind":"provider"}}]' ]
+[ "$output" = '[{"provider":"deepseek","source":"web","error":{"message":"Source '\''web'\'' is unavailable for deepseek on Linux. Supported sources: auto, api.","code":1,"kind":"provider"}}]' ]
 
 if CODEXBAR_BACKEND="$backend" "$binary" usage --provider unknown >/dev/null 2>&1; then
     printf 'unknown provider unexpectedly succeeded\n' >&2
@@ -198,7 +198,7 @@ status=$?
 set -e
 [ "$status" -eq 1 ]
 case "$output" in
-  '[{"provider":"jetbrains","source":"auto","error":{"message":"No JetBrains IDE with AI Assistant detected.'*'"code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"jetbrains","source":"cli","error":{"message":"No JetBrains IDE with AI Assistant detected.'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected missing JetBrains IDE output: %s\n' "$output" >&2
     exit 1
@@ -220,7 +220,7 @@ status=$?
 set -e
 [ "$status" -eq 1 ]
 case "$output" in
-  '[{"provider":"jetbrains","source":"api","error":{"message":"Source '\''api'\'' is not supported for jetbrains.","code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"jetbrains","source":"api","error":{"message":"Source '\''api'\'' is unavailable for jetbrains on Linux. Supported sources: auto, cli.","code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected unsupported JetBrains source output: %s\n' "$output" >&2
     exit 1
@@ -249,7 +249,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider kimi --source web --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"kimi","source":"web","error":{"message":"Kimi source '\''web'\'' has no native Linux implementation yet"'*'"code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"kimi","source":"web","error":{"message":"Source '\''web'\'' is unavailable for kimi on Linux. Supported sources: auto, api.","code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Kimi web-source output: %s\n' "$output" >&2
     exit 1
@@ -293,7 +293,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND HOME="$work/empty-opencode-go-home" CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider opencodego --source auto --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"opencodego","source":"auto","error":{"message":"OpenCode Go not detected. Log in with OpenCode Go or use it locally first.","code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"opencodego","source":"local","error":{"message":"OpenCode Go not detected. Log in with OpenCode Go or use it locally first.","code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native OpenCode Go detection output: %s\n' "$output" >&2
     exit 1
@@ -303,7 +303,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND HOME="$work/empty-opencode-go-home" CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider opencodego --source web --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"opencodego","source":"web","error":{"message":"OpenCode Go source '\''web'\'' has no native Linux implementation yet","code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"opencodego","source":"web","error":{"message":"Source '\''web'\'' is unavailable for opencodego on Linux. Supported sources: auto.","code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native OpenCode Go web-source output: %s\n' "$output" >&2
     exit 1
@@ -314,7 +314,7 @@ output=$(env -u CODEXBAR_BACKEND -u AZURE_OPENAI_API_KEY -u AZURE_OPENAI_ENDPOIN
   -u AZURE_OPENAI_DEPLOYMENT_NAME -u AZURE_OPENAI_API_VERSION CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider aoai --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"azureopenai","source":"auto","error":{"message":"Azure OpenAI API key not configured.'*'"code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"azureopenai","source":"api","error":{"message":"Azure OpenAI API key not configured.'*'"code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Azure OpenAI missing-key output: %s\n' "$output" >&2
     exit 1
@@ -324,7 +324,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider azure-openai --source web --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"azureopenai","source":"web","error":{"message":"Source '\''web'\'' is not supported for azure-openai.","code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"azureopenai","source":"web","error":{"message":"Source '\''web'\'' is unavailable for azure-openai on Linux. Supported sources: auto, api.","code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Azure OpenAI web-source output: %s\n' "$output" >&2
     exit 1
@@ -344,7 +344,7 @@ esac
 output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
   "$binary" usage --provider neural --source web --json 2>/dev/null || true)
 case "$output" in
-  '[{"provider":"neuralwatt","source":"web","error":{"message":"Source '\''web'\'' is not supported for neuralwatt.","code":1,"kind":"provider"}}]') ;;
+  '[{"provider":"neuralwatt","source":"web","error":{"message":"Source '\''web'\'' is unavailable for neuralwatt on Linux. Supported sources: auto, api.","code":1,"kind":"provider"}}]') ;;
   *)
     printf 'unexpected native Neuralwatt web-source output: %s\n' "$output" >&2
     exit 1

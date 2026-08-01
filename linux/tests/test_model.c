@@ -1466,6 +1466,86 @@ static void test_codex_rate_limits(void) {
     codexbar_snapshot_free(snapshot);
 }
 
+static guint codex_source_cli_calls;
+static guint codex_source_http_calls;
+static const char *codex_source_expected_header;
+static const char *codex_source_http_body;
+static long codex_source_http_status;
+
+static CodexBarHttpResponse *codex_source_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)error;
+    codex_source_http_calls++;
+    gboolean found = FALSE;
+    for (size_t index = 0; index < request->header_count; index++) {
+        if (g_str_equal(request->headers[index].name, codex_source_expected_header)) found = TRUE;
+    }
+    g_assert_true(found);
+    CodexBarHttpResponse *response = g_new0(CodexBarHttpResponse, 1);
+    response->status = codex_source_http_status;
+    response->body = g_strdup(codex_source_http_body);
+    response->body_length = strlen(response->body);
+    return response;
+}
+
+static CodexBarProvider *codex_source_cli(GError **error) {
+    (void)error;
+    codex_source_cli_calls++;
+    CodexBarProvider *provider = codexbar_provider_new();
+    provider->provider = g_strdup("codex");
+    provider->source = g_strdup("cli");
+    return provider;
+}
+
+static void test_codex_source_planner(void) {
+    const char *usage =
+        "{\"plan_type\":\"pro\",\"rate_limit\":{\"primary_window\":{\"used_percent\":25,"
+        "\"reset_at\":1776216359,\"limit_window_seconds\":18000}},"
+        "\"credits\":{\"has_credits\":true,\"balance\":\"4.5\"}}";
+    CodexBarProviderConfig config = {.id = "codex", .raw = json_object_new_object()};
+    json_object_object_add(config.raw, "oauthToken", json_object_new_string("oauth-token"));
+    codex_source_cli_calls = 0;
+    codex_source_http_calls = 0;
+    codex_source_expected_header = "Authorization";
+    codex_source_http_body = usage;
+    codex_source_http_status = 200;
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_codex_fetch_with_adapters(
+        &config, "oauth", codex_source_transport, codex_source_cli, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "oauth");
+    g_assert_cmpuint(codex_source_http_calls, ==, 1);
+    g_assert_cmpuint(codex_source_cli_calls, ==, 0);
+    codexbar_provider_free(provider);
+
+    json_object_object_add(config.raw, "cookieHeader", json_object_new_string("Cookie: session=test"));
+    codex_source_expected_header = "Cookie";
+    provider = codexbar_codex_fetch_with_adapters(
+        &config, "web", codex_source_transport, codex_source_cli, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpuint(codex_source_cli_calls, ==, 0);
+    codexbar_provider_free(provider);
+
+    codex_source_expected_header = "Authorization";
+    codex_source_http_status = 401;
+    provider = codexbar_codex_fetch_with_adapters(
+        &config, "auto", codex_source_transport, codex_source_cli, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "cli");
+    g_assert_cmpuint(codex_source_cli_calls, ==, 1);
+    codexbar_provider_free(provider);
+
+    codex_source_http_status = 200;
+    codex_source_http_body = "{}";
+    provider = codexbar_codex_fetch_with_adapters(
+        &config, "auto", codex_source_transport, codex_source_cli, NULL, &error);
+    g_assert_null(provider);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    g_assert_cmpuint(codex_source_cli_calls, ==, 1);
+    json_object_put(config.raw);
+}
+
 static void test_provider_registry(void) {
     const char *expected_ids[] = {
         "codex", "openai", "azureopenai", "claude", "clinepass", "cursor", "opencode", "opencodego",
@@ -1491,6 +1571,14 @@ static void test_provider_registry(void) {
             }
             g_strfreev(aliases);
         }
+        const char *auto_plan[3] = {0};
+        guint auto_plan_count =
+            codexbar_provider_auto_source_plan(provider, auto_plan, G_N_ELEMENTS(auto_plan));
+        g_assert_cmpuint(auto_plan_count, >, 0);
+        for (guint plan_index = 0; plan_index < auto_plan_count; plan_index++) {
+            g_assert_true(g_str_equal(auto_plan[plan_index], "local") ||
+                          codexbar_provider_supports_source(provider, auto_plan[plan_index]));
+        }
     }
     g_assert_null(codexbar_provider_registry_at(G_N_ELEMENTS(expected_ids)));
     g_assert_null(codexbar_provider_registry_find("unknown"));
@@ -1513,8 +1601,55 @@ static void test_provider_registry(void) {
     g_assert_false(codexbar_provider_supports_source(jetbrains, "oauth"));
     const CodexBarProviderDescriptor *codex = codexbar_provider_registry_find("codex");
     g_assert_true(codex->default_enabled);
+    g_assert_true(codexbar_provider_supports_source(codex, "cli"));
     g_assert_true(codexbar_provider_supports_source(codex, "oauth"));
+    g_assert_true(codexbar_provider_supports_source(codex, "web"));
     g_assert_false(codexbar_provider_supports_source(codex, "api"));
+    const char *plan[3] = {0};
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(codex, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "oauth");
+    g_assert_cmpstr(plan[1], ==, "cli");
+    char *supported = codexbar_provider_supported_sources(codex);
+    g_assert_cmpstr(supported, ==, "auto, web, cli, oauth");
+    g_free(supported);
+    const CodexBarProviderDescriptor *claude = codexbar_provider_registry_find("claude");
+    g_assert_true(codexbar_provider_supports_source(claude, "oauth"));
+    g_assert_true(codexbar_provider_supports_source(claude, "api"));
+    g_assert_true(codexbar_provider_supports_config_api_key(claude));
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(claude, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "web");
+    g_assert_cmpstr(plan[1], ==, "cli");
+    const CodexBarProviderDescriptor *cursor = codexbar_provider_registry_find("cursor");
+    g_assert_true(codexbar_provider_supports_source(cursor, "cli"));
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(cursor, plan, G_N_ELEMENTS(plan)), ==, 1);
+    g_assert_cmpstr(plan[0], ==, "web");
+    const CodexBarProviderDescriptor *factory = codexbar_provider_registry_find("factory");
+    g_assert_true(codexbar_provider_supports_source(factory, "cli"));
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(factory, plan, G_N_ELEMENTS(plan)), ==, 1);
+    g_assert_cmpstr(plan[0], ==, "api");
+    const CodexBarProviderDescriptor *amp = codexbar_provider_registry_find("amp");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(amp, plan, G_N_ELEMENTS(plan)), ==, 3);
+    g_assert_cmpstr(plan[0], ==, "cli");
+    g_assert_cmpstr(plan[1], ==, "api");
+    g_assert_cmpstr(plan[2], ==, "web");
+    const CodexBarProviderDescriptor *kilo = codexbar_provider_registry_find("kilo");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(kilo, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "api");
+    g_assert_cmpstr(plan[1], ==, "cli");
+    const CodexBarProviderDescriptor *grok = codexbar_provider_registry_find("grok");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(grok, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "cli");
+    g_assert_cmpstr(plan[1], ==, "web");
+    const char *single_source_providers[][2] = {
+        {"alibaba", "api"},
+        {"antigravity", "cli"}, {"minimax", "api"}, {"kimi", "api"},
+        {"ollama", "api"},      {"windsurf", "web"}, {"groq", "api"},
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(single_source_providers); index++) {
+        const CodexBarProviderDescriptor *single = codexbar_provider_registry_find(single_source_providers[index][0]);
+        g_assert_cmpuint(codexbar_provider_auto_source_plan(single, plan, G_N_ELEMENTS(plan)), ==, 1);
+        g_assert_cmpstr(plan[0], ==, single_source_providers[index][1]);
+    }
     g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "api"));
     g_assert_false(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "web"));
     const CodexBarProviderDescriptor *clinepass = codexbar_provider_registry_find("clinepass");
@@ -1621,6 +1756,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/provider/codebuff-usage", test_codebuff_usage);
     g_test_add_func("/provider/simple-parsers", test_simple_provider_parsers);
     g_test_add_func("/provider/codex-rate-limits", test_codex_rate_limits);
+    g_test_add_func("/provider/codex-source-planner", test_codex_source_planner);
     g_test_add_func("/provider/registry", test_provider_registry);
     return g_test_run();
 }

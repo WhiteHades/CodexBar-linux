@@ -5,6 +5,7 @@
 #include "cli_cost.h"
 #include "cli_diagnose.h"
 #include "cli_guard.h"
+#include "cli_history.h"
 #include "cli_hooks.h"
 #include "cli_managed_codex.h"
 #include "cli_sessions.h"
@@ -30,6 +31,7 @@ static int print_usage(const char *program) {
     fprintf(stderr, "       %s diagnose --provider <name|all> --format json\n", program);
     fprintf(stderr, "       %s guard --provider <name> [--window session|weekly] [--min-remaining <percent>]\n", program);
     fprintf(stderr, "       %s hooks <list|enable|disable|test>\n", program);
+    fprintf(stderr, "       %s history [--provider <name>] [--format text|json]\n", program);
     fprintf(stderr, "       %s codex-accounts <list|login|import|remove|exec>\n", program);
     fprintf(stderr, "       %s <waybar|tui|status-item>\n", program);
     fprintf(stderr, "       %s config <validate|dump|providers|enable|disable|set-api-key|accounts|refresh>\n", program);
@@ -55,6 +57,7 @@ int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "diagnose") == 0) return codexbar_cli_diagnose_run(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "guard") == 0) return codexbar_cli_guard_run(argv[0], argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "hooks") == 0) return codexbar_cli_hooks_run(argc - 2, argv + 2);
+    if (argc >= 2 && strcmp(argv[1], "history") == 0) return codexbar_cli_history_run(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "codex-accounts") == 0) {
         return codexbar_cli_managed_codex_run(argc - 2, argv + 2);
     }

@@ -99,7 +99,7 @@ output=$(CODEXBAR_CONFIG="$config" "$binary" config accounts list --provider zai
 
 output=$(CODEXBAR_CONFIG="$config" "$binary" config dump)
 case "$output" in
-  *'"version":1'*'"id":"openrouter"'*'"apiKey":"[REDACTED]"'*) ;;
+  *'"version":1'*'"agentSessionsEnabled":false'*'"agentSessionsManualHosts":""'*'"quotaWarningNotificationsEnabled":false'*'"quotaWarningSessionEnabled":true'*'"quotaWarningWeeklyEnabled":true'*'"quotaWarningSessionThresholds":[50,20]'*'"quotaWarningWeeklyThresholds":[50,20]'*'"historicalTrackingEnabled":false'*'"id":"openrouter"'*'"apiKey":"[REDACTED]"'*) ;;
   *)
     printf 'unexpected redacted config dump\n' >&2
     exit 1
@@ -190,7 +190,7 @@ if CODEXBAR_CONFIG="$config" "$binary" config validate >"$work/validate.out"; th
 fi
 output=$(cat "$work/validate.out")
 case "$output" in
-  '[ERROR] deepseek (source): Source web is not supported for deepseek.'*) ;;
+  '[ERROR] deepseek (source): Source web is unavailable for deepseek on Linux. Supported sources: auto, api.'*) ;;
   *)
     printf 'unexpected validation output: %s\n' "$output" >&2
     exit 1

@@ -12,6 +12,9 @@ static char *last_hook_account;
 static char *last_hook_window;
 static char *last_hook_status;
 static double last_hook_usage;
+static guint notification_calls;
+static char *last_notification_event;
+static int last_notification_threshold;
 static gboolean usage_has_window;
 static double usage_percent;
 static gint64 usage_updated_at;
@@ -85,6 +88,14 @@ static void capture_hook(json_object *hooks, const CodexBarHookEvent *event, gpo
     last_hook_usage = event->usage_percent;
 }
 
+static void capture_notification(const CodexBarHookEvent *event, gpointer user_data) {
+    (void)user_data;
+    notification_calls++;
+    g_free(last_notification_event);
+    last_notification_event = g_strdup(event->event);
+    last_notification_threshold = event->has_warning_threshold ? event->warning_threshold : 0;
+}
+
 static void reset_usage(void) {
     usage_has_window = FALSE;
     usage_percent = 0;
@@ -101,6 +112,12 @@ static void reset_hooks(void) {
     g_clear_pointer(&last_hook_window, g_free);
     g_clear_pointer(&last_hook_status, g_free);
     last_hook_usage = 0;
+}
+
+static void reset_notifications(void) {
+    notification_calls = 0;
+    g_clear_pointer(&last_notification_event, g_free);
+    last_notification_threshold = 0;
 }
 
 static char *write_config(void) {
@@ -242,6 +259,7 @@ static void test_quota_low_is_crossing_and_lane_scoped(void) {
                    "{\"enabled\":true,\"events\":[{\"event\":\"quota_low\","
                    "\"threshold\":0.8,\"executable\":\"/bin/true\"}]}");
     g_setenv("CODEXBAR_CONFIG", path, TRUE);
+    g_setenv("CODEXBAR_DISABLE_STATUS", "1", TRUE);
     reset_usage();
     reset_hooks();
     usage_has_window = TRUE;
@@ -250,6 +268,7 @@ static void test_quota_low_is_crossing_and_lane_scoped(void) {
     usage_updated_at = 1000;
     status_fails = FALSE;
     status_indicator = "none";
+    status_calls = 0;
     CodexBarRuntime *runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
     codexbar_runtime_set_hook_dispatcher(runtime, capture_hook, NULL);
 
@@ -268,6 +287,7 @@ static void test_quota_low_is_crossing_and_lane_scoped(void) {
     g_assert_cmpstr(last_hook_account, ==, "one");
     g_assert_cmpstr(last_hook_window, ==, "5-hour");
     g_assert_cmpfloat(last_hook_usage, ==, 0.85);
+    g_assert_cmpuint(status_calls, ==, 0);
 
     usage_account = "two";
     usage_percent = 90;
@@ -280,6 +300,7 @@ static void test_quota_low_is_crossing_and_lane_scoped(void) {
     codexbar_runtime_free(runtime);
     reset_hooks();
     g_unsetenv("CODEXBAR_CONFIG");
+    g_unsetenv("CODEXBAR_DISABLE_STATUS");
     remove_config(path);
 }
 
@@ -380,7 +401,89 @@ static void test_refresh_failure_suppression_and_rate_limit(void) {
     remove_config(path);
 }
 
+static void test_quota_warning_notifications_follow_provider_config(void) {
+    char *path = write_config();
+    g_assert_true(g_file_set_contents(
+        path,
+        "{\"version\":1,\"quotaWarningNotificationsEnabled\":true,\"providers\":[{\"id\":\"codex\",\"enabled\":true,"
+        "\"quotaWarnings\":{\"session\":{\"enabled\":true,\"thresholds\":[50,20]}}}]}",
+        -1,
+        NULL));
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+    reset_usage();
+    reset_hooks();
+    reset_notifications();
+    usage_has_window = TRUE;
+    usage_account = "one";
+    usage_percent = 40;
+    usage_updated_at = 1000;
+    status_fails = FALSE;
+    status_indicator = "none";
+    CodexBarRuntime *runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
+    codexbar_runtime_set_hook_dispatcher(runtime, capture_hook, NULL);
+    codexbar_runtime_set_notification_dispatcher(runtime, capture_notification, NULL);
+
+    CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(notification_calls, ==, 0);
+    usage_percent = 55;
+    usage_updated_at = 2000;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(notification_calls, ==, 1);
+    g_assert_cmpstr(last_notification_event, ==, "quota_low");
+    g_assert_cmpint(last_notification_threshold, ==, 50);
+
+    usage_percent = 100;
+    usage_updated_at = 3000;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(notification_calls, ==, 3);
+    g_assert_cmpstr(last_notification_event, ==, "quota_reached");
+
+    usage_percent = 50;
+    usage_updated_at = 4000;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(notification_calls, ==, 3);
+    usage_updated_at = 5000;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(notification_calls, ==, 4);
+    g_assert_cmpstr(last_notification_event, ==, "quota_reset");
+    g_assert_cmpuint(hook_calls, ==, 0);
+
+    codexbar_runtime_free(runtime);
+    reset_notifications();
+    usage_percent = 90;
+    usage_updated_at = 6000;
+    runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
+    codexbar_runtime_set_notification_dispatcher(runtime, capture_notification, NULL);
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(notification_calls, ==, 1);
+    g_assert_cmpstr(last_notification_event, ==, "quota_low");
+    g_assert_cmpint(last_notification_threshold, ==, 20);
+    usage_percent = 30;
+    usage_updated_at = 7000;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    usage_percent = 60;
+    usage_updated_at = 8000;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(notification_calls, ==, 2);
+    g_assert_cmpint(last_notification_threshold, ==, 50);
+    codexbar_runtime_free(runtime);
+    reset_notifications();
+    reset_hooks();
+    reset_usage();
+    g_unsetenv("CODEXBAR_CONFIG");
+    remove_config(path);
+}
+
 int main(int argc, char **argv) {
+    g_setenv("CODEXBAR_DISABLE_HISTORY", "1", TRUE);
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/runtime/status/last-good", test_status_publication_and_last_good);
     g_test_add_func("/runtime/status/first-failure", test_first_status_failure_is_unknown);
@@ -388,5 +491,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/runtime/hooks/quota-low", test_quota_low_is_crossing_and_lane_scoped);
     g_test_add_func("/runtime/hooks/session", test_session_hooks_confirm_codex_restore);
     g_test_add_func("/runtime/hooks/refresh-failed", test_refresh_failure_suppression_and_rate_limit);
+    g_test_add_func("/runtime/notifications/quota", test_quota_warning_notifications_follow_provider_config);
     return g_test_run();
 }

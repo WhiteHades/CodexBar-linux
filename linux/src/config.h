@@ -28,6 +28,16 @@ typedef struct {
     char *path;
     GPtrArray *providers;
     CodexBarRefreshFrequency refresh_frequency;
+    gboolean agent_sessions_enabled;
+    char *agent_sessions_manual_hosts;
+    gboolean quota_warning_notifications_enabled;
+    gboolean quota_warning_session_enabled;
+    gboolean quota_warning_weekly_enabled;
+    guint quota_warning_session_threshold_count;
+    guint quota_warning_weekly_threshold_count;
+    int quota_warning_session_thresholds[100];
+    int quota_warning_weekly_thresholds[100];
+    gboolean historical_tracking_enabled;
     json_object *raw;
     gboolean loaded_from_disk;
     char *loaded_digest;

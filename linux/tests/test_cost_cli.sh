@@ -3,18 +3,27 @@
 set -eu
 
 binary=$1
-work=$(mktemp -d "$PWD/codexbar-cost-cli.XXXXXX")
+mkdir -p .tmp
+work=$(mktemp -d "$PWD/.tmp/codexbar-cost-cli.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 codex=$work/codex
 claude=$work/claude/projects/sample
 mkdir -p "$codex" "$claude"
 timestamp=$(date '+%Y-%m-%dT%H:%M:%S%:z')
+previous_timestamp=$(date -d '40 days ago' '+%Y-%m-%dT%H:%M:%S%:z')
 
 cat >"$codex/session.jsonl" <<EOF
 {"timestamp":"$timestamp","type":"session_meta","payload":{"id":"session-1","cwd":"$work/project"}}
 {"timestamp":"$timestamp","type":"turn_context","payload":{"model":"gpt-5"}}
-{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100},"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100}}}}
-{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":50},"total_token_usage":{"input_tokens":1500,"cached_input_tokens":300,"output_tokens":150}}}}
+{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100,"reasoning_output_tokens":40},"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":100,"reasoning_output_tokens":40}}}}
+{"timestamp":"$timestamp","type":"turn_context","payload":{"model":" OpenAI/GPT-5 "}}
+{"timestamp":"$timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":50,"reasoning_output_tokens":20},"total_token_usage":{"input_tokens":1500,"cached_input_tokens":300,"output_tokens":150,"reasoning_output_tokens":60}}}}
+EOF
+
+cat >"$codex/previous.jsonl" <<EOF
+{"timestamp":"$previous_timestamp","type":"session_meta","payload":{"id":"session-previous","cwd":"$work/old-project"}}
+{"timestamp":"$previous_timestamp","type":"turn_context","payload":{"model":"gpt-5-mini"}}
+{"timestamp":"$previous_timestamp","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20},"total_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20}}}}
 EOF
 
 cat >"$claude/session.jsonl" <<EOF
@@ -25,11 +34,17 @@ EOF
 output=$(CODEXBAR_COST_CODEX_ROOT="$codex" CODEXBAR_COST_CLAUDE_ROOT="$work/claude" \
   "$binary" cost --provider codex --format json)
 case "$output" in
-  '[{"provider":"codex"'*'"sessionTokens":1650'*'"sessionCostUSD":0.0030375'*'"totalTokens":1650'*'"skippedForkFiles":0'*) ;;
+  '[{"provider":"codex"'*'"sessionTokens":1650'*'"sessionCostUSD":0.0030375'*'"models":[{"id":"gpt-5"'*'"rawAliases":[" OpenAI\/GPT-5 ","gpt-5"]'*'"reasoningTokens":60'*'"totalTokens":1650'*'"sessionReferences":1'*'"pricedTokens":1650'*'"kind":"new"'*'"id":"gpt-5-mini"'*'"previousTotalTokens":100'*'"kind":"ended"'*'"activeModelCount":1'*'"skippedForkFiles":0'*) ;;
   *)
     printf 'unexpected Codex cost output: %s\n' "$output" >&2
     exit 1
     ;;
+esac
+
+output=$(CODEXBAR_COST_CODEX_ROOT="$codex" "$binary" cost --provider codex --group-by model)
+case "$output" in
+  *'Models (Last 30 days):'*'gpt-5: $0.0030 known, 1.6K tokens, 1 session refs'*) ;;
+  *) printf 'unexpected model output: %s\n' "$output" >&2; exit 1 ;;
 esac
 
 output=$(CODEXBAR_COST_CODEX_ROOT="$codex" "$binary" cost --provider codex --group-by project)
@@ -43,7 +58,7 @@ esac
 
 output=$(CODEXBAR_COST_CLAUDE_ROOT="$work/claude" "$binary" cost --provider claude --json)
 case "$output" in
-  '[{"provider":"claude"'*'"sessionTokens":135'*'"sessionCostUSD":0.0004185'*'"totalTokens":135'*) ;;
+  '[{"provider":"claude"'*'"sessionTokens":135'*'"sessionCostUSD":0.0004185'*'"models":[{"id":"claude-sonnet-4-6"'*'"totalTokens":135'*'"sessionReferences":1'*) ;;
   *)
     printf 'unexpected Claude cost output: %s\n' "$output" >&2
     exit 1

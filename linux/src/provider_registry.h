@@ -96,6 +96,10 @@ guint codexbar_provider_registry_count(void);
 const CodexBarProviderDescriptor *codexbar_provider_registry_at(guint index);
 const CodexBarProviderDescriptor *codexbar_provider_registry_find(const char *name);
 gboolean codexbar_provider_supports_source(const CodexBarProviderDescriptor *provider, const char *source);
+guint codexbar_provider_auto_source_plan(const CodexBarProviderDescriptor *provider,
+                                         const char **sources,
+                                         guint capacity);
+char *codexbar_provider_supported_sources(const CodexBarProviderDescriptor *provider);
 CodexBarProviderStatusSource codexbar_provider_status_source(const CodexBarProviderDescriptor *provider);
 const char *codexbar_provider_status_source_value(const CodexBarProviderDescriptor *provider);
 gboolean codexbar_provider_status_is_pollable(const CodexBarProviderDescriptor *provider);

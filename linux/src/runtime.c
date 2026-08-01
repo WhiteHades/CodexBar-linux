@@ -2,7 +2,9 @@
 
 #include "backend.h"
 #include "config.h"
+#include "history.h"
 #include "hooks.h"
+#include "notifications.h"
 #include "provider_registry.h"
 #include "transitions.h"
 
@@ -28,8 +30,12 @@ struct CodexBarRuntime {
     CodexBarTransitionState *transitions;
     CodexBarRuntimeHookDispatcher hook_dispatcher;
     gpointer hook_dispatcher_data;
+    CodexBarRuntimeNotificationDispatcher notification_dispatcher;
+    gpointer notification_dispatcher_data;
     GHashTable *session_states;
+    GHashTable *warning_states;
     GHashTable *failure_states;
+    CodexBarHistoryStore *history;
 };
 
 typedef struct {
@@ -52,6 +58,13 @@ typedef struct {
     guint streak;
     gboolean had_success;
 } FailureState;
+
+typedef struct {
+    gboolean has_last_remaining;
+    double last_remaining;
+    guint64 fired_low;
+    guint64 fired_high;
+} WarningState;
 
 static CodexBarSnapshot *default_usage_fetcher(GCancellable *cancellable,
                                                gpointer user_data,
@@ -120,6 +133,11 @@ static void default_hook_dispatcher(json_object *hooks,
     g_thread_unref(thread);
 }
 
+static void default_notification_dispatcher(const CodexBarHookEvent *event, gpointer user_data) {
+    (void)user_data;
+    codexbar_notification_send(event);
+}
+
 CodexBarRuntime *codexbar_runtime_new_with_transports(CodexBarRuntimeUsageFetcher usage_fetcher,
                                                       gpointer usage_fetcher_data,
                                                       CodexBarStatusTransport status_transport) {
@@ -132,10 +150,21 @@ CodexBarRuntime *codexbar_runtime_new_with_transports(CodexBarRuntimeUsageFetche
     runtime->status_transport = status_transport;
     runtime->transitions = codexbar_transition_state_new();
     runtime->hook_dispatcher = default_hook_dispatcher;
+    runtime->notification_dispatcher = default_notification_dispatcher;
     runtime->session_states = g_hash_table_new_full(
         g_str_hash, g_str_equal, g_free, (GDestroyNotify)session_state_free);
+    runtime->warning_states = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     runtime->failure_states = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    runtime->history = codexbar_history_store_new(NULL);
     return runtime;
+}
+
+void codexbar_runtime_set_notification_dispatcher(CodexBarRuntime *runtime,
+                                                  CodexBarRuntimeNotificationDispatcher dispatcher,
+                                                  gpointer user_data) {
+    g_return_if_fail(runtime != NULL);
+    runtime->notification_dispatcher = dispatcher ? dispatcher : default_notification_dispatcher;
+    runtime->notification_dispatcher_data = user_data;
 }
 
 CodexBarRuntime *codexbar_runtime_new(void) {
@@ -147,7 +176,9 @@ void codexbar_runtime_free(CodexBarRuntime *runtime) {
     g_hash_table_unref(runtime->last_good_statuses);
     codexbar_transition_state_free(runtime->transitions);
     g_hash_table_unref(runtime->session_states);
+    g_hash_table_unref(runtime->warning_states);
     g_hash_table_unref(runtime->failure_states);
+    codexbar_history_store_free(runtime->history);
     g_free(runtime->config_digest);
     g_mutex_clear(&runtime->lock);
     g_free(runtime);
@@ -224,6 +255,7 @@ static void reconcile_config_revision(CodexBarRuntime *runtime, const char *dige
     if (runtime->config_digest && g_strcmp0(runtime->config_digest, digest) != 0) {
         g_hash_table_remove_all(runtime->last_good_statuses);
         g_hash_table_remove_all(runtime->session_states);
+        g_hash_table_remove_all(runtime->warning_states);
         g_hash_table_remove_all(runtime->failure_states);
     }
     g_free(runtime->config_digest);
@@ -306,6 +338,128 @@ static json_object *copy_hooks(const CodexBarConfig *config) {
         return NULL;
     }
     return json_tokener_parse(json_object_to_json_string_ext(hooks, JSON_C_TO_STRING_PLAIN));
+}
+
+static json_object *provider_warning_lane(const CodexBarProviderConfig *provider, const char *lane) {
+    json_object *warnings = NULL;
+    json_object *configured = NULL;
+    return provider->raw && json_object_object_get_ex(provider->raw, "quotaWarnings", &warnings) &&
+                   json_object_is_type(warnings, json_type_object) &&
+                   json_object_object_get_ex(warnings, lane, &configured) &&
+                   json_object_is_type(configured, json_type_object)
+               ? configured
+               : NULL;
+}
+
+static json_object *resolved_warning_thresholds(json_object *override,
+                                                const int *global,
+                                                guint global_count) {
+    json_object *configured = NULL;
+    gboolean has_override = override && json_object_object_get_ex(override, "thresholds", &configured) &&
+                            json_object_is_type(configured, json_type_array);
+    gboolean seen[100] = {0};
+    int thresholds[100];
+    guint count = 0;
+    if (has_override) {
+        for (size_t index = 0; index < json_object_array_length(configured); index++) {
+            json_object *entry = json_object_array_get_idx(configured, index);
+            if (!json_object_is_type(entry, json_type_int)) continue;
+            int threshold = CLAMP(json_object_get_int(entry), 0, 99);
+            if (!seen[threshold]) thresholds[count++] = threshold;
+            seen[threshold] = TRUE;
+        }
+        if (count == 0) {
+            thresholds[0] = 50;
+            thresholds[1] = 20;
+            count = 2;
+        }
+    } else {
+        memcpy(thresholds, global, global_count * sizeof(global[0]));
+        count = global_count;
+    }
+    for (guint left = 0; left < count; left++) {
+        for (guint right = left + 1; right < count; right++) {
+            if (thresholds[right] > thresholds[left]) {
+                int temporary = thresholds[left];
+                thresholds[left] = thresholds[right];
+                thresholds[right] = temporary;
+            }
+        }
+    }
+    json_object *array = json_object_new_array_ext((int)count);
+    for (guint index = 0; index < count; index++) {
+        json_object_array_add(array, json_object_new_int(thresholds[index]));
+    }
+    return array;
+}
+
+static json_object *resolved_warning_lane(const CodexBarProviderConfig *provider,
+                                          const char *lane,
+                                          gboolean global_enabled,
+                                          const int *global_thresholds,
+                                          guint global_threshold_count) {
+    json_object *override = provider_warning_lane(provider, lane);
+    json_object *enabled_value = NULL;
+    json_object *thresholds_value = NULL;
+    gboolean has_threshold_override = override &&
+        json_object_object_get_ex(override, "thresholds", &thresholds_value) &&
+        json_object_is_type(thresholds_value, json_type_array);
+    gboolean enabled = override && json_object_object_get_ex(override, "enabled", &enabled_value) &&
+                               json_object_is_type(enabled_value, json_type_boolean)
+                           ? json_object_get_boolean(enabled_value)
+                           : has_threshold_override ? TRUE : global_enabled;
+    if (!enabled) return NULL;
+    json_object *resolved = json_object_new_object();
+    json_object_object_add(resolved, "enabled", json_object_new_boolean(TRUE));
+    json_object_object_add(resolved,
+                           "thresholds",
+                           resolved_warning_thresholds(
+                               override, global_thresholds, global_threshold_count));
+    return resolved;
+}
+
+static json_object *copy_quota_warnings(const CodexBarConfig *config) {
+    json_object *warnings = json_object_new_object();
+    if (!config->quota_warning_notifications_enabled) return warnings;
+    for (guint index = 0; index < config->providers->len; index++) {
+        CodexBarProviderConfig *provider = g_ptr_array_index(config->providers, index);
+        json_object *provider_warnings = json_object_new_object();
+        json_object *session = resolved_warning_lane(provider,
+                                                     "session",
+                                                     config->quota_warning_session_enabled,
+                                                     config->quota_warning_session_thresholds,
+                                                     config->quota_warning_session_threshold_count);
+        json_object *weekly = resolved_warning_lane(provider,
+                                                    "weekly",
+                                                    config->quota_warning_weekly_enabled,
+                                                    config->quota_warning_weekly_thresholds,
+                                                    config->quota_warning_weekly_threshold_count);
+        if (session) json_object_object_add(provider_warnings, "session", session);
+        if (weekly) json_object_object_add(provider_warnings, "weekly", weekly);
+        if (json_object_object_length(provider_warnings) > 0) {
+            json_object_object_add(warnings, provider->id, provider_warnings);
+        } else {
+            json_object_put(provider_warnings);
+        }
+    }
+    return warnings;
+}
+
+static json_object *warning_lane(json_object *warnings, const char *provider, const char *lane) {
+    json_object *provider_warnings = NULL;
+    json_object *configured = NULL;
+    if (!warnings || !json_object_object_get_ex(warnings, provider, &provider_warnings) ||
+        !json_object_is_type(provider_warnings, json_type_object) ||
+        !json_object_object_get_ex(provider_warnings, lane, &configured) ||
+        !json_object_is_type(configured, json_type_object)) {
+        return NULL;
+    }
+    json_object *enabled = NULL;
+    if (json_object_object_get_ex(configured, "enabled", &enabled) &&
+        json_object_is_type(enabled, json_type_boolean) && !json_object_get_boolean(enabled)) {
+        return NULL;
+    }
+    return configured;
 }
 
 static gboolean rule_matches_event_provider(json_object *rule,
@@ -392,11 +546,13 @@ static CodexBarQuotaWindow *session_window(const CodexBarProvider *provider) {
 
 static void dispatch_session_transition(CodexBarRuntime *runtime,
                                         json_object *hooks,
+                                        json_object *warnings,
                                         const CodexBarProvider *provider) {
     CodexBarQuotaWindow *window = session_window(provider);
     if (!window) return;
     gboolean reached_rule = has_hook_rule(hooks, "quota_reached", provider->provider);
     gboolean reset_rule = has_hook_rule(hooks, "quota_reset", provider->provider);
+    gboolean notifications_enabled = warning_lane(warnings, provider->provider, "session") != NULL;
     char *key = transition_lane_key(provider);
     gint64 observed_at = provider->has_updated_at ? provider->updated_at_ms : g_get_real_time() / 1000;
     const char *owner = provider_account_key(provider);
@@ -417,15 +573,17 @@ static void dispatch_session_transition(CodexBarRuntime *runtime,
     CodexBarSessionQuotaOutcome outcome = codexbar_session_quota_evaluate(
         previous ? &previous->state : NULL,
         &observation,
-        reached_rule || reset_rule,
+        reached_rule || reset_rule || notifications_enabled,
         FALSE,
         &next->state);
     g_hash_table_replace(runtime->session_states, key, next);
     g_mutex_unlock(&runtime->lock);
 
-    const char *event_name = outcome == CODEXBAR_SESSION_QUOTA_DEPLETED && reached_rule
+    const char *event_name = outcome == CODEXBAR_SESSION_QUOTA_DEPLETED &&
+                                     (reached_rule || notifications_enabled)
                                  ? "quota_reached"
-                             : outcome == CODEXBAR_SESSION_QUOTA_RESTORED && reset_rule
+                             : outcome == CODEXBAR_SESSION_QUOTA_RESTORED &&
+                                       (reset_rule || notifications_enabled)
                                  ? "quota_reset"
                                  : NULL;
     if (!event_name) return;
@@ -439,7 +597,13 @@ static void dispatch_session_transition(CodexBarRuntime *runtime,
         .usage_percent = CLAMP(window->used_percent / 100, 0, 1),
         .reset_at = reset_at,
     };
-    runtime->hook_dispatcher(hooks, &event, runtime->hook_dispatcher_data);
+    if ((g_str_equal(event_name, "quota_reached") && reached_rule) ||
+        (g_str_equal(event_name, "quota_reset") && reset_rule)) {
+        runtime->hook_dispatcher(hooks, &event, runtime->hook_dispatcher_data);
+    }
+    if (notifications_enabled) {
+        runtime->notification_dispatcher(&event, runtime->notification_dispatcher_data);
+    }
     g_free(reset_at);
 }
 
@@ -488,14 +652,79 @@ static json_object *crossed_quota_low_hooks(json_object *hooks,
     return filtered;
 }
 
+static gboolean warning_fired(const WarningState *state, int threshold) {
+    return threshold < 64 ? (state->fired_low & ((guint64)1 << threshold)) != 0
+                          : (state->fired_high & ((guint64)1 << (threshold - 64))) != 0;
+}
+
+static void warning_set_fired(WarningState *state, int threshold, gboolean fired) {
+    guint64 bit = (guint64)1 << (threshold < 64 ? threshold : threshold - 64);
+    guint64 *bits = threshold < 64 ? &state->fired_low : &state->fired_high;
+    if (fired) *bits |= bit;
+    else *bits &= ~bit;
+}
+
+static int notification_crossed_threshold(CodexBarRuntime *runtime,
+                                          json_object *lane,
+                                          const CodexBarProvider *provider,
+                                          const char *lane_name,
+                                          const char *window_id,
+                                          double current_used) {
+    json_object *thresholds = NULL;
+    if (!json_object_object_get_ex(lane, "thresholds", &thresholds) ||
+        !json_object_is_type(thresholds, json_type_array)) {
+        return 0;
+    }
+    char *key = g_strjoin("\x1f",
+                          provider->provider,
+                          provider_account_key(provider) ? provider_account_key(provider) : "",
+                          lane_name,
+                          window_id ? window_id : "",
+                          NULL);
+    double remaining = 100 - current_used * 100;
+    int crossed = 0;
+    g_mutex_lock(&runtime->lock);
+    WarningState *state = g_hash_table_lookup(runtime->warning_states, key);
+    if (!state) {
+        state = g_new0(WarningState, 1);
+        g_hash_table_insert(runtime->warning_states, g_strdup(key), state);
+    }
+    for (size_t index = 0; index < json_object_array_length(thresholds); index++) {
+        json_object *entry = json_object_array_get_idx(thresholds, index);
+        if (!json_object_is_type(entry, json_type_int)) continue;
+        int threshold = CLAMP(json_object_get_int(entry), 0, 99);
+        if (threshold == 0) continue;
+        if (remaining > threshold) warning_set_fired(state, threshold, FALSE);
+        gboolean crossed_now = remaining <= threshold && !warning_fired(state, threshold) &&
+                               (!state->has_last_remaining || state->last_remaining > threshold);
+        if (crossed_now && (crossed == 0 || threshold < crossed)) crossed = threshold;
+    }
+    if (crossed > 0) {
+        for (size_t index = 0; index < json_object_array_length(thresholds); index++) {
+            json_object *entry = json_object_array_get_idx(thresholds, index);
+            if (!json_object_is_type(entry, json_type_int)) continue;
+            int threshold = CLAMP(json_object_get_int(entry), 0, 99);
+            if (threshold >= crossed && threshold > 0) warning_set_fired(state, threshold, TRUE);
+        }
+    }
+    state->has_last_remaining = TRUE;
+    state->last_remaining = remaining;
+    g_mutex_unlock(&runtime->lock);
+    g_free(key);
+    return crossed;
+}
+
 static void dispatch_quota_low_transitions(CodexBarRuntime *runtime,
                                            json_object *hooks,
+                                           json_object *warnings,
                                            const CodexBarProvider *provider) {
-    if (!has_hook_rule(hooks, "quota_low", provider->provider)) return;
+    gboolean hook_enabled = has_hook_rule(hooks, "quota_low", provider->provider);
     for (guint index = 0; index < provider->quota_windows->len; index++) {
         CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
         if (!window->usage_known) continue;
         const char *lane = window->has_window_minutes && window->window_minutes > 360 ? "weekly" : "session";
+        json_object *notification_lane = warning_lane(warnings, provider->provider, lane);
+        if (!hook_enabled && !notification_lane) continue;
         double current = CLAMP(window->used_percent / 100, 0, 1);
         double previous = 0;
         g_mutex_lock(&runtime->lock);
@@ -507,9 +736,19 @@ static void dispatch_quota_low_transitions(CodexBarRuntime *runtime,
                                                                   current,
                                                                   &previous);
         g_mutex_unlock(&runtime->lock);
-        if (!had_previous) continue;
-        json_object *filtered = crossed_quota_low_hooks(hooks, provider->provider, previous, current);
-        if (!filtered) continue;
+        json_object *filtered = hook_enabled && had_previous
+                                    ? crossed_quota_low_hooks(hooks, provider->provider, previous, current)
+                                    : NULL;
+        int warning_threshold = notification_lane
+                                    ? notification_crossed_threshold(runtime,
+                                                                       notification_lane,
+                                                                       provider,
+                                                                       lane,
+                                                                       window->id,
+                                                                       current)
+                                    : 0;
+        gboolean notify = warning_threshold > 0;
+        if (!filtered && !notify) continue;
         char *reset_at = window->has_resets_at ? iso8601_milliseconds(window->resets_at_ms) : NULL;
         CodexBarHookEvent event = {
             .event = "quota_low",
@@ -518,11 +757,14 @@ static void dispatch_quota_low_transitions(CodexBarRuntime *runtime,
             .window = window->title ? window->title : lane,
             .has_usage_percent = TRUE,
             .usage_percent = current,
+            .has_warning_threshold = notify,
+            .warning_threshold = warning_threshold,
             .reset_at = reset_at,
         };
-        runtime->hook_dispatcher(filtered, &event, runtime->hook_dispatcher_data);
+        if (filtered) runtime->hook_dispatcher(filtered, &event, runtime->hook_dispatcher_data);
+        if (notify) runtime->notification_dispatcher(&event, runtime->notification_dispatcher_data);
         g_free(reset_at);
-        json_object_put(filtered);
+        if (filtered) json_object_put(filtered);
     }
 }
 
@@ -570,14 +812,18 @@ static void dispatch_refresh_failure(CodexBarRuntime *runtime,
 
 static void dispatch_snapshot_hooks(CodexBarRuntime *runtime,
                                     json_object *hooks,
+                                    json_object *warnings,
                                     const CodexBarSnapshot *snapshot) {
-    if (!hooks || !codexbar_hooks_enabled(hooks)) return;
+    if ((!hooks || !codexbar_hooks_enabled(hooks)) &&
+        (!warnings || json_object_object_length(warnings) == 0)) {
+        return;
+    }
     for (guint index = 0; index < snapshot->providers->len; index++) {
         const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
         dispatch_refresh_failure(runtime, hooks, provider);
         if (provider->error) continue;
-        dispatch_quota_low_transitions(runtime, hooks, provider);
-        dispatch_session_transition(runtime, hooks, provider);
+        dispatch_quota_low_transitions(runtime, hooks, warnings, provider);
+        dispatch_session_transition(runtime, hooks, warnings, provider);
     }
 }
 
@@ -598,22 +844,25 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
                                         GError **error) {
     g_return_val_if_fail(runtime != NULL, NULL);
     const char *backend = g_getenv("CODEXBAR_BACKEND");
-    if ((backend && backend[0] != '\0') || environment_flag("CODEXBAR_DISABLE_STATUS")) {
-        return runtime->usage_fetcher(cancellable, runtime->usage_fetcher_data, error);
-    }
+    gboolean skip_status = (backend && backend[0] != '\0') || environment_flag("CODEXBAR_DISABLE_STATUS");
 
     CodexBarConfig *config = codexbar_config_load(error);
     if (!config) return NULL;
     char *config_digest = g_strdup(config->loaded_digest);
     reconcile_config_revision(runtime, config_digest);
     json_object *hooks = copy_hooks(config);
-    GPtrArray *requests = start_status_requests(runtime, config, cancellable);
+    json_object *warnings = copy_quota_warnings(config);
+    gboolean historical_tracking_enabled = config->historical_tracking_enabled;
+    GPtrArray *requests = skip_status
+                              ? g_ptr_array_new_with_free_func((GDestroyNotify)status_request_free)
+                              : start_status_requests(runtime, config, cancellable);
     codexbar_config_free(config);
 
     CodexBarSnapshot *snapshot = runtime->usage_fetcher(cancellable, runtime->usage_fetcher_data, error);
     if (!snapshot) {
         g_free(config_digest);
         if (hooks) json_object_put(hooks);
+        json_object_put(warnings);
         g_ptr_array_unref(requests);
         return NULL;
     }
@@ -624,6 +873,7 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
     g_free(config_digest);
     if (!publication_is_current) {
         if (hooks) json_object_put(hooks);
+        json_object_put(warnings);
         g_ptr_array_unref(requests);
         return snapshot;
     }
@@ -635,8 +885,16 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
         dispatch_status_hook(runtime, hooks, request, fresh);
         codexbar_service_status_free(status);
     }
-    dispatch_snapshot_hooks(runtime, hooks, snapshot);
+    dispatch_snapshot_hooks(runtime, hooks, warnings, snapshot);
+    if (!environment_flag("CODEXBAR_DISABLE_HISTORY")) {
+        codexbar_history_store_record(runtime->history,
+                                      snapshot,
+                                      g_get_real_time() / 1000,
+                                      historical_tracking_enabled,
+                                      NULL);
+    }
     if (hooks) json_object_put(hooks);
+    json_object_put(warnings);
     g_ptr_array_unref(requests);
     return snapshot;
 }

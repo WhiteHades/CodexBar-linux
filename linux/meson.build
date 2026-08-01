@@ -25,6 +25,7 @@ core_sources = files(
   'src/cli_cost.c',
   'src/cli_diagnose.c',
   'src/cli_guard.c',
+  'src/cli_history.c',
   'src/cli_hooks.c',
   'src/cli_managed_codex.c',
   'src/cli_sessions.c',
@@ -43,6 +44,7 @@ core_sources = files(
   'src/desktop.c',
   'src/http.c',
   'src/hooks.c',
+  'src/history.c',
   'src/jetbrains.c',
   'src/kilo.c',
   'src/kimi.c',
@@ -50,6 +52,7 @@ core_sources = files(
   'src/managed_codex.c',
   'src/model.c',
   'src/neuralwatt.c',
+  'src/notifications.c',
   'src/openai_api.c',
   'src/opencode_go.c',
   'src/openrouter.c',
@@ -152,6 +155,30 @@ runtime_test = executable(
 )
 test('codexbar-linux-runtime', runtime_test, env: normalized_test_env)
 
+history_test = executable(
+  'codexbar-linux-history-tests',
+  files('tests/test_history.c', 'src/history.c', 'src/model.c', 'src/provider_registry.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep, json_dep, math_dep],
+)
+test('codexbar-linux-history', history_test, env: normalized_test_env)
+
+history_cli_test = find_program('tests/test_history_cli.sh')
+test(
+  'codexbar-linux-history-cli',
+  history_cli_test,
+  args: [codexbar_linux],
+  depends: process_supervisor,
+)
+
+notifications_test = executable(
+  'codexbar-linux-notifications-tests',
+  files('tests/test_notifications.c', 'src/notifications.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep],
+)
+test('codexbar-linux-notifications', notifications_test, env: normalized_test_env)
+
 managed_codex_test = executable(
   'codexbar-linux-managed-codex-tests',
   files('tests/test_managed_codex.c', 'src/managed_codex.c'),
@@ -223,6 +250,14 @@ test('codexbar-linux-cost-cli', cost_cli_test, args: [codexbar_linux], depends: 
 
 sessions_cli_test = find_program('tests/test_sessions_cli.sh')
 test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], depends: process_supervisor)
+
+remote_sessions_test = executable(
+  'codexbar-linux-remote-sessions-tests',
+  files('tests/test_remote_sessions.c', 'src/sessions.c', 'src/process.c'),
+  include_directories: source_includes,
+  dependencies: [glib_dep, gio_dep, json_dep],
+)
+test('codexbar-linux-remote-sessions', remote_sessions_test, env: normalized_test_env)
 
 cache_cli_test = find_program('tests/test_cache_cli.sh')
 test('codexbar-linux-cache-cli', cache_cli_test, args: [codexbar_linux])
@@ -549,6 +584,15 @@ test(
   'codexbar-linux-serve-cli',
   serve_cli_test,
   args: [codexbar_linux, find_program('tests/fake_backend.sh')],
+  depends: process_supervisor,
+  timeout: 30,
+)
+
+python3 = find_program('python3')
+test(
+  'codexbar-linux-serve-concurrency',
+  python3,
+  args: [files('tests/test_serve_concurrency.py'), codexbar_linux],
   depends: process_supervisor,
   timeout: 30,
 )

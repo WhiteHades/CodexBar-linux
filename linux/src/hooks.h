@@ -23,6 +23,8 @@ typedef struct {
     const char *timestamp;
     gboolean has_usage_percent;
     double usage_percent;
+    gboolean has_warning_threshold;
+    int warning_threshold;
     gboolean has_used;
     double used;
     gboolean has_limit;

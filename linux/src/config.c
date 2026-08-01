@@ -10,6 +10,7 @@
 #include <json-c/json.h>
 #include <math.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -151,8 +152,55 @@ static CodexBarConfig *config_new(const char *path) {
     config->path = g_strdup(path);
     config->providers = g_ptr_array_new_with_free_func(provider_config_free);
     config->refresh_frequency = CODEXBAR_REFRESH_ADAPTIVE;
+    config->agent_sessions_enabled = FALSE;
+    config->agent_sessions_manual_hosts = g_strdup("");
+    config->quota_warning_notifications_enabled = FALSE;
+    config->quota_warning_session_enabled = TRUE;
+    config->quota_warning_weekly_enabled = TRUE;
+    config->quota_warning_session_threshold_count = 2;
+    config->quota_warning_weekly_threshold_count = 2;
+    config->quota_warning_session_thresholds[0] = 50;
+    config->quota_warning_session_thresholds[1] = 20;
+    config->quota_warning_weekly_thresholds[0] = 50;
+    config->quota_warning_weekly_thresholds[1] = 20;
+    config->historical_tracking_enabled = FALSE;
     config->lock_fd = -1;
     return config;
+}
+
+static gboolean boolean_member(json_object *object, const char *key, gboolean fallback) {
+    json_object *value = NULL;
+    return object && json_object_object_get_ex(object, key, &value) &&
+                   json_object_is_type(value, json_type_boolean)
+               ? json_object_get_boolean(value)
+               : fallback;
+}
+
+static gint descending_int(gconstpointer left, gconstpointer right) {
+    int first = *(const int *)left;
+    int second = *(const int *)right;
+    return (second > first) - (second < first);
+}
+
+static void parse_thresholds(json_object *root, const char *key, int values[100], guint *count) {
+    json_object *array = NULL;
+    if (!json_object_object_get_ex(root, key, &array) || !json_object_is_type(array, json_type_array) ||
+        json_object_array_length(array) == 0) {
+        return;
+    }
+    gboolean seen[100] = {0};
+    guint parsed_count = 0;
+    for (size_t index = 0; index < json_object_array_length(array); index++) {
+        json_object *entry = json_object_array_get_idx(array, index);
+        if (!json_object_is_type(entry, json_type_int)) continue;
+        int threshold = CLAMP(json_object_get_int(entry), 0, 99);
+        if (seen[threshold]) continue;
+        seen[threshold] = TRUE;
+        values[parsed_count++] = threshold;
+    }
+    if (parsed_count == 0) return;
+    qsort(values, parsed_count, sizeof(values[0]), descending_int);
+    *count = parsed_count;
 }
 
 static gboolean acquire_config_lock(CodexBarConfig *config, GError **error) {
@@ -236,6 +284,32 @@ static CodexBarConfig *config_load(gboolean for_update, GError **error) {
         refresh_raw = json_object_get_string(refresh_frequency);
     }
     config->refresh_frequency = codexbar_refresh_frequency_parse(refresh_raw, TRUE);
+    json_object *sessions_enabled = NULL;
+    if (json_object_object_get_ex(root, "agentSessionsEnabled", &sessions_enabled) &&
+        json_object_is_type(sessions_enabled, json_type_boolean)) {
+        config->agent_sessions_enabled = json_object_get_boolean(sessions_enabled);
+    }
+    char *manual_hosts = clean_string(root, "agentSessionsManualHosts");
+    if (manual_hosts) {
+        g_free(config->agent_sessions_manual_hosts);
+        config->agent_sessions_manual_hosts = manual_hosts;
+    }
+    config->quota_warning_notifications_enabled = boolean_member(
+        root, "quotaWarningNotificationsEnabled", config->quota_warning_notifications_enabled);
+    config->quota_warning_session_enabled = boolean_member(
+        root, "quotaWarningSessionEnabled", config->quota_warning_session_enabled);
+    config->quota_warning_weekly_enabled = boolean_member(
+        root, "quotaWarningWeeklyEnabled", config->quota_warning_weekly_enabled);
+    parse_thresholds(root,
+                     "quotaWarningSessionThresholds",
+                     config->quota_warning_session_thresholds,
+                     &config->quota_warning_session_threshold_count);
+    parse_thresholds(root,
+                     "quotaWarningWeeklyThresholds",
+                     config->quota_warning_weekly_thresholds,
+                     &config->quota_warning_weekly_threshold_count);
+    config->historical_tracking_enabled = boolean_member(
+        root, "historicalTrackingEnabled", config->historical_tracking_enabled);
     json_object *version = NULL;
     if (json_object_object_get_ex(root, "version", &version) && json_object_is_type(version, json_type_int)) {
         config->version = json_object_get_int(version);
@@ -311,6 +385,36 @@ static json_object *serialize_config(const CodexBarConfig *config) {
     json_object_object_add(root, "version", json_object_new_int(CODEXBAR_CONFIG_VERSION));
     json_object_object_add(
         root, "refreshFrequency", json_object_new_string(codexbar_refresh_frequency_raw(config->refresh_frequency)));
+    json_object_object_add(
+        root, "agentSessionsEnabled", json_object_new_boolean(config->agent_sessions_enabled));
+    json_object_object_add(
+        root, "agentSessionsManualHosts", json_object_new_string(config->agent_sessions_manual_hosts));
+    json_object_object_add(root,
+                           "quotaWarningNotificationsEnabled",
+                           json_object_new_boolean(config->quota_warning_notifications_enabled));
+    json_object_object_add(root,
+                           "quotaWarningSessionEnabled",
+                           json_object_new_boolean(config->quota_warning_session_enabled));
+    json_object_object_add(root,
+                           "quotaWarningWeeklyEnabled",
+                           json_object_new_boolean(config->quota_warning_weekly_enabled));
+    json_object *session_thresholds = json_object_new_array_ext(
+        (int)config->quota_warning_session_threshold_count);
+    for (guint index = 0; index < config->quota_warning_session_threshold_count; index++) {
+        json_object_array_add(session_thresholds,
+                              json_object_new_int(config->quota_warning_session_thresholds[index]));
+    }
+    json_object_object_add(root, "quotaWarningSessionThresholds", session_thresholds);
+    json_object *weekly_thresholds = json_object_new_array_ext(
+        (int)config->quota_warning_weekly_threshold_count);
+    for (guint index = 0; index < config->quota_warning_weekly_threshold_count; index++) {
+        json_object_array_add(weekly_thresholds,
+                              json_object_new_int(config->quota_warning_weekly_thresholds[index]));
+    }
+    json_object_object_add(root, "quotaWarningWeeklyThresholds", weekly_thresholds);
+    json_object_object_add(root,
+                           "historicalTrackingEnabled",
+                           json_object_new_boolean(config->historical_tracking_enabled));
     json_object *providers = json_object_new_array_ext((int)config->providers->len);
     for (guint index = 0; index < config->providers->len; index++) {
         json_object_array_add(providers, serialize_provider(g_ptr_array_index(config->providers, index)));
@@ -642,14 +746,17 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
         const CodexBarProviderConfig *provider = g_ptr_array_index(config->providers, index);
         const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(provider->id);
         if (provider->source && !codexbar_provider_supports_source(descriptor, provider->source)) {
+            char *supported = codexbar_provider_supported_sources(descriptor);
             add_issue(issues,
                       TRUE,
                       provider->id,
                       "source",
                       "unsupported_source",
-                      "Source %s is not supported for %s.",
+                      "Source %s is unavailable for %s on Linux. Supported sources: %s.",
                       provider->source,
-                      provider->id);
+                      provider->id,
+                      supported);
+            g_free(supported);
         }
         if (provider->api_key && !codexbar_provider_supports_source(descriptor, "api")) {
             add_issue(issues,
@@ -882,6 +989,7 @@ gboolean codexbar_config_set_api_key(CodexBarConfig *config,
 void codexbar_config_free(CodexBarConfig *config) {
     if (!config) return;
     g_free(config->path);
+    g_free(config->agent_sessions_manual_hosts);
     g_ptr_array_unref(config->providers);
     if (config->raw) json_object_put(config->raw);
     g_free(config->loaded_digest);

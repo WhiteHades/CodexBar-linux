@@ -262,7 +262,10 @@ static void test_registry_entry(void) {
     g_assert_nonnull(descriptor);
     g_assert_cmpint(descriptor->native_provider, ==, CODEXBAR_NATIVE_OPENCODE_GO);
     g_assert_true(codexbar_provider_supports_source(descriptor, "auto"));
-    g_assert_true(codexbar_provider_supports_source(descriptor, "web"));
+    g_assert_false(codexbar_provider_supports_source(descriptor, "web"));
+    const char *plan[1] = {0};
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(descriptor, plan, G_N_ELEMENTS(plan)), ==, 1);
+    g_assert_cmpstr(plan[0], ==, "local");
 }
 
 int main(int argc, char **argv) {

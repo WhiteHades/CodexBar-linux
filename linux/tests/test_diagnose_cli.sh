@@ -19,6 +19,8 @@ printf '%s\n' "$output" | grep -q '"schemaVersion":"1.0"'
 printf '%s\n' "$output" | grep -q '"platform":"Linux"'
 printf '%s\n' "$output" | grep -q '"provider":"codex"'
 printf '%s\n' "$output" | grep -q '"source":"oauth"'
+printf '%s\n' "$output" | grep -q '"supportedSources":\["auto","web","cli","oauth"\]'
+printf '%s\n' "$output" | grep -q '"autoSourceOrder":\["oauth","cli"\]'
 printf '%s\n' "$output" | grep -q '"dataConfidence":"unknown"'
 printf '%s\n' "$output" | grep -q '"label":"primary"'
 if printf '%s\n' "$output" | grep -q 'dev@example.test\|Resets Friday\|plan expires'; then
@@ -30,6 +32,8 @@ output=$(CODEXBAR_BACKEND="$fake_backend" "$binary" diagnose --provider both --f
 printf '%s\n' "$output" | grep -q '"diagnostics":\['
 printf '%s\n' "$output" | grep -q '"provider":"codex"'
 printf '%s\n' "$output" | grep -q '"provider":"claude"'
+printf '%s\n' "$output" | grep -q '"supportedSources":\["auto","web","cli","oauth","api"\]'
+printf '%s\n' "$output" | grep -q '"autoSourceOrder":\["web","cli"\]'
 
 sparse_backend=$work/sparse-backend.sh
 cat >"$sparse_backend" <<'EOF'

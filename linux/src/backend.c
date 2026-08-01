@@ -162,6 +162,18 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
     return provider;
 }
 
+static GError *unsupported_source_error(const CodexBarProviderDescriptor *descriptor, const char *source) {
+    char *supported = codexbar_provider_supported_sources(descriptor);
+    GError *error = g_error_new(G_IO_ERROR,
+                                G_IO_ERROR_NOT_SUPPORTED,
+                                "Source '%s' is unavailable for %s on Linux. Supported sources: %s.",
+                                source,
+                                descriptor->cli_name,
+                                supported);
+    g_free(supported);
+    return error;
+}
+
 static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GCancellable *cancellable) {
     const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(config->id);
     if (!descriptor) {
@@ -170,99 +182,12 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
     }
 
     const char *configured_source = config->source ? config->source : "auto";
-    const char *native_source = NULL;
-    switch (descriptor->native_provider) {
-    case CODEXBAR_NATIVE_CODEX:
-    case CODEXBAR_NATIVE_JETBRAINS:
-    case CODEXBAR_NATIVE_KIRO:
-    case CODEXBAR_NATIVE_AUGMENT:
-    case CODEXBAR_NATIVE_ANTIGRAVITY:
-        native_source = "cli";
-        break;
-    case CODEXBAR_NATIVE_CLAUDE:
-    case CODEXBAR_NATIVE_VERTEX:
-        native_source = "oauth";
-        break;
-    case CODEXBAR_NATIVE_OPENCODE_GO:
-        native_source = "auto";
-        break;
-    case CODEXBAR_NATIVE_QWEN_CLOUD:
-    case CODEXBAR_NATIVE_ZOOMMATE:
-    case CODEXBAR_NATIVE_CURSOR:
-    case CODEXBAR_NATIVE_OPENCODE:
-    case CODEXBAR_NATIVE_DEVIN:
-    case CODEXBAR_NATIVE_MANUS:
-    case CODEXBAR_NATIVE_T3CHAT:
-    case CODEXBAR_NATIVE_SAKANA:
-    case CODEXBAR_NATIVE_ABACUS:
-    case CODEXBAR_NATIVE_MISTRAL:
-    case CODEXBAR_NATIVE_COMMANDCODE:
-    case CODEXBAR_NATIVE_QODER:
-    case CODEXBAR_NATIVE_PERPLEXITY:
-    case CODEXBAR_NATIVE_LONGCAT:
-    case CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN:
-    case CODEXBAR_NATIVE_MIMO:
-    case CODEXBAR_NATIVE_WINDSURF:
-    case CODEXBAR_NATIVE_STEPFUN:
-        native_source = "web";
-        break;
-    case CODEXBAR_NATIVE_COPILOT:
-    case CODEXBAR_NATIVE_AZURE_OPENAI:
-    case CODEXBAR_NATIVE_CLINEPASS:
-    case CODEXBAR_NATIVE_DEEPINFRA:
-    case CODEXBAR_NATIVE_AIAND:
-    case CODEXBAR_NATIVE_NEURALWATT:
-    case CODEXBAR_NATIVE_WAYFINDER:
-    case CODEXBAR_NATIVE_ZAI:
-    case CODEXBAR_NATIVE_OPENAI:
-    case CODEXBAR_NATIVE_CODEBUFF:
-    case CODEXBAR_NATIVE_KIMI:
-    case CODEXBAR_NATIVE_OPENROUTER:
-    case CODEXBAR_NATIVE_PROXY:
-    case CODEXBAR_NATIVE_SIMPLE:
-    case CODEXBAR_NATIVE_XAI:
-    case CODEXBAR_NATIVE_DEEPGRAM:
-    case CODEXBAR_NATIVE_POE:
-    case CODEXBAR_NATIVE_CHUTES:
-    case CODEXBAR_NATIVE_SYNTHETIC:
-    case CODEXBAR_NATIVE_WARP:
-    case CODEXBAR_NATIVE_GROQ:
-    case CODEXBAR_NATIVE_MINIMAX:
-    case CODEXBAR_NATIVE_ALIBABA:
-    case CODEXBAR_NATIVE_DOUBAO:
-    case CODEXBAR_NATIVE_FACTORY:
-    case CODEXBAR_NATIVE_GEMINI:
-    case CODEXBAR_NATIVE_OLLAMA:
-    case CODEXBAR_NATIVE_LITELLM:
-    case CODEXBAR_NATIVE_SUB2API:
-    case CODEXBAR_NATIVE_BEDROCK:
-    case CODEXBAR_NATIVE_ZED:
-        native_source = "api";
-        break;
-    case CODEXBAR_NATIVE_KILO:
-    case CODEXBAR_NATIVE_AMP:
-    case CODEXBAR_NATIVE_GROK:
-        native_source = configured_source;
-        break;
-    case CODEXBAR_NATIVE_UNAVAILABLE:
-        break;
-    }
     if (!codexbar_provider_supports_source(descriptor, configured_source)) {
-        GError *error = g_error_new(G_IO_ERROR,
-                                    G_IO_ERROR_NOT_SUPPORTED,
-                                    "Source '%s' is not supported for %s.",
-                                    configured_source,
-                                    descriptor->cli_name);
+        GError *error = unsupported_source_error(descriptor, configured_source);
         return provider_error(config, configured_source, error);
     }
-    if (native_source && !g_str_equal(configured_source, "auto") && !g_str_equal(configured_source, native_source)) {
-        GError *error = g_error_new(G_IO_ERROR,
-                                    G_IO_ERROR_NOT_SUPPORTED,
-                                    "%s source '%s' has no native Linux implementation yet",
-                                    descriptor->display_name,
-                                    configured_source);
-        return provider_error(config, configured_source, error);
-    }
+    const char *auto_plan[3] = {0};
+    guint auto_plan_count = codexbar_provider_auto_source_plan(descriptor, auto_plan, G_N_ELEMENTS(auto_plan));
 
     GError *error = NULL;
     CodexBarProvider *provider = NULL;
@@ -271,10 +196,10 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         provider = codexbar_azure_openai_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_CODEX:
-        provider = codexbar_codex_fetch(&error);
+        provider = codexbar_codex_fetch(config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_CLAUDE:
-        provider = codexbar_claude_fetch(config, &error);
+        provider = codexbar_claude_fetch(config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_CLINEPASS:
         provider = codexbar_clinepass_fetch(config, &error);
@@ -452,11 +377,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
             G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "%s has no native Linux source yet", descriptor->display_name);
         break;
     }
-    const char *error_source = descriptor->native_provider == CODEXBAR_NATIVE_JETBRAINS ||
-                                        descriptor->native_provider == CODEXBAR_NATIVE_KILO ||
-                                        descriptor->native_provider == CODEXBAR_NATIVE_AZURE_OPENAI
-                                   ? configured_source
-                                   : native_source ? native_source : configured_source;
+    const char *error_source = g_str_equal(configured_source, "auto") && auto_plan_count == 1
+                                   ? auto_plan[0]
+                                   : configured_source;
     return provider ? provider : provider_error(config, error_source, error);
 }
 
@@ -567,11 +490,7 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     }
     if (source && !codexbar_provider_supports_source(descriptor, source)) {
         CodexBarProviderConfig selected = {.id = g_strdup(descriptor->id)};
-        GError *source_error = g_error_new(G_IO_ERROR,
-                                           G_IO_ERROR_NOT_SUPPORTED,
-                                           "Source '%s' is not supported for %s.",
-                                           source,
-                                           descriptor->cli_name);
+        GError *source_error = unsupported_source_error(descriptor, source);
         CodexBarProvider *result = provider_error(&selected, source, source_error);
         g_free(selected.id);
         return result;

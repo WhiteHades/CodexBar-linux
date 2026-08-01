@@ -119,6 +119,25 @@ static void add_mode(json_object *modes, const char *mode) {
     json_object_array_add(modes, json_object_new_string(mode));
 }
 
+static void add_source_capabilities(json_object *object, const CodexBarProviderDescriptor *descriptor) {
+    const char *const sources[] = {"auto", "web", "cli", "oauth", "api"};
+    json_object *supported = json_object_new_array();
+    for (guint index = 0; index < G_N_ELEMENTS(sources); index++) {
+        if (codexbar_provider_supports_source(descriptor, sources[index])) {
+            json_object_array_add(supported, json_object_new_string(sources[index]));
+        }
+    }
+    json_object_object_add(object, "supportedSources", supported);
+
+    const char *plan[3] = {0};
+    guint count = codexbar_provider_auto_source_plan(descriptor, plan, G_N_ELEMENTS(plan));
+    json_object *auto_plan = json_object_new_array_ext((int)count);
+    for (guint index = 0; index < count; index++) {
+        json_object_array_add(auto_plan, json_object_new_string(plan[index]));
+    }
+    json_object_object_add(object, "autoSourceOrder", auto_plan);
+}
+
 static json_object *auth_summary(const CodexBarProviderDescriptor *descriptor,
                                  const CodexBarProviderConfig *config,
                                  const CodexBarProvider *provider) {
@@ -316,6 +335,7 @@ json_object *codexbar_diagnose_provider(const CodexBarProviderDescriptor *descri
     json_object_object_add(object, "displayName", json_object_new_string(descriptor->display_name));
     json_object_object_add(object, "source", json_object_new_string(success ? safe_source(provider->source) : "failed"));
     json_object_object_add(object, "sourceMode", json_object_new_string(source_mode(config)));
+    add_source_capabilities(object, descriptor);
     json_object_object_add(object, "auth", auth);
     if (success) json_object_object_add(object, "usage", usage_summary(provider));
 

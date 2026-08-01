@@ -14,6 +14,8 @@ typedef CodexBarSnapshot *(*CodexBarRuntimeUsageFetcher)(GCancellable *cancellab
 typedef void (*CodexBarRuntimeHookDispatcher)(json_object *hooks,
                                              const CodexBarHookEvent *event,
                                              gpointer user_data);
+typedef void (*CodexBarRuntimeNotificationDispatcher)(const CodexBarHookEvent *event,
+                                                      gpointer user_data);
 
 CodexBarRuntime *codexbar_runtime_new(void);
 CodexBarRuntime *codexbar_runtime_new_with_transports(CodexBarRuntimeUsageFetcher usage_fetcher,
@@ -23,6 +25,9 @@ void codexbar_runtime_free(CodexBarRuntime *runtime);
 void codexbar_runtime_set_hook_dispatcher(CodexBarRuntime *runtime,
                                           CodexBarRuntimeHookDispatcher dispatcher,
                                           gpointer user_data);
+void codexbar_runtime_set_notification_dispatcher(CodexBarRuntime *runtime,
+                                                  CodexBarRuntimeNotificationDispatcher dispatcher,
+                                                  gpointer user_data);
 CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
                                         GCancellable *cancellable,
                                         GError **error);

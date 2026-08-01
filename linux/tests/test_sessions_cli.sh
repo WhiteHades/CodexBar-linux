@@ -5,6 +5,7 @@ set -eu
 binary=$1
 work=$(mktemp -d "$PWD/codexbar-sessions-cli.XXXXXX")
 trap 'rm -rf "$work"' EXIT
+export CODEXBAR_CONFIG="$work/config.json"
 proc=$work/proc
 home=$work/home
 codex_home=$work/codex
@@ -90,3 +91,49 @@ if HOME="$home" CODEX_HOME="$codex_home" CODEXBAR_SESSION_PROC_ROOT="$proc" CODE
     exit 1
 fi
 [ "$(cat "$work/error")" = 'Unknown session: missing' ]
+
+fake_bin=$work/bin
+marker=$work/remote-command-ran
+mkdir -p "$fake_bin"
+cat >"$fake_bin/tailscale" <<EOF
+#!/bin/sh
+printf '%s\n' '{"BackendState":"Running","Self":{"DNSName":"local.tail.ts.net"},"Peer":[{"DNSName":"discovered.tail.ts.net","OS":"linux","Online":true}]}'
+printf 'tailscale\n' >>"$marker"
+EOF
+cat >"$fake_bin/ssh" <<EOF
+#!/bin/sh
+host=\$5
+printf '[{"id":"remote-%s","provider":"codex","source":"cli","state":"idle","pid":null,"cwd":null,"projectName":null,"sessionName":"Remote fixture","startedAt":null,"lastActivityAt":null,"transcriptPath":null,"host":"ignored"}]\n' "\$host"
+printf 'ssh:%s\n' "\$host" >>"$marker"
+exit 0
+EOF
+chmod +x "$fake_bin/tailscale" "$fake_bin/ssh"
+
+cat >"$CODEXBAR_CONFIG" <<EOF
+{"agentSessionsEnabled":false,"agentSessionsManualHosts":"manual","providers":[]}
+EOF
+PATH="$fake_bin:$PATH" HOME="$home" CODEX_HOME="$codex_home" CODEXBAR_SESSION_PROC_ROOT="$proc" \
+  CODEXBAR_SESSION_NOW="$now" "$binary" sessions --json >"$work/output"
+[ ! -e "$marker" ]
+
+cat >"$CODEXBAR_CONFIG" <<EOF
+{"agentSessionsEnabled":true,"agentSessionsManualHosts":" manual, MANUAL ","providers":[]}
+EOF
+output=$(PATH="$fake_bin:$PATH" HOME="$home" CODEX_HOME="$codex_home" CODEXBAR_SESSION_PROC_ROOT="$proc" \
+  CODEXBAR_SESSION_NOW="$now" "$binary" sessions --json)
+case "$output" in
+  *'"id":"remote-discovered"'*'"sessionName":"Remote fixture"'*'"host":"discovered"'*) ;;
+  *)
+    printf 'discovered remote session is missing: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+case "$output" in
+  *'"id":"remote-manual"'*'"host":"manual"'*) ;;
+  *)
+    printf 'manual remote session is missing: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+[ "$(grep -c '^ssh:manual$' "$marker")" -eq 1 ]
+[ "$(grep -c '^ssh:discovered$' "$marker")" -eq 1 ]
