@@ -15,6 +15,7 @@ typedef struct {
 typedef enum {
     CODEXBAR_HTTP_HTTPS_ONLY,
     CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP,
+    CODEXBAR_HTTP_ALLOW_PRIVATE_HTTP,
 } CodexBarHttpProtocolPolicy;
 
 typedef enum {

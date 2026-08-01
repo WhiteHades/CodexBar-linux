@@ -406,6 +406,37 @@ static void test_endpoint_policy(void) {
     g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 1);
     g_clear_error(&error);
 
+    const char *private_endpoints[] = {
+        "http://127.0.0.2:8080/v1",
+        "http://10.0.0.5:8080/v1",
+        "http://172.31.2.3/v1",
+        "http://192.168.1.2/v1",
+        "http://169.254.1.2/v1",
+        "http://router.local/v1",
+        "http://[fd00::1]/v1",
+        "http://[fe80::1]/v1",
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(private_endpoints); index++) {
+        url = codexbar_http_normalize_endpoint(
+            private_endpoints[index], CODEXBAR_HTTP_ALLOW_PRIVATE_HTTP, &error);
+        g_assert_no_error(error);
+        g_assert_cmpstr(url, ==, private_endpoints[index]);
+        g_free(url);
+    }
+    const char *public_http_endpoints[] = {
+        "http://api.example.com/v1",
+        "http://8.8.8.8/v1",
+        "http://192.168.001.2/v1",
+        "http://127.00.0.1/v1",
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(public_http_endpoints); index++) {
+        url = codexbar_http_normalize_endpoint(
+            public_http_endpoints[index], CODEXBAR_HTTP_ALLOW_PRIVATE_HTTP, &error);
+        g_assert_null(url);
+        g_assert_error(error, g_quark_from_static_string("codexbar-http-error"), 1);
+        g_clear_error(&error);
+    }
+
     url = codexbar_http_normalize_endpoint(
         "https://user:secret@api.example.com/v1", CODEXBAR_HTTP_HTTPS_ONLY, &error);
     g_assert_null(url);
@@ -1174,6 +1205,14 @@ static void test_clawrouter_usage(void) {
     g_assert_no_error(error);
     g_assert_cmpstr(url, ==, "https://router.example.com/v1/usage");
     g_free(url);
+    url = codexbar_proxy_provider_url("http://10.0.0.5:8080/v1", "quota-stats", &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(url, ==, "http://10.0.0.5:8080/v1/quota-stats");
+    g_free(url);
+    url = codexbar_proxy_provider_url("http://api.example.com/v1", "quota-stats", &error);
+    g_assert_null(url);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
 }
 
 static void test_llmproxy_usage(void) {

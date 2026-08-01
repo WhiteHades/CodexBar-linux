@@ -53,6 +53,62 @@ static gboolean is_loopback_host(const char *host) {
     return loopback;
 }
 
+static gboolean ipv4_octets(const char *host, guint8 result[4]) {
+    if (!host) return FALSE;
+    char **parts = g_strsplit(host, ".", -1);
+    gboolean valid = g_strv_length(parts) == 4;
+    for (guint index = 0; valid && index < 4; index++) {
+        const char *part = parts[index];
+        if (part[0] == '\0' || (part[0] == '0' && part[1] != '\0')) {
+            valid = FALSE;
+            break;
+        }
+        for (const char *cursor = part; *cursor; cursor++) {
+            if (!g_ascii_isdigit(*cursor)) {
+                valid = FALSE;
+                break;
+            }
+        }
+        char *end = NULL;
+        guint64 value = valid ? g_ascii_strtoull(part, &end, 10) : 0;
+        if (!valid || !end || *end != '\0' || value > 255) {
+            valid = FALSE;
+            break;
+        }
+        result[index] = (guint8)value;
+    }
+    g_strfreev(parts);
+    return valid;
+}
+
+static gboolean is_private_network_host(const char *host) {
+    if (!host) return FALSE;
+    if (g_ascii_strcasecmp(host, "localhost") == 0 || g_str_equal(host, "::1")) return TRUE;
+    size_t length = host ? strlen(host) : 0;
+    while (length > 0 && host[length - 1] == '.') length--;
+    if (length > strlen(".local") &&
+        g_ascii_strncasecmp(host + length - strlen(".local"), ".local", strlen(".local")) == 0) {
+        return TRUE;
+    }
+
+    guint8 octets[4] = {0};
+    if (ipv4_octets(host, octets)) {
+        return octets[0] == 127 || octets[0] == 10 ||
+               (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) ||
+               (octets[0] == 192 && octets[1] == 168) || (octets[0] == 169 && octets[1] == 254);
+    }
+
+    GInetAddress *address = host ? g_inet_address_new_from_string(host) : NULL;
+    if (!address || g_inet_address_get_family(address) != G_SOCKET_FAMILY_IPV6) {
+        g_clear_object(&address);
+        return FALSE;
+    }
+    const guint8 *bytes = g_inet_address_to_bytes(address);
+    gboolean private = (bytes[0] & 0xFE) == 0xFC || (bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0x80);
+    g_object_unref(address);
+    return private;
+}
+
 static gboolean url_is_loopback(const char *url) {
     GUri *uri = g_uri_parse(url, G_URI_FLAGS_NONE, NULL);
     if (!uri) return FALSE;
@@ -104,7 +160,9 @@ char *codexbar_http_normalize_endpoint(
     const char *userinfo = uri ? g_uri_get_userinfo(uri) : NULL;
     gboolean https = scheme && g_ascii_strcasecmp(scheme, "https") == 0;
     gboolean allowed_http = scheme && g_ascii_strcasecmp(scheme, "http") == 0 &&
-                            protocol_policy == CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP && is_loopback_host(host);
+                            ((protocol_policy == CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP && is_loopback_host(host)) ||
+                             (protocol_policy == CODEXBAR_HTTP_ALLOW_PRIVATE_HTTP &&
+                              is_private_network_host(host)));
     if (!uri || !host || host[0] == '\0' || userinfo || (!https && !allowed_http)) {
         g_clear_error(&parse_error);
         if (uri) g_uri_unref(uri);
@@ -225,7 +283,7 @@ static gboolean validate_request(const CodexBarHttpRequest *request, GError **er
         (request->body_length > 0 && !request->body) ||
         ((g_str_equal(method, "GET") || g_str_equal(method, "HEAD")) &&
          (request->body || request->body_length > 0)) ||
-        request->protocol_policy > CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP ||
+        request->protocol_policy > CODEXBAR_HTTP_ALLOW_PRIVATE_HTTP ||
         request->redirect_policy > CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN ||
         request->body_length > (size_t)INT64_MAX) {
         g_set_error_literal(error, http_error_quark(), 3, "HTTP request is invalid");
@@ -288,7 +346,7 @@ static CodexBarHttpResponse *send_once(const CodexBarHttpRequest *request, const
     }
     curl_easy_setopt(curl,
                      CURLOPT_PROTOCOLS_STR,
-                     request->protocol_policy == CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP ? "http,https" : "https");
+                     request->protocol_policy == CODEXBAR_HTTP_HTTPS_ONLY ? "https" : "http,https");
     if (url_is_loopback(url)) curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
     if (request->body) {
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);

@@ -166,7 +166,7 @@ static CodexBarProvider *provider_new(const char *id, gint64 now_ms) {
 }
 
 char *codexbar_proxy_provider_url(const char *base_url, const char *leaf, GError **error) {
-    char *normalized = codexbar_http_normalize_endpoint(base_url, CODEXBAR_HTTP_HTTPS_ONLY, error);
+    char *normalized = codexbar_http_normalize_endpoint(base_url, CODEXBAR_HTTP_ALLOW_PRIVATE_HTTP, error);
     if (!normalized) return NULL;
     GUri *uri = g_uri_parse(normalized, G_URI_FLAGS_NONE, NULL);
     if (!uri || g_uri_get_query(uri) || g_uri_get_fragment(uri)) {
