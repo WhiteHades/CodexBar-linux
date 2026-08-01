@@ -57,7 +57,11 @@ jobs:
           test -n "$checksum"
           (cd dist && sha256sum -c "$(basename "$checksum")")
           tar -tzf "$archive" | grep -Fx './usr/local/bin/codexbar-linux'
-          tar --numeric-owner -tvzf "$archive" | awk '$2 != "0/0" { exit 1 }'
+          tar -tzf "$archive" | grep -Fx './usr/local/bin/codexbar-process-supervisor'
+          tar -tzf "$archive" | grep -Fx './usr/local/share/applications/com.steipete.codexbar.desktop'
+          tar -tzf "$archive" | grep -Fx './etc/xdg/autostart/codexbar-status.desktop'
+          tar --numeric-owner -tvzf "$archive" |
+            awk '$2 != "0/0" || ($1 ~ /^d/ && $1 != "drwxr-xr-x") { exit 1 }'
           file .build/release/linux/codexbar-linux | grep -F '${{ matrix.file-pattern }}'
           .build/release/linux/codexbar-linux --version
 

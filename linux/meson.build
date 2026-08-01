@@ -109,7 +109,7 @@ install_data(
 )
 install_data(
   'data/codexbar-status.desktop',
-  install_dir: get_option('sysconfdir') / 'xdg' / 'autostart',
+  install_dir: '/etc/xdg/autostart',
 )
 
 test_executable = executable(

@@ -27,12 +27,13 @@ Each archive is named `codexbar-linux-VERSION-linux-ARCH.tar.gz` and contains th
 
 - `usr/local/bin/codexbar-linux`
 - `usr/local/bin/codexbar-process-supervisor`
-- XDG application and autostart desktop entries
+- `usr/local/share/applications/com.steipete.codexbar.desktop`
+- `etc/xdg/autostart/codexbar-status.desktop`
 
 The packaged binaries are stripped and dynamically linked to the documented system libraries. Archive ownership is
-normalized to numeric root metadata so artifacts do not expose the build account. Checksum files contain archive
-basenames, so each archive and its checksum can be downloaded and verified together from any directory. Release jobs
-use Ubuntu 24.04 runners to keep the runtime baseline explicit.
+normalized to numeric root metadata so artifacts do not expose the build account, and packaged directories use mode
+`0755`. Checksum files contain archive basenames, so each archive and its checksum can be downloaded and verified
+together from any directory. Release jobs use Ubuntu 24.04 runners to keep the runtime baseline explicit.
 
 ## Post-release
 

@@ -27,12 +27,18 @@ meson test -C "$build_dir" --no-rebuild --print-errorlogs
 mkdir -p "$repo/.tmp" "$output_dir"
 stage=$(mktemp -d "$repo/.tmp/package.XXXXXX")
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
+chmod 0755 "$stage"
 DESTDIR="$stage" meson install -C "$build_dir" --strip
+test -x "$stage/usr/local/bin/codexbar-linux"
+test -x "$stage/usr/local/bin/codexbar-process-supervisor"
+test -f "$stage/usr/local/share/applications/com.steipete.codexbar.desktop"
+test -f "$stage/etc/xdg/autostart/codexbar-status.desktop"
 
 name="codexbar-linux-$version-linux-$arch"
 tar --owner=0 --group=0 --numeric-owner -C "$stage" -czf "$output_dir/$name.tar.gz" .
-if ! tar --numeric-owner -tvzf "$output_dir/$name.tar.gz" | awk '$2 != "0/0" { exit 1 }'; then
-    printf '%s\n' 'archive contains non-normalized ownership metadata' >&2
+if ! tar --numeric-owner -tvzf "$output_dir/$name.tar.gz" |
+    awk '$2 != "0/0" || ($1 ~ /^d/ && $1 != "drwxr-xr-x") { exit 1 }'; then
+    printf '%s\n' 'archive contains unsafe ownership or directory metadata' >&2
     exit 1
 fi
 (
