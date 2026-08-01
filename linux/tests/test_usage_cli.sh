@@ -28,6 +28,61 @@ case "$output" in
     ;;
 esac
 
+account_output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider codex --account first --format json)
+case "$account_output" in
+  '[{"provider":"codex"'*'"account":"dev@example.test"'*) ;;
+  *)
+    printf 'account selection was not forwarded to the backend: %s\n' "$account_output" >&2
+    exit 1
+    ;;
+esac
+
+set +e
+account_output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider all --all-accounts --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+[ "$account_output" = '[{"provider":"cli","source":"cli","error":{"message":"Account selection requires a single provider.","code":1,"kind":"args"}}]' ]
+
+set +e
+account_output=$(CODEXBAR_BACKEND="$backend" "$binary" usage --provider codex --account-index 0 --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+[ "$account_output" = '[{"provider":"cli","source":"cli","error":{"message":"--account-index must be a positive integer.","code":1,"kind":"args"}}]' ]
+
+set +e
+account_output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider deepseek --account missing --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+case "$account_output" in
+  *'"message":"No token accounts configured for deepseek."'*) ;;
+  *)
+    printf 'unexpected missing token-account output: %s\n' "$account_output" >&2
+    exit 1
+    ;;
+esac
+
+cat >"$config" <<'EOF'
+{"version":1,"providers":[{"id":"deepseek","tokenAccounts":{"version":1,"activeIndex":0,"accounts":[{"id":"unsafe","label":"unsafe","token":"line1\nline2","addedAt":0}]}}]}
+EOF
+set +e
+account_output=$(env -u CODEXBAR_BACKEND CODEXBAR_CONFIG="$config" \
+  "$binary" usage --provider deepseek --account unsafe --json 2>/dev/null)
+status=$?
+set -e
+[ "$status" -eq 1 ]
+case "$account_output" in
+  *'"message":"Token account requires non-empty label and token."'*) ;;
+  *)
+    printf 'unsafe token account was not rejected: %s\n' "$account_output" >&2
+    exit 1
+    ;;
+esac
+rm -f "$config"
+
 nonzero_backend=$work/nonzero-backend.sh
 cat > "$nonzero_backend" <<'EOF'
 #!/bin/sh

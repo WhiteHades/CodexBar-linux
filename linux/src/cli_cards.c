@@ -3,6 +3,7 @@
 #include "backend.h"
 #include "provider_registry.h"
 
+#include <errno.h>
 #include <glib.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,10 @@ enum {
 typedef struct {
     const char *provider;
     const char *source;
+    const char *account_label;
+    int account_index;
+    gboolean has_account_index;
+    gboolean all_accounts;
     gboolean brief;
     gboolean include_credits;
 } CardsOptions;
@@ -36,7 +41,7 @@ static gboolean source_is_valid(const char *source) {
 }
 
 static gboolean parse_options(int argc, char **argv, CardsOptions *options, GError **error) {
-    *options = (CardsOptions){.include_credits = TRUE};
+    *options = (CardsOptions){.account_index = -1, .include_credits = TRUE};
     for (int index = 0; index < argc; index++) {
         const char *argument = argv[index];
         if (g_str_equal(argument, "--provider")) {
@@ -51,20 +56,26 @@ static gboolean parse_options(int argc, char **argv, CardsOptions *options, GErr
             options->brief = TRUE;
         } else if (g_str_equal(argument, "--no-credits")) {
             options->include_credits = FALSE;
-        } else if (g_str_equal(argument, "--account") || g_str_equal(argument, "--account-index")) {
-            (void)option_value(argc, argv, &index, error);
-            if (*error) return FALSE;
-            g_set_error_literal(error,
-                                G_OPTION_ERROR,
-                                G_OPTION_ERROR_FAILED,
-                                "Account selection is not available in the native C command yet.");
-            return FALSE;
+        } else if (g_str_equal(argument, "--account")) {
+            options->account_label = option_value(argc, argv, &index, error);
+            if (!options->account_label) return FALSE;
+        } else if (g_str_equal(argument, "--account-index")) {
+            const char *value = option_value(argc, argv, &index, error);
+            if (!value) return FALSE;
+            char *end = NULL;
+            errno = 0;
+            long parsed = strtol(value, &end, 10);
+            if (errno != 0 || *end != '\0' || parsed < 1 || parsed > G_MAXINT) {
+                g_set_error_literal(error,
+                                    G_OPTION_ERROR,
+                                    G_OPTION_ERROR_BAD_VALUE,
+                                    "--account-index must be a positive integer.");
+                return FALSE;
+            }
+            options->account_index = (int)parsed - 1;
+            options->has_account_index = TRUE;
         } else if (g_str_equal(argument, "--all-accounts")) {
-            g_set_error_literal(error,
-                                G_OPTION_ERROR,
-                                G_OPTION_ERROR_FAILED,
-                                "Account selection is not available in the native C command yet.");
-            return FALSE;
+            options->all_accounts = TRUE;
         } else if (g_str_equal(argument, "--web-timeout") || g_str_equal(argument, "--log-level")) {
             if (!option_value(argc, argv, &index, error)) return FALSE;
         } else if (g_str_equal(argument, "--no-color") || g_str_equal(argument, "--status") ||
@@ -86,6 +97,24 @@ static gboolean parse_options(int argc, char **argv, CardsOptions *options, GErr
                             G_OPTION_ERROR,
                             G_OPTION_ERROR_BAD_VALUE,
                             "--source must be auto|web|cli|oauth|api.");
+        return FALSE;
+    }
+    guint account_selections = (options->account_label ? 1U : 0U) + (options->has_account_index ? 1U : 0U) +
+                               (options->all_accounts ? 1U : 0U);
+    if (account_selections > 1) {
+        g_set_error_literal(error,
+                            G_OPTION_ERROR,
+                            G_OPTION_ERROR_BAD_VALUE,
+                            "--all-accounts, --account, and --account-index are mutually exclusive.");
+        return FALSE;
+    }
+    if (account_selections > 0 &&
+        (!options->provider || g_ascii_strcasecmp(options->provider, "all") == 0 ||
+         g_ascii_strcasecmp(options->provider, "both") == 0)) {
+        g_set_error_literal(error,
+                            G_OPTION_ERROR,
+                            G_OPTION_ERROR_BAD_VALUE,
+                            "Account selection requires a single provider.");
         return FALSE;
     }
     return TRUE;
@@ -340,6 +369,13 @@ static CodexBarSnapshot *fetch_snapshot(const CardsOptions *options, GError **er
         const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(provider);
         if (!descriptor) {
             g_set_error(error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE, "Unknown provider: %s", options->provider);
+        } else if (options->account_label || options->has_account_index || options->all_accounts) {
+            snapshot = codexbar_backend_fetch_selected_accounts(descriptor->id,
+                                                                 options->source,
+                                                                 options->account_label,
+                                                                 options->account_index,
+                                                                 options->all_accounts,
+                                                                 error);
         } else {
             CodexBarProvider *result = codexbar_backend_fetch_one(descriptor->id, options->source, error);
             if (result) {

@@ -20,6 +20,7 @@ codexbar-linux waybar
 codexbar-linux tui
 codexbar-linux status-item
 codexbar-linux usage --provider openrouter --format json --pretty
+codexbar-linux usage --provider claude --all-accounts --format json --pretty
 codexbar-linux guard --provider codex --min-remaining 20
 codexbar-linux hooks list
 codexbar-linux cookie refresh --provider codex # reports unsupported on Linux
@@ -39,6 +40,8 @@ not create or change a waybar configuration.
 
 invoking `codexbar-linux` without a command defaults to `usage`. provider selection accepts stable IDs, CLI names, and
 aliases; `--provider both` selects Codex and Claude, while explicit `--provider all` selects the full registry.
+for providers with `tokenAccounts` in the config, use `--account <label>`, `--account-index <1-based index>`, or
+`--all-accounts`; account selection requires one explicit provider and output includes the configured account label.
 
 the native engine currently owns Codex, OpenAI, Claude, ClinePass, Copilot, z.ai, Kilo, Codebuff, JetBrains,
 OpenCode Go, Kimi, OpenRouter, ClawRouter, LLM Proxy, DeepSeek, DeepInfra, ai&, Neuralwatt, Moonshot, ElevenLabs,

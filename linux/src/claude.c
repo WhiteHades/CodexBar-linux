@@ -64,7 +64,14 @@ static char *credentials_path(void) {
     return g_build_filename(g_get_home_dir(), ".claude", ".credentials.json", NULL);
 }
 
-static gboolean load_credentials(ClaudeCredentials *credentials, GError **error) {
+static gboolean load_credentials(const CodexBarProviderConfig *config, ClaudeCredentials *credentials, GError **error) {
+    json_object *configured_token = NULL;
+    if (config && config->raw && json_object_object_get_ex(config->raw, "oauthToken", &configured_token) &&
+        json_object_is_type(configured_token, json_type_string)) {
+        credentials->access_token = g_strstrip(g_strdup(json_object_get_string(configured_token)));
+        if (g_str_has_prefix(credentials->access_token, "sk-ant-oat")) return TRUE;
+        g_clear_pointer(&credentials->access_token, g_free);
+    }
     const char *environment_token = g_getenv("CODEXBAR_CLAUDE_OAUTH_TOKEN");
     if (environment_token) {
         credentials->access_token = g_strstrip(g_strdup(environment_token));
@@ -440,9 +447,8 @@ CodexBarProvider *codexbar_claude_parse_oauth_usage(const char *text,
 }
 
 CodexBarProvider *codexbar_claude_fetch(const CodexBarProviderConfig *config, GError **error) {
-    (void)config;
     ClaudeCredentials credentials = {0};
-    if (!load_credentials(&credentials, error)) return NULL;
+    if (!load_credentials(config, &credentials, error)) return NULL;
     char *authorization = g_strdup_printf("Bearer %s", credentials.access_token);
     char *user_agent = claude_user_agent();
     const CodexBarHttpRequestHeader headers[] = {

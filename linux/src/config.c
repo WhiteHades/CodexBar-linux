@@ -766,7 +766,7 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
                                 json_object_object_get_ex(token_accounts, "accounts", &accounts) &&
                                 json_object_is_type(accounts, json_type_array) && json_object_array_length(accounts) > 0;
         const char *token_providers[] = {
-            "openai", "claude", "deepseek", "antigravity", "zai", "cursor", "opencode", "opencodego",
+            "openai", "openrouter", "claude", "deepseek", "antigravity", "zai", "cursor", "opencode", "opencodego",
             "factory", "minimax", "manus", "augment", "ollama", "abacus", "mistral", "qoder", "copilot",
             "venice", "elevenlabs", "groq", "llmproxy", "litellm", "sub2api", "stepfun", "deepinfra",
             "neuralwatt",

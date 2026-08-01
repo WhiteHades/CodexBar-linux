@@ -4,8 +4,10 @@
 #include "provider_registry.h"
 #include "render.h"
 
+#include <errno.h>
 #include <json-c/json.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static const char *option_value(int argc, char **argv, const char *name) {
     for (int index = 0; index + 1 < argc; index++) {
@@ -56,7 +58,8 @@ static char *validate_arguments(int argc, char **argv) {
     for (int index = 0; index < argc; index++) {
         const char *argument = argv[index];
         if (g_str_equal(argument, "--provider") || g_str_equal(argument, "--source") ||
-            g_str_equal(argument, "--format")) {
+            g_str_equal(argument, "--format") || g_str_equal(argument, "--account") ||
+            g_str_equal(argument, "--account-index")) {
             if (index + 1 >= argc || argv[index + 1][0] == '-') {
                 return g_strdup_printf("Missing value for %s.", argument);
             }
@@ -71,11 +74,19 @@ static char *validate_arguments(int argc, char **argv) {
                 g_ascii_strcasecmp(argv[index + 1], "api") != 0) {
                 return g_strdup("Error: --source must be auto|web|cli|oauth|api.");
             }
+            if (g_str_equal(argument, "--account-index")) {
+                char *end = NULL;
+                errno = 0;
+                long value = strtol(argv[index + 1], &end, 10);
+                if (errno != 0 || *end != '\0' || value < 1 || value > G_MAXINT) {
+                    return g_strdup("--account-index must be a positive integer.");
+                }
+            }
             index++;
             continue;
         }
         if (g_str_equal(argument, "--json") || g_str_equal(argument, "--json-only") ||
-            g_str_equal(argument, "--pretty")) {
+            g_str_equal(argument, "--pretty") || g_str_equal(argument, "--all-accounts")) {
             continue;
         }
         return g_strdup_printf("Unknown argument: %s", argument);
@@ -105,6 +116,24 @@ int codexbar_cli_usage_run(int argc, char **argv) {
     }
     const char *provider_argument = option_value(argc, argv, "--provider");
     const char *source_argument = option_value(argc, argv, "--source");
+    const char *account_label = option_value(argc, argv, "--account");
+    const char *account_index_argument = option_value(argc, argv, "--account-index");
+    gboolean all_accounts = has_flag(argc, argv, "--all-accounts");
+    int account_index = account_index_argument ? (int)strtol(account_index_argument, NULL, 10) - 1 : -1;
+    guint account_selection_count = (account_label ? 1U : 0U) + (account_index_argument ? 1U : 0U) +
+                                    (all_accounts ? 1U : 0U);
+    if (account_selection_count > 1) {
+        return print_error_kind(argc,
+                                argv,
+                                "--all-accounts, --account, and --account-index are mutually exclusive.",
+                                "args",
+                                1);
+    }
+    if (account_selection_count > 0 &&
+        (!provider_argument || g_ascii_strcasecmp(provider_argument, "all") == 0 ||
+         g_ascii_strcasecmp(provider_argument, "both") == 0)) {
+        return print_error_kind(argc, argv, "Account selection requires a single provider.", "args", 1);
+    }
     char *provider_name = provider_argument ? g_ascii_strdown(provider_argument, -1) : NULL;
     char *source = source_argument ? g_ascii_strdown(source_argument, -1) : NULL;
     gboolean json = wants_json(argc, argv);
@@ -141,6 +170,24 @@ int codexbar_cli_usage_run(int argc, char **argv) {
                 g_free(source);
                 return 1;
             }
+        } else if (account_selection_count > 0) {
+            const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(provider_name);
+            if (!descriptor) {
+                char *message = g_strdup_printf("Unknown provider: %s", provider_name);
+                codexbar_snapshot_free(snapshot);
+                int result = print_error_kind(argc, argv, message, "args", 1);
+                g_free(message);
+                g_free(provider_name);
+                g_free(source);
+                return result;
+            }
+            codexbar_snapshot_free(snapshot);
+            snapshot = codexbar_backend_fetch_selected_accounts(descriptor->id,
+                                                                 source,
+                                                                 account_label,
+                                                                 account_index,
+                                                                 all_accounts,
+                                                                 &error);
         } else {
             const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(provider_name);
             if (!descriptor) {

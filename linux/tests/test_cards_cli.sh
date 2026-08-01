@@ -59,11 +59,26 @@ if CODEXBAR_BACKEND="$backend" "$binary" cards --provider unknown >"$work/output
 fi
 [ "$(cat "$work/error")" = 'Error: Unknown provider: unknown' ]
 
-if CODEXBAR_BACKEND="$backend" "$binary" cards --provider codex --account first >"$work/output" 2>"$work/error"; then
-    printf 'unsupported account selection unexpectedly succeeded\n' >&2
+output=$(CODEXBAR_BACKEND="$backend" "$binary" cards --provider codex --account first)
+case "$output" in
+  *'Codex [oauth]'*'@ dev@example.test'*) ;;
+  *)
+    printf 'account selection was not forwarded to the backend: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
+if CODEXBAR_BACKEND="$backend" "$binary" cards --provider both --all-accounts >"$work/output" 2>"$work/error"; then
+    printf 'multi-provider account selection unexpectedly succeeded\n' >&2
     exit 1
 fi
-[ "$(cat "$work/error")" = 'Error: Account selection is not available in the native C command yet.' ]
+[ "$(cat "$work/error")" = 'Error: Account selection requires a single provider.' ]
+
+if CODEXBAR_BACKEND="$backend" "$binary" cards --provider codex --account-index 0 >"$work/output" 2>"$work/error"; then
+    printf 'zero account index unexpectedly succeeded\n' >&2
+    exit 1
+fi
+[ "$(cat "$work/error")" = 'Error: --account-index must be a positive integer.' ]
 
 if CODEXBAR_BACKEND="$backend" "$binary" cards --source local >"$work/output" 2>"$work/error"; then
     printf 'invalid source unexpectedly succeeded\n' >&2
