@@ -27,9 +27,13 @@ meson test -C "$build_dir" --no-rebuild --print-errorlogs
 mkdir -p "$repo/.tmp" "$output_dir"
 stage=$(mktemp -d "$repo/.tmp/package.XXXXXX")
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
-DESTDIR="$stage" meson install -C "$build_dir"
+DESTDIR="$stage" meson install -C "$build_dir" --strip
 
 name="codexbar-linux-$version-linux-$arch"
 tar -C "$stage" -czf "$output_dir/$name.tar.gz" .
-sha256sum "$output_dir/$name.tar.gz" >"$output_dir/$name.tar.gz.sha256"
+(
+    cd "$output_dir"
+    sha256sum "$name.tar.gz" >"$name.tar.gz.sha256"
+    sha256sum -c "$name.tar.gz.sha256"
+)
 printf '%s\n' "$output_dir/$name.tar.gz"

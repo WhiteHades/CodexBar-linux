@@ -29,8 +29,9 @@ Each archive is named `codexbar-linux-VERSION-linux-ARCH.tar.gz` and contains th
 - `usr/local/bin/codexbar-process-supervisor`
 - XDG application and autostart desktop entries
 
-The binaries are dynamically linked to the documented system libraries. Release jobs use Ubuntu 24.04 runners to keep
-the runtime baseline explicit.
+The packaged binaries are stripped and dynamically linked to the documented system libraries. Checksum files contain
+archive basenames, so each archive and its checksum can be downloaded and verified together from any directory.
+Release jobs use Ubuntu 24.04 runners to keep the runtime baseline explicit.
 
 ## Post-release
 

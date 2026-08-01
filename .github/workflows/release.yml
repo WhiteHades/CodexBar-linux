@@ -24,7 +24,7 @@ jobs:
             runner: ubuntu-24.04-arm
             file-pattern: aarch64
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -55,12 +55,12 @@ jobs:
           checksum=$(find dist -maxdepth 1 -name '*.sha256' -type f -print -quit)
           archive=${checksum%.sha256}
           test -n "$checksum"
-          sha256sum -c "$checksum"
+          (cd dist && sha256sum -c "$(basename "$checksum")")
           tar -tzf "$archive" | grep -Fx './usr/local/bin/codexbar-linux'
           file .build/release/linux/codexbar-linux | grep -F '${{ matrix.file-pattern }}'
           .build/release/linux/codexbar-linux --version
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.event_name == 'workflow_dispatch'
         with:
           name: codexbar-linux-${{ matrix.arch }}
