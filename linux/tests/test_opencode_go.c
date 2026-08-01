@@ -3,6 +3,7 @@
 
 #include <gio/gio.h>
 #include <glib/gstdio.h>
+#include <json-c/json.h>
 #include <sqlite3.h>
 #include <string.h>
 
@@ -69,6 +70,56 @@ static CodexBarQuotaWindow *window(CodexBarProvider *provider, guint index, cons
     g_assert_nonnull(result);
     g_assert_cmpstr(result->id, ==, id);
     return result;
+}
+
+static guint web_call;
+
+static CodexBarHttpResponse *web_response(const char *body) {
+    CodexBarHttpResponse *response = g_new0(CodexBarHttpResponse, 1);
+    response->status = 200;
+    response->body = g_strdup(body);
+    response->body_length = strlen(body);
+    response->headers = g_ptr_array_new();
+    return response;
+}
+
+static CodexBarHttpResponse *web_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)error;
+    switch (web_call++) {
+    case 0:
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_nonnull(strstr(request->url, "_server?id="));
+        return web_response("{}");
+    case 1:
+        g_assert_cmpstr(request->method, ==, "POST");
+        g_assert_cmpuint(request->body_length, ==, 2);
+        g_assert_cmpmem(request->body, request->body_length, "[]", 2);
+        return web_response("{\"data\":[{\"id\":\"wrk_fixture1\"}]}");
+    case 2:
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_nonnull(strstr(request->url, "/workspace/wrk_fixture1/go"));
+        return web_response("rollingUsage:{usagePercent:25,resetInSec:3600}");
+    case 3:
+        g_assert_nonnull(strstr(request->url, "/workspace/wrk_fixture1"));
+        g_assert_null(strstr(request->url, "/go"));
+        return web_response("<p>Current balance: $42.50</p>");
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static CodexBarHttpResponse *balance_only_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)error;
+    switch (web_call++) {
+    case 0:
+        g_assert_nonnull(strstr(request->url, "/workspace/wrk_balance/go"));
+        return web_response("<html><body>subscription active</body></html>");
+    case 1:
+        g_assert_nonnull(strstr(request->url, "/workspace/wrk_balance"));
+        return web_response("{\"currentBalanceUSD\":\"7.25\"}");
+    default:
+        g_assert_not_reached();
+    }
 }
 
 static void create_message_table(sqlite3 *database) {
@@ -199,6 +250,50 @@ static void test_web_usage_parser(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_web_discovery_fallback_and_zen_balance(void) {
+    CodexBarProviderConfig config = {0};
+    config.raw = json_object_new_object();
+    json_object_object_add(config.raw, "cookieHeader", json_object_new_string("session=fixture"));
+    web_call = 0;
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_opencode_go_fetch_for_source_with_transport_and_cancellable(
+        &config, "web", web_transport, NULL, 1800000000000LL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(web_call, ==, 4);
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpfloat(window(provider, 0, "primary")->used_percent, ==, 25);
+    g_assert_nonnull(provider->provider_cost);
+    g_assert_cmpfloat(provider->provider_cost->used, ==, 42.5);
+    g_assert_cmpstr(provider->provider_cost->period, ==, "Zen balance");
+    codexbar_provider_free(provider);
+    json_object_put(config.raw);
+
+    double balance = 0;
+    const char *billing = "{\"customer\":{\"customerID\":\"cus_fixture\",\"balance\":4250000000}}";
+    g_assert_true(codexbar_opencode_go_parse_zen_balance(
+        billing, strlen(billing), TRUE, &balance));
+    g_assert_cmpfloat(balance, ==, 42.5);
+    const char *unrelated = "{\"balance\":999,\"plan\":\"go\"}";
+    g_assert_false(codexbar_opencode_go_parse_zen_balance(
+        unrelated, strlen(unrelated), FALSE, &balance));
+
+    config.raw = json_object_new_object();
+    json_object_object_add(config.raw, "cookieHeader", json_object_new_string("session=fixture"));
+    json_object_object_add(config.raw, "workspaceID", json_object_new_string("wrk_balance"));
+    web_call = 0;
+    provider = codexbar_opencode_go_fetch_for_source_with_transport_and_cancellable(
+        &config, "auto", balance_only_transport, NULL, 1800000000000LL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(web_call, ==, 2);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    g_assert_nonnull(provider->provider_cost);
+    g_assert_cmpfloat(provider->provider_cost->used, ==, 7.25);
+    codexbar_provider_free(provider);
+    json_object_put(config.raw);
+}
+
 static void write_auth(const Fixture *fixture, const char *contents) {
     GError *error = NULL;
     g_assert_true(g_file_set_contents(fixture->auth_path, contents, -1, &error));
@@ -304,6 +399,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/opencode-go/local-database", test_local_database_contract);
     g_test_add_func("/opencode-go/part-costs", test_part_costs_and_message_precedence);
     g_test_add_func("/opencode-go/web-usage", test_web_usage_parser);
+    g_test_add_func("/opencode-go/web-fallback-balance", test_web_discovery_fallback_and_zen_balance);
     g_test_add_func("/opencode-go/detection-errors", test_detection_errors);
     g_test_add_func("/opencode-go/schema-error", test_schema_error);
     g_test_add_func("/opencode-go/filtering", test_filters_unusable_rows);

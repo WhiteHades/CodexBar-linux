@@ -13,6 +13,10 @@ CodexBarProvider *codexbar_opencode_go_parse_web_usage(const char *text,
                                                        size_t length,
                                                        gint64 now_ms,
                                                        GError **error);
+gboolean codexbar_opencode_go_parse_zen_balance(const char *text,
+                                                size_t length,
+                                                gboolean billing_response,
+                                                double *balance);
 CodexBarProvider *codexbar_opencode_go_fetch_for_source_with_transport_and_cancellable(
     const CodexBarProviderConfig *config,
     const char *source,

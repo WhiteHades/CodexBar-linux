@@ -10,6 +10,8 @@
 #define WEEK_MILLISECONDS (7LL * 24LL * 60LL * 60LL * 1000LL)
 #define WEB_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
 #define OPENCODE_GO_WORKSPACES_SERVER_ID "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
+#define OPENCODE_GO_BILLING_SERVER_ID "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d"
+#define OPENCODE_GO_BILLING_SCALE 100000000.0
 
 typedef struct {
     gint64 created_ms;
@@ -686,6 +688,29 @@ static CodexBarHttpResponse *opencode_go_send(const CodexBarHttpRequest *request
     return response;
 }
 
+static char *opencode_go_workspace_from_response(CodexBarHttpResponse *response,
+                                                 const char *endpoint,
+                                                 GError **error) {
+    if (response->status != 200 || !g_utf8_validate(response->body, (gssize)response->body_length, NULL)) {
+        g_set_error(error,
+                    G_IO_ERROR,
+                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
+                                                                       : G_IO_ERROR_FAILED,
+                    "OpenCode Go %s returned HTTP %ld",
+                    endpoint,
+                    response->status);
+        return NULL;
+    }
+    char *body = g_strndup(response->body, response->body_length);
+    GRegex *regex = g_regex_new("wrk_[A-Za-z0-9]+", 0, 0, NULL);
+    GMatchInfo *match = NULL;
+    char *workspace = regex && g_regex_match(regex, body, 0, &match) ? g_match_info_fetch(match, 0) : NULL;
+    if (match) g_match_info_free(match);
+    if (regex) g_regex_unref(regex);
+    g_free(body);
+    return workspace;
+}
+
 static char *opencode_go_discover_workspace(const char *cookie,
                                             CodexBarOpenCodeGoTransport transport,
                                             GCancellable *cancellable,
@@ -714,29 +739,234 @@ static char *opencode_go_discover_workspace(const char *cookie,
         .cancellable = cancellable,
     };
     CodexBarHttpResponse *response = opencode_go_send(&request, transport, error);
-    g_free(server_instance);
-    if (!response) return NULL;
-    if (response->status != 200 || !g_utf8_validate(response->body, (gssize)response->body_length, NULL)) {
-        g_set_error(error,
-                    G_IO_ERROR,
-                    response->status == 401 || response->status == 403 ? G_IO_ERROR_PERMISSION_DENIED
-                                                                       : G_IO_ERROR_FAILED,
-                    "OpenCode Go workspace endpoint returned HTTP %ld",
-                    response->status);
-        codexbar_http_response_free(response);
+    if (!response) {
+        g_free(server_instance);
         return NULL;
     }
-    char *body = g_strndup(response->body, response->body_length);
+    char *workspace = opencode_go_workspace_from_response(response, "workspace endpoint", error);
     codexbar_http_response_free(response);
-    GRegex *regex = g_regex_new("wrk_[A-Za-z0-9]+", 0, 0, NULL);
+    if (workspace || (error && *error)) {
+        g_free(server_instance);
+        return workspace;
+    }
+
+    const CodexBarHttpRequestHeader post_headers[] = {
+        {"Cookie", cookie},
+        {"X-Server-Id", OPENCODE_GO_WORKSPACES_SERVER_ID},
+        {"X-Server-Instance", server_instance},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36"},
+        {"Origin", "https://opencode.ai"},
+        {"Referer", "https://opencode.ai"},
+        {"Accept", "text/javascript, application/json;q=0.9, */*;q=0.8"},
+        {"Content-Type", "application/json"},
+    };
+    static const char post_body[] = "[]";
+    const CodexBarHttpRequest post_request = {
+        .url = "https://opencode.ai/_server?id=" OPENCODE_GO_WORKSPACES_SERVER_ID,
+        .method = "POST",
+        .headers = post_headers,
+        .header_count = G_N_ELEMENTS(post_headers),
+        .body = post_body,
+        .body_length = sizeof(post_body) - 1,
+        .timeout_seconds = 15,
+        .maximum_response_bytes = WEB_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    response = opencode_go_send(&post_request, transport, error);
+    g_free(server_instance);
+    if (!response) return NULL;
+    workspace = opencode_go_workspace_from_response(response, "workspace fallback", error);
+    codexbar_http_response_free(response);
+    if (!workspace && (!error || !*error)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "OpenCode Go workspace response is missing workspace id");
+    }
+    return workspace;
+}
+
+static gboolean opencode_go_number(json_object *value, double *number) {
+    if (!value || json_object_is_type(value, json_type_boolean) || json_object_is_type(value, json_type_null)) {
+        return FALSE;
+    }
+    if (json_object_is_type(value, json_type_int) || json_object_is_type(value, json_type_double)) {
+        *number = json_object_get_double(value);
+        return isfinite(*number);
+    }
+    if (!json_object_is_type(value, json_type_string)) return FALSE;
+    char *clean = g_strdup(json_object_get_string(value));
+    g_strdelimit(clean, ",", ' ');
+    g_strstrip(clean);
+    char *end = NULL;
+    *number = g_ascii_strtod(clean, &end);
+    gboolean valid = clean[0] && end && *end == '\0' && isfinite(*number);
+    g_free(clean);
+    return valid;
+}
+
+static gboolean opencode_go_explicit_balance_key(const char *key) {
+    char *lower = g_ascii_strdown(key, -1);
+    GString *normalized = g_string_new(NULL);
+    for (const char *cursor = lower; *cursor; cursor++) {
+        if (g_ascii_isalnum(*cursor)) g_string_append_c(normalized, *cursor);
+    }
+    const char *value = normalized->str;
+    gboolean matches = g_str_equal(value, "zenbalance") || g_str_equal(value, "zencurrentbalance") ||
+                       g_str_equal(value, "currentbalance") || g_str_equal(value, "currentbalanceusd") ||
+                       g_str_equal(value, "balanceusd") || g_str_equal(value, "usdbalance");
+    g_string_free(normalized, TRUE);
+    g_free(lower);
+    return matches;
+}
+
+static gboolean opencode_go_find_balance(json_object *value, gboolean billing, guint depth, double *balance) {
+    if (!value || depth > 20) return FALSE;
+    if (json_object_is_type(value, json_type_object)) {
+        if (billing) {
+            json_object *customer = NULL, *raw_balance = NULL;
+            if (json_object_object_get_ex(value, "customerID", &customer) &&
+                json_object_is_type(customer, json_type_string) && json_object_get_string(customer)[0] &&
+                json_object_object_get_ex(value, "balance", &raw_balance) &&
+                opencode_go_number(raw_balance, balance)) {
+                *balance /= OPENCODE_GO_BILLING_SCALE;
+                return TRUE;
+            }
+        }
+        json_object_object_foreach(value, key, child) {
+            if (!billing && opencode_go_explicit_balance_key(key) && opencode_go_number(child, balance)) return TRUE;
+            if (opencode_go_find_balance(child, billing, depth + 1, balance)) return TRUE;
+        }
+    } else if (json_object_is_type(value, json_type_array)) {
+        for (size_t index = 0; index < json_object_array_length(value); index++) {
+            if (opencode_go_find_balance(json_object_array_get_idx(value, index), billing, depth + 1, balance)) {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+gboolean codexbar_opencode_go_parse_zen_balance(const char *text,
+                                                size_t length,
+                                                gboolean billing_response,
+                                                double *balance) {
+    if (!text || !balance || length == 0 || length > WEB_MAXIMUM_RESPONSE_BYTES || memchr(text, '\0', length) ||
+        !g_utf8_validate(text, (gssize)length, NULL) || length > G_MAXINT) return FALSE;
+    json_tokener *tokener = json_tokener_new();
+    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    json_object *root = json_tokener_parse_ex(tokener, text, (int)length);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < length && g_ascii_isspace(text[consumed])) consumed++;
+    gboolean valid = json_tokener_get_error(tokener) == json_tokener_success && root && consumed == length;
+    json_tokener_free(tokener);
+    if (valid && opencode_go_find_balance(root, billing_response, 0, balance)) {
+        json_object_put(root);
+        return isfinite(*balance);
+    }
+    if (root) json_object_put(root);
+
+    const char *pattern = billing_response
+                              ? "(?:customerID|\\\"customerID\\\")[^}]{0,240}(?:balance|\\\"balance\\\")\\s*:\\s*(-?[0-9]+(?:\\.[0-9]+)?)"
+                              : "(?:current\\s+balance|zen\\s+balance|balance)[^$]{0,120}\\$\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)";
+    GRegex *regex = g_regex_new(pattern, G_REGEX_CASELESS | G_REGEX_DOTALL, 0, NULL);
     GMatchInfo *match = NULL;
-    char *workspace = regex && g_regex_match(regex, body, 0, &match) ? g_match_info_fetch(match, 0) : NULL;
+    gboolean found = regex && g_regex_match_full(regex, text, (gssize)length, 0, 0, &match, NULL);
+    char *capture = found ? g_match_info_fetch(match, 1) : NULL;
     if (match) g_match_info_free(match);
     if (regex) g_regex_unref(regex);
-    g_free(body);
-    if (!workspace) g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                                        "OpenCode Go workspace response is missing workspace id");
-    return workspace;
+    if (!capture) return FALSE;
+    g_strdelimit(capture, ",", ' ');
+    g_strstrip(capture);
+    char *end = NULL;
+    double parsed = g_ascii_strtod(capture, &end);
+    gboolean parsed_ok = capture[0] && end && *end == '\0' && isfinite(parsed);
+    g_free(capture);
+    if (!parsed_ok) return FALSE;
+    *balance = billing_response ? parsed / OPENCODE_GO_BILLING_SCALE : parsed;
+    return TRUE;
+}
+
+static void opencode_go_attach_balance(CodexBarProvider *provider, double balance, gint64 now_ms) {
+    if (!provider || !isfinite(balance)) return;
+    codexbar_provider_cost_free(provider->provider_cost);
+    provider->provider_cost = g_new0(CodexBarProviderCost, 1);
+    provider->provider_cost->used = balance;
+    provider->provider_cost->currency = g_strdup("USD");
+    provider->provider_cost->period = g_strdup("Zen balance");
+    provider->provider_cost->has_updated_at = TRUE;
+    provider->provider_cost->updated_at_ms = now_ms;
+}
+
+static gboolean opencode_go_response_balance(CodexBarHttpResponse *response,
+                                             gboolean billing,
+                                             double *balance) {
+    return response && response->status == 200 &&
+           codexbar_opencode_go_parse_zen_balance(response->body, response->body_length, billing, balance);
+}
+
+static gboolean opencode_go_fetch_balance(const char *workspace,
+                                          const char *cookie,
+                                          CodexBarOpenCodeGoTransport transport,
+                                          GCancellable *cancellable,
+                                          double *balance) {
+    char *url = g_strdup_printf("https://opencode.ai/workspace/%s", workspace);
+    const CodexBarHttpRequestHeader page_headers[] = {
+        {"Cookie", cookie},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36"},
+        {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+    };
+    CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .headers = page_headers,
+        .header_count = G_N_ELEMENTS(page_headers),
+        .timeout_seconds = 5,
+        .maximum_response_bytes = WEB_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = opencode_go_send(&request, transport, NULL);
+    gboolean found = opencode_go_response_balance(response, FALSE, balance);
+    codexbar_http_response_free(response);
+    g_free(url);
+    if (found || (cancellable && g_cancellable_is_cancelled(cancellable))) return found;
+
+    char *escaped = g_uri_escape_string(workspace, NULL, TRUE);
+    url = g_strdup_printf("https://opencode.ai/_server?id=%s&args=%%5B%%22%s%%22%%5D",
+                          OPENCODE_GO_BILLING_SERVER_ID,
+                          escaped);
+    g_free(escaped);
+    char *instance = g_uuid_string_random();
+    char *server_instance = g_strconcat("server-fn:", instance, NULL);
+    g_free(instance);
+    const CodexBarHttpRequestHeader billing_headers[] = {
+        {"Cookie", cookie},
+        {"X-Server-Id", OPENCODE_GO_BILLING_SERVER_ID},
+        {"X-Server-Instance", server_instance},
+        {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36"},
+        {"Origin", "https://opencode.ai"},
+        {"Referer", "https://opencode.ai"},
+        {"Accept", "text/javascript, application/json;q=0.9, */*;q=0.8"},
+    };
+    request = (CodexBarHttpRequest){
+        .url = url,
+        .method = "GET",
+        .headers = billing_headers,
+        .header_count = G_N_ELEMENTS(billing_headers),
+        .timeout_seconds = 5,
+        .maximum_response_bytes = WEB_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_SAME_ORIGIN,
+        .cancellable = cancellable,
+    };
+    response = opencode_go_send(&request, transport, NULL);
+    found = opencode_go_response_balance(response, TRUE, balance);
+    codexbar_http_response_free(response);
+    g_free(server_instance);
+    g_free(url);
+    return found;
 }
 
 static CodexBarProvider *opencode_go_fetch_web(const CodexBarProviderConfig *config,
@@ -775,9 +1005,11 @@ static CodexBarProvider *opencode_go_fetch_web(const CodexBarProviderConfig *con
     };
     CodexBarHttpResponse *response = opencode_go_send(&request, transport, error);
     g_free(url);
-    g_free(workspace);
-    g_free(cookie);
-    if (!response) return NULL;
+    if (!response) {
+        g_free(workspace);
+        g_free(cookie);
+        return NULL;
+    }
     if (response->status != 200) {
         g_set_error(error,
                     G_IO_ERROR,
@@ -786,11 +1018,31 @@ static CodexBarProvider *opencode_go_fetch_web(const CodexBarProviderConfig *con
                     "OpenCode Go usage page returned HTTP %ld",
                     response->status);
         codexbar_http_response_free(response);
+        g_free(workspace);
+        g_free(cookie);
         return NULL;
     }
     CodexBarProvider *provider = codexbar_opencode_go_parse_web_usage(
         response->body, response->body_length, now_ms, error);
     codexbar_http_response_free(response);
+    double balance = 0;
+    gboolean has_balance = opencode_go_fetch_balance(
+        workspace, cookie, transport, cancellable, &balance);
+    if (provider && has_balance) opencode_go_attach_balance(provider, balance, now_ms);
+    if (!provider && has_balance && error && *error &&
+        g_error_matches(*error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA)) {
+        g_clear_error(error);
+        provider = codexbar_provider_new();
+        provider->provider = g_strdup("opencodego");
+        provider->source = g_strdup("web");
+        provider->dashboard_url = g_strdup("https://opencode.ai");
+        provider->has_updated_at = TRUE;
+        provider->updated_at_ms = now_ms;
+        provider->explicit_quota_slots = TRUE;
+        opencode_go_attach_balance(provider, balance, now_ms);
+    }
+    g_free(workspace);
+    g_free(cookie);
     return provider;
 }
 
@@ -807,26 +1059,35 @@ CodexBarProvider *codexbar_opencode_go_fetch_for_source_with_transport_and_cance
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "OpenCode Go source '%s' is unsupported", mode);
         return NULL;
     }
-    char *workspace = opencode_go_workspace(config);
     char *cookie = opencode_go_cookie(config);
-    gboolean web_first = workspace != NULL;
-    g_free(workspace);
-    if (web_first) {
+    if (cookie) {
         g_free(cookie);
-        return opencode_go_fetch_web(config, transport, cancellable, now_ms, error);
+        GError *web_error = NULL;
+        CodexBarProvider *web = opencode_go_fetch_web(config, transport, cancellable, now_ms, &web_error);
+        if (web) return web;
+        if (web_error && g_error_matches(web_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            if (error) *error = web_error;
+            else g_clear_error(&web_error);
+            return NULL;
+        }
+        GError *local_error = NULL;
+        CodexBarProvider *local = codexbar_opencode_go_fetch_from_home(g_get_home_dir(), now_ms, &local_error);
+        if (local) {
+            g_clear_error(&web_error);
+            g_clear_error(&local_error);
+            return local;
+        }
+        g_clear_error(&local_error);
+        if (error) *error = web_error;
+        else g_clear_error(&web_error);
+        return NULL;
     }
     GError *local_error = NULL;
     CodexBarProvider *provider = codexbar_opencode_go_fetch_from_home(g_get_home_dir(), now_ms, &local_error);
-    if (provider || !cookie) {
-        g_free(cookie);
-        if (provider) g_clear_error(&local_error);
-        else if (error) *error = local_error;
-        else g_clear_error(&local_error);
-        return provider;
-    }
-    g_free(cookie);
-    g_clear_error(&local_error);
-    return opencode_go_fetch_web(config, transport, cancellable, now_ms, error);
+    if (provider) g_clear_error(&local_error);
+    else if (error) *error = local_error;
+    else g_clear_error(&local_error);
+    return provider;
 }
 
 CodexBarProvider *codexbar_opencode_go_fetch_for_source_with_cancellable(
