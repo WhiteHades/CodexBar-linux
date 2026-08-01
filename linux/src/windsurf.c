@@ -1,6 +1,8 @@
 #include "windsurf.h"
 
 #include <json-c/json.h>
+#include <math.h>
+#include <sqlite3.h>
 #include <string.h>
 
 #define RESPONSE_LIMIT (1024U * 1024U)
@@ -202,17 +204,228 @@ static char *reset_description(gint64 reset_ms, gint64 now_ms) {
 static void add_window(CodexBarProvider *provider,
                        const char *id,
                        const char *title,
-                       guint64 remaining,
+                       double remaining,
                        gboolean has_reset,
                        gint64 reset_ms,
                        gint64 now_ms) {
     CodexBarQuotaWindow *window = codexbar_quota_window_new(id, title);
     window->usage_known = TRUE;
-    window->used_percent = 100 - MIN((double)remaining, 100);
+    window->used_percent = 100 - CLAMP(remaining, 0.0, 100.0);
     window->has_resets_at = has_reset;
     window->resets_at_ms = reset_ms;
     if (has_reset) window->reset_description = reset_description(reset_ms, now_ms);
     codexbar_provider_add_quota_window(provider, window);
+}
+
+static gboolean json_number(json_object *object, const char *key, double *result) {
+    json_object *value = NULL;
+    if (!object || !json_object_object_get_ex(object, key, &value) ||
+        !(json_object_is_type(value, json_type_int) || json_object_is_type(value, json_type_double))) return FALSE;
+    double number = json_object_get_double(value);
+    if (!isfinite(number)) return FALSE;
+    *result = number;
+    return TRUE;
+}
+
+static gboolean json_integer(json_object *object, const char *key, gint64 *result) {
+    double number = 0;
+    if (!json_number(object, key, &number) || number < (double)G_MININT64 || number > (double)G_MAXINT64 ||
+        trunc(number) != number) return FALSE;
+    *result = (gint64)number;
+    return TRUE;
+}
+
+static char *cached_string(json_object *object, const char *key) {
+    json_object *value = NULL;
+    if (!object || !json_object_object_get_ex(object, key, &value) ||
+        !json_object_is_type(value, json_type_string)) return NULL;
+    const char *text = json_object_get_string(value);
+    size_t length = (size_t)json_object_get_string_len(value);
+    if (!text || memchr(text, '\0', length) || !g_utf8_validate(text, (gssize)length, NULL)) return NULL;
+    return g_strndup(text, length);
+}
+
+static json_object *parse_cached_json(const char *text, size_t length) {
+    if (!text || !length || length > RESPONSE_LIMIT || length > G_MAXINT || memchr(text, '\0', length) ||
+        !g_utf8_validate(text, (gssize)length, NULL)) return NULL;
+    json_tokener *tokener = json_tokener_new();
+    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    json_object *root = json_tokener_parse_ex(tokener, text, (int)length);
+    enum json_tokener_error parse_error = json_tokener_get_error(tokener);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < length && g_ascii_isspace(text[consumed])) consumed++;
+    gboolean valid = parse_error == json_tokener_success && root && consumed == length &&
+                     json_object_is_type(root, json_type_object);
+    json_tokener_free(tokener);
+    if (valid) return root;
+    if (root) json_object_put(root);
+    return NULL;
+}
+
+static void add_count_window(CodexBarProvider *provider,
+                             const char *id,
+                             const char *title,
+                             json_object *usage,
+                             const char *total_key,
+                             const char *used_key,
+                             const char *remaining_key,
+                             const char *unit) {
+    gint64 total = 0;
+    gint64 used = 0;
+    gint64 remaining = 0;
+    if (!json_integer(usage, total_key, &total) || total <= 0) return;
+    if (!json_integer(usage, used_key, &used)) {
+        if (!json_integer(usage, remaining_key, &remaining)) return;
+        used = MAX((gint64)0, total - remaining);
+    }
+    used = CLAMP(used, (gint64)0, total);
+    CodexBarQuotaWindow *window = codexbar_quota_window_new(id, title);
+    window->usage_known = TRUE;
+    window->used_percent = (double)used / (double)total * 100.0;
+    window->reset_description = g_strdup_printf("%" G_GINT64_FORMAT " / %" G_GINT64_FORMAT " %s",
+                                                 used, total, unit);
+    codexbar_provider_add_quota_window(provider, window);
+}
+
+CodexBarProvider *codexbar_windsurf_parse_cached_plan(const char *json,
+                                                      size_t length,
+                                                      gint64 now_ms,
+                                                      GError **error) {
+    json_object *root = parse_cached_json(json, length);
+    if (!root) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Could not parse Windsurf cached plan data");
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_provider_new();
+    provider->provider = g_strdup("windsurf");
+    provider->source = g_strdup("local");
+    provider->plan = cached_string(root, "planName");
+    provider->identity = g_new0(CodexBarProviderIdentity, 1);
+    provider->identity->login_method = g_strdup(provider->plan);
+    provider->has_updated_at = TRUE;
+    provider->updated_at_ms = now_ms;
+    gint64 end_ms = 0;
+    if (json_integer(root, "endTimestamp", &end_ms) && end_ms > 0) {
+        GDateTime *end = g_date_time_new_from_unix_local(end_ms / 1000);
+        if (end) {
+            char *date = g_date_time_format(end, "%b %-d, %Y");
+            provider->identity->organization = g_strdup_printf("Expires %s", date);
+            g_free(date);
+            g_date_time_unref(end);
+        }
+        provider->has_subscription_expires_at = TRUE;
+        provider->subscription_expires_at_ms = end_ms;
+    }
+
+    json_object *quota = NULL;
+    gboolean daily = FALSE;
+    gboolean weekly = FALSE;
+    if (json_object_object_get_ex(root, "quotaUsage", &quota) && json_object_is_type(quota, json_type_object)) {
+        double remaining = 0;
+        gint64 reset = 0;
+        if (json_number(quota, "dailyRemainingPercent", &remaining)) {
+            gboolean has_reset = json_integer(quota, "dailyResetAtUnix", &reset) && reset > 0 &&
+                                 reset <= G_MAXINT64 / 1000;
+            add_window(provider, "windsurf.daily", "Daily", remaining,
+                       has_reset, has_reset ? reset * 1000 : 0, now_ms);
+            daily = TRUE;
+        }
+        if (json_number(quota, "weeklyRemainingPercent", &remaining)) {
+            gboolean has_reset = json_integer(quota, "weeklyResetAtUnix", &reset) && reset > 0 &&
+                                 reset <= G_MAXINT64 / 1000;
+            add_window(provider, "windsurf.weekly", "Weekly", remaining,
+                       has_reset, has_reset ? reset * 1000 : 0, now_ms);
+            weekly = TRUE;
+        }
+    }
+    json_object *usage = NULL;
+    if (json_object_object_get_ex(root, "usage", &usage) && json_object_is_type(usage, json_type_object)) {
+        if (!daily) add_count_window(provider, "windsurf.messages", "Messages", usage,
+                                     "messages", "usedMessages", "remainingMessages", "messages");
+        if (!weekly) add_count_window(provider, "windsurf.flow-actions", "Flow actions", usage,
+                                      "flowActions", "usedFlowActions", "remainingFlowActions", "flow actions");
+    }
+    json_object_put(root);
+    return provider;
+}
+
+static char *decode_cached_database_value(sqlite3_stmt *statement) {
+    int type = sqlite3_column_type(statement, 0);
+    if (type != SQLITE_TEXT && type != SQLITE_BLOB) return NULL;
+    const guint8 *bytes = sqlite3_column_blob(statement, 0);
+    int raw_length = sqlite3_column_bytes(statement, 0);
+    if (!bytes || raw_length <= 0 || raw_length > (int)RESPONSE_LIMIT) return NULL;
+    size_t length = (size_t)raw_length;
+    while (length > 0 && (bytes[length - 1] < 32 || bytes[length - 1] == 127)) length--;
+    if (length > 0 && !memchr(bytes, '\0', length) && g_utf8_validate((const char *)bytes, (gssize)length, NULL)) {
+        return g_strndup((const char *)bytes, length);
+    }
+    gsize converted_length = 0;
+    GError *conversion_error = NULL;
+    char *converted = g_convert((const char *)bytes,
+                                raw_length,
+                                "UTF-8",
+                                "UTF-16LE",
+                                NULL,
+                                &converted_length,
+                                &conversion_error);
+    g_clear_error(&conversion_error);
+    if (!converted || converted_length > RESPONSE_LIMIT || memchr(converted, '\0', converted_length) ||
+        !g_utf8_validate(converted, (gssize)converted_length, NULL)) {
+        g_free(converted);
+        return NULL;
+    }
+    while (converted_length > 0 &&
+           ((guint8)converted[converted_length - 1] < 32 || (guint8)converted[converted_length - 1] == 127)) {
+        converted[--converted_length] = '\0';
+    }
+    if (converted_length > 0) return converted;
+    g_free(converted);
+    return NULL;
+}
+
+CodexBarProvider *codexbar_windsurf_fetch_local(const char *database_path,
+                                                gint64 now_ms,
+                                                GError **error) {
+    if (!database_path || !database_path[0]) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                            "Windsurf database path is missing");
+        return NULL;
+    }
+    sqlite3 *database = NULL;
+    if (sqlite3_open_v2(database_path, &database, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        const char *message = database ? sqlite3_errmsg(database) : "unknown error";
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                    "Could not read Windsurf database '%s': %s", database_path, message);
+        sqlite3_close(database);
+        return NULL;
+    }
+    sqlite3_busy_timeout(database, 250);
+    sqlite3_stmt *statement = NULL;
+    const char *query =
+        "SELECT value FROM ItemTable WHERE key = 'windsurf.settings.cachedPlanInfo' LIMIT 1;";
+    int status = sqlite3_prepare_v2(database, query, -1, &statement, NULL);
+    if (status == SQLITE_OK) status = sqlite3_step(statement);
+    if (status != SQLITE_ROW) {
+        const char *message = status == SQLITE_DONE ? "cached plan entry was not found" : sqlite3_errmsg(database);
+        g_set_error(error, G_IO_ERROR, status == SQLITE_DONE ? G_IO_ERROR_NOT_FOUND : G_IO_ERROR_FAILED,
+                    "Could not read Windsurf cached plan: %s", message);
+        sqlite3_finalize(statement);
+        sqlite3_close(database);
+        return NULL;
+    }
+    char *json = decode_cached_database_value(statement);
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
+    if (!json) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "Windsurf cached plan is not valid UTF-8 or UTF-16LE JSON");
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_windsurf_parse_cached_plan(json, strlen(json), now_ms, error);
+    g_free(json);
+    return provider;
 }
 
 CodexBarProvider *codexbar_windsurf_parse(const guint8 *data,
@@ -537,4 +750,66 @@ CodexBarProvider *codexbar_windsurf_fetch_with_cancellable(const CodexBarProvide
                                                            GError **error) {
     return codexbar_windsurf_fetch_with_transport_and_cancellable(
         config, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
+}
+
+static char *windsurf_database_path(const CodexBarProviderConfig *config) {
+    char *path = NULL;
+    json_object *value = NULL;
+    if (config && config->raw && json_object_object_get_ex(config->raw, "dbPath", &value) &&
+        json_object_is_type(value, json_type_string)) {
+        path = clean_value(json_object_get_string(value));
+    }
+    if (!path) path = clean_value(g_getenv("WINDSURF_STATE_DB"));
+    if (!path) path = g_build_filename(
+        g_get_user_config_dir(), "Windsurf", "User", "globalStorage", "state.vscdb", NULL);
+    return path;
+}
+
+static CodexBarProvider *windsurf_fetch_local_config(const CodexBarProviderConfig *config,
+                                                     gint64 now_ms,
+                                                     GError **error) {
+    char *path = windsurf_database_path(config);
+    CodexBarProvider *provider = codexbar_windsurf_fetch_local(path, now_ms, error);
+    g_free(path);
+    return provider;
+}
+
+CodexBarProvider *codexbar_windsurf_fetch_for_source_with_transport_and_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarWindsurfTransport transport,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "web")) {
+        return codexbar_windsurf_fetch_with_transport_and_cancellable(
+            config, transport, cancellable, now_ms, error);
+    }
+    if (g_str_equal(mode, "cli")) return windsurf_fetch_local_config(config, now_ms, error);
+    if (!g_str_equal(mode, "auto")) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                    "Windsurf source '%s' is unsupported", mode);
+        return NULL;
+    }
+    GError *web_error = NULL;
+    CodexBarProvider *provider = codexbar_windsurf_fetch_with_transport_and_cancellable(
+        config, transport, cancellable, now_ms, &web_error);
+    if (provider) return provider;
+    if (web_error && g_error_matches(web_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        if (error) *error = web_error;
+        else g_clear_error(&web_error);
+        return NULL;
+    }
+    g_clear_error(&web_error);
+    return windsurf_fetch_local_config(config, now_ms, error);
+}
+
+CodexBarProvider *codexbar_windsurf_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_windsurf_fetch_for_source_with_transport_and_cancellable(
+        config, source, codexbar_http_send, cancellable, g_get_real_time() / 1000, error);
 }

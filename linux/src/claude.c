@@ -1098,13 +1098,15 @@ static CodexBarProvider *fetch_cli(CodexBarClaudeRunner runner,
     return provider;
 }
 
-CodexBarProvider *codexbar_claude_fetch_with_adapters(const CodexBarProviderConfig *config,
-                                                      const char *source,
-                                                      CodexBarClaudeTransport transport,
-                                                      CodexBarClaudeRunner runner,
-                                                      GCancellable *cancellable,
-                                                      gint64 now_ms,
-                                                      GError **error) {
+CodexBarProvider *codexbar_claude_fetch_with_adapters_for_runtime(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    gboolean cli_runtime,
+    CodexBarClaudeTransport transport,
+    CodexBarClaudeRunner runner,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
     const char *selected = source ? source : "auto";
     if (g_str_equal(selected, "api")) return fetch_admin_api(config, transport, cancellable, now_ms, error);
     if (g_str_equal(selected, "oauth")) return fetch_oauth(config, transport, cancellable, now_ms, error);
@@ -1119,6 +1121,26 @@ CodexBarProvider *codexbar_claude_fetch_with_adapters(const CodexBarProviderConf
         g_free(key);
         return fetch_admin_api(config, transport, cancellable, now_ms, error);
     }
+    if (!cli_runtime) {
+        GError *oauth_error = NULL;
+        CodexBarProvider *provider = fetch_oauth(config, transport, cancellable, now_ms, &oauth_error);
+        if (provider) return provider;
+        if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+            if (oauth_error) g_propagate_error(error, oauth_error);
+            else g_cancellable_set_error_if_cancelled(cancellable, error);
+            return NULL;
+        }
+        g_clear_error(&oauth_error);
+        GError *cli_error = NULL;
+        provider = fetch_cli(runner, cancellable, now_ms, &cli_error);
+        if (provider) return provider;
+        if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+            if (cli_error) g_propagate_error(error, cli_error);
+            else g_cancellable_set_error_if_cancelled(cancellable, error);
+            return NULL;
+        }
+        g_clear_error(&cli_error);
+    }
     GError *web_error = NULL;
     char *cookie = manual_cookie_header(config, &web_error);
     if (cookie) {
@@ -1131,13 +1153,40 @@ CodexBarProvider *codexbar_claude_fetch_with_adapters(const CodexBarProviderConf
         }
     }
     g_clear_error(&web_error);
-    return fetch_cli(runner, cancellable, now_ms, error);
+    if (cli_runtime) return fetch_cli(runner, cancellable, now_ms, error);
+    g_set_error_literal(error, claude_error_quark(), 18, "No Claude OAuth, CLI, or web source is available");
+    return NULL;
+}
+
+CodexBarProvider *codexbar_claude_fetch_with_adapters(const CodexBarProviderConfig *config,
+                                                      const char *source,
+                                                      CodexBarClaudeTransport transport,
+                                                      CodexBarClaudeRunner runner,
+                                                      GCancellable *cancellable,
+                                                      gint64 now_ms,
+                                                      GError **error) {
+    return codexbar_claude_fetch_with_adapters_for_runtime(
+        config, source, TRUE, transport, runner, cancellable, now_ms, error);
 }
 
 CodexBarProvider *codexbar_claude_fetch(const CodexBarProviderConfig *config,
                                        const char *source,
                                        GCancellable *cancellable,
                                        GError **error) {
-    return codexbar_claude_fetch_with_adapters(
-        config, source, codexbar_http_send, codexbar_process_run, cancellable, g_get_real_time() / 1000, error);
+    return codexbar_claude_fetch_for_runtime(config, source, TRUE, cancellable, error);
+}
+
+CodexBarProvider *codexbar_claude_fetch_for_runtime(const CodexBarProviderConfig *config,
+                                                   const char *source,
+                                                   gboolean cli_runtime,
+                                                   GCancellable *cancellable,
+                                                   GError **error) {
+    return codexbar_claude_fetch_with_adapters_for_runtime(config,
+                                                           source,
+                                                           cli_runtime,
+                                                           codexbar_http_send,
+                                                           codexbar_process_run,
+                                                           cancellable,
+                                                           g_get_real_time() / 1000,
+                                                           error);
 }

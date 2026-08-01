@@ -204,6 +204,22 @@ static gboolean object_epoch_ms(json_object *object, const char *key, gint64 *re
     return object && json_object_object_get_ex(object, key, &value) && epoch_value_ms(value, result);
 }
 
+static gboolean json_timestamp_ms(json_object *value, gint64 *result) {
+    if (epoch_value_ms(value, result)) return TRUE;
+    if (!value || !json_object_is_type(value, json_type_string)) return FALSE;
+    const char *text = json_object_get_string(value);
+    size_t length = (size_t)json_object_get_string_len(value);
+    if (!text || memchr(text, '\0', length) || !g_utf8_validate(text, (gssize)length, NULL)) return FALSE;
+    char *copy = g_strndup(text, length);
+    g_strstrip(copy);
+    GDateTime *date = copy[0] ? g_date_time_new_from_iso8601(copy, NULL) : NULL;
+    g_free(copy);
+    if (!date) return FALSE;
+    *result = g_date_time_to_unix(date) * 1000 + g_date_time_get_microsecond(date) / 1000;
+    g_date_time_unref(date);
+    return TRUE;
+}
+
 static CodexBarProvider *provider_new(const char *id, gint64 now_ms) {
     CodexBarProvider *provider = codexbar_provider_new();
     provider->provider = g_strdup(id);
@@ -1296,6 +1312,109 @@ CodexBarProvider *codexbar_doubao_parse_agent_plan(const char *json,
     return provider;
 }
 
+CodexBarProvider *codexbar_doubao_parse_cli_usage(const char *json,
+                                                 size_t length,
+                                                 gint64 now_ms,
+                                                 GError **error) {
+    json_object *root = parse_json_document(json, length);
+    json_object *items = NULL;
+    if (!root || !json_object_is_type(root, json_type_object) ||
+        !json_object_object_get_ex(root, "items", &items) || !json_object_is_type(items, json_type_array)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "arkcli usage response is malformed");
+        return NULL;
+    }
+
+    char *auth_method = NULL;
+    json_object *viewer = NULL;
+    if (json_object_object_get_ex(root, "viewer", &viewer) && json_object_is_type(viewer, json_type_object)) {
+        auth_method = object_string(viewer, "auth_method");
+    }
+    if (auth_method && g_ascii_strcasecmp(auth_method, "none") == 0) {
+        g_free(auth_method);
+        json_object_put(root);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                            "arkcli is not signed in; run 'arkcli auth login'");
+        return NULL;
+    }
+
+    CodexBarProvider *provider = provider_new("doubao", now_ms);
+    g_free(provider->source);
+    provider->source = g_strdup("cli");
+    add_identity(provider, auth_method);
+    g_free(auth_method);
+    gboolean found_quota = FALSE;
+    gint64 newest_update_ms = 0;
+    size_t count = json_object_array_length(items);
+    for (size_t index = 0; index < count; index++) {
+        json_object *item = json_object_array_get_idx(items, index);
+        if (!json_object_is_type(item, json_type_object)) continue;
+        char *product = object_string(item, "product");
+        const char *prefix = NULL;
+        if (product && g_ascii_strcasecmp(product, "agent-plan") == 0) prefix = "agent_";
+        else if (product && g_ascii_strcasecmp(product, "coding-plan") == 0) prefix = "";
+        else if (product && g_ascii_strcasecmp(product, "agent-plan-team") == 0) prefix = "agent_team_";
+        else if (product && g_ascii_strcasecmp(product, "coding-plan-team") == 0) prefix = "coding_team_";
+        if (!prefix) {
+            g_free(product);
+            continue;
+        }
+        json_object *subscribed = NULL;
+        gboolean active = !json_object_object_get_ex(item, "subscribed", &subscribed) ||
+                          !json_object_is_type(subscribed, json_type_boolean) || json_object_get_boolean(subscribed);
+        if (!active) {
+            g_free(product);
+            continue;
+        }
+        json_object *periods = NULL;
+        if (!json_object_object_get_ex(item, "periods", &periods) ||
+            !json_object_is_type(periods, json_type_array) || json_object_array_length(periods) == 0) {
+            char *detail = object_string(item, "error");
+            g_set_error(error,
+                        G_IO_ERROR,
+                        G_IO_ERROR_INVALID_DATA,
+                        "arkcli returned incomplete %s usage: %s",
+                        product,
+                        detail ? detail : "no usage periods");
+            g_free(detail);
+            g_free(product);
+            json_object_put(root);
+            codexbar_provider_free(provider);
+            return NULL;
+        }
+        gint64 updated_ms = 0;
+        if (object_epoch_ms(item, "updated_at", &updated_ms) && updated_ms > newest_update_ms)
+            newest_update_ms = updated_ms;
+        size_t period_count = json_object_array_length(periods);
+        for (size_t period_index = 0; period_index < period_count; period_index++) {
+            json_object *period = json_object_array_get_idx(periods, period_index);
+            char *label = object_string(period, "label");
+            double percent = 0;
+            if (!label || !object_double(period, "percent", &percent)) {
+                g_free(label);
+                continue;
+            }
+            gint64 reset_ms = 0;
+            json_object *reset = NULL;
+            if (json_object_object_get_ex(period, "reset_at", &reset)) json_timestamp_ms(reset, &reset_ms);
+            char *level = g_strconcat(prefix, label, NULL);
+            found_quota |= doubao_add_named_quota(provider, level, percent, reset_ms);
+            g_free(level);
+            g_free(label);
+        }
+        g_free(product);
+    }
+    json_object_put(root);
+    if (!found_quota) {
+        codexbar_provider_free(provider);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                            "arkcli returned no active Coding or Agent Plan usage");
+        return NULL;
+    }
+    if (newest_update_ms > 0) provider->updated_at_ms = newest_update_ms;
+    return provider;
+}
+
 static char *hex_digest(const guint8 *data, size_t length) {
     char *result = g_malloc(length * 2 + 1);
     for (size_t index = 0; index < length; index++) g_snprintf(result + index * 2, 3, "%02x", data[index]);
@@ -1642,6 +1761,114 @@ CodexBarProvider *codexbar_doubao_fetch_with_transport_and_cancellable(
     CodexBarProvider *provider = doubao_fetch_bearer(key, transport, cancellable, now_ms, error);
     g_free(key);
     return provider;
+}
+
+static gboolean doubao_authentication_error(const char *message) {
+    if (!message) return FALSE;
+    char *lower = g_ascii_strdown(message, -1);
+    const char *needles[] = {
+        "not logged in", "not authenticated", "authentication required", "login required", "please login",
+        "please log in", NULL,
+    };
+    gboolean matched = FALSE;
+    for (size_t index = 0; !matched && needles[index]; index++) matched = strstr(lower, needles[index]) != NULL;
+    g_free(lower);
+    return matched;
+}
+
+static char *doubao_arkcli_binary(const CodexBarProviderConfig *config) {
+    char *binary = NULL;
+    json_object *value = NULL;
+    if (config && config->raw && json_object_object_get_ex(config->raw, "arkcliPath", &value) &&
+        json_object_is_type(value, json_type_string)) {
+        binary = clean_credential(json_object_get_string(value));
+    }
+    if (!binary) binary = clean_credential(g_getenv("ARKCLI_PATH"));
+    if (!binary) binary = g_find_program_in_path("arkcli");
+    return binary;
+}
+
+static CodexBarProvider *doubao_fetch_cli(const CodexBarProviderConfig *config,
+                                         CodexBarDoubaoProcessRunner runner,
+                                         GCancellable *cancellable,
+                                         gint64 now_ms,
+                                         GError **error) {
+    char *binary = doubao_arkcli_binary(config);
+    if (!binary) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "arkcli was not found; install it and run 'arkcli auth login'");
+        return NULL;
+    }
+    const char *arguments[] = {binary, "usage", "plan", "--format", "json", NULL};
+    CodexBarProcessRequest request = {
+        .arguments = arguments,
+        .timeout_milliseconds = 15000,
+        .termination_grace_milliseconds = 400,
+        .maximum_output_bytes = 256U * 1024U,
+        .new_session = TRUE,
+    };
+    CodexBarProcessResult *result = runner ? runner(&request, cancellable, error) : NULL;
+    g_free(binary);
+    if (!runner && (!error || !*error)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Doubao CLI runner is missing");
+    }
+    if (!result) return NULL;
+    if (!codexbar_process_result_succeeded(result)) {
+        GIOErrorEnum code = doubao_authentication_error(result->standard_error)
+                                ? G_IO_ERROR_PERMISSION_DENIED
+                                : G_IO_ERROR_FAILED;
+        g_set_error(error,
+                    G_IO_ERROR,
+                    code,
+                    "arkcli usage failed with status %d: %s",
+                    result->exit_status,
+                    result->standard_error_length ? result->standard_error : "no diagnostic output");
+        codexbar_process_result_free(result);
+        return NULL;
+    }
+    CodexBarProvider *provider = codexbar_doubao_parse_cli_usage(
+        result->standard_output, result->standard_output_length, now_ms, error);
+    codexbar_process_result_free(result);
+    return provider;
+}
+
+CodexBarProvider *codexbar_doubao_fetch_for_source_with_adapters(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    CodexBarApiProviders3Transport transport,
+    CodexBarDoubaoProcessRunner runner,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error) {
+    const char *mode = source && source[0] ? source : "auto";
+    if (g_str_equal(mode, "auto")) {
+        if (codexbar_doubao_has_credentials(config)) {
+            return codexbar_doubao_fetch_with_transport_and_cancellable(
+                config, transport, cancellable, now_ms, error);
+        }
+        return doubao_fetch_cli(config, runner, cancellable, now_ms, error);
+    }
+    if (g_str_equal(mode, "api")) {
+        return codexbar_doubao_fetch_with_transport_and_cancellable(
+            config, transport, cancellable, now_ms, error);
+    }
+    if (g_str_equal(mode, "cli")) return doubao_fetch_cli(config, runner, cancellable, now_ms, error);
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Doubao source '%s' is unsupported", mode);
+    return NULL;
+}
+
+CodexBarProvider *codexbar_doubao_fetch_for_source_with_cancellable(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    GCancellable *cancellable,
+    GError **error) {
+    return codexbar_doubao_fetch_for_source_with_adapters(config,
+                                                          source,
+                                                          codexbar_http_send,
+                                                          codexbar_process_run,
+                                                          cancellable,
+                                                          g_get_real_time() / 1000,
+                                                          error);
 }
 
 CodexBarProvider *codexbar_doubao_fetch_with_transport(const CodexBarProviderConfig *config,

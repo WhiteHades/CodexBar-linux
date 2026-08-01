@@ -174,7 +174,9 @@ static GError *unsupported_source_error(const CodexBarProviderDescriptor *descri
     return error;
 }
 
-static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GCancellable *cancellable) {
+static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
+                                        GCancellable *cancellable,
+                                        gboolean cli_runtime) {
     const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(config->id);
     if (!descriptor) {
         GError *error = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Unknown provider: %s", config->id);
@@ -199,7 +201,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         provider = codexbar_codex_fetch(config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_CLAUDE:
-        provider = codexbar_claude_fetch(config, configured_source, cancellable, &error);
+        provider = codexbar_claude_fetch_for_runtime(
+            config, configured_source, cli_runtime, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_CLINEPASS:
         provider = codexbar_clinepass_fetch(config, &error);
@@ -274,7 +277,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         provider = codexbar_alibaba_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_DOUBAO:
-        provider = codexbar_doubao_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_doubao_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_FACTORY:
         provider = codexbar_factory_fetch_with_cancellable(config, cancellable, &error);
@@ -346,7 +350,8 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         provider = codexbar_vertex_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_WINDSURF:
-        provider = codexbar_windsurf_fetch_with_cancellable(config, cancellable, &error);
+        provider = codexbar_windsurf_fetch_for_source_with_cancellable(
+            config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_GROK:
         provider = codexbar_grok_fetch_with_cancellable(config, configured_source, cancellable, &error);
@@ -436,6 +441,7 @@ static gboolean profile_is_configured(const CodexBarProviderConfig *config, cons
 static gboolean append_codex_accounts(CodexBarSnapshot *snapshot,
                                       const CodexBarProviderConfig *config,
                                       GCancellable *cancellable,
+                                      gboolean cli_runtime,
                                       GError **fatal_error) {
     GError *store_error = NULL;
     CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(FALSE, &store_error);
@@ -482,7 +488,7 @@ static gboolean append_codex_accounts(CodexBarSnapshot *snapshot,
             append_unique_codex(snapshot, provider_error(config, "cli", error));
         }
     } else {
-        append_unique_codex(snapshot, fetch_provider(config, cancellable));
+        append_unique_codex(snapshot, fetch_provider(config, cancellable, cli_runtime));
     }
 
     if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, fatal_error)) {
@@ -491,7 +497,7 @@ static gboolean append_codex_accounts(CodexBarSnapshot *snapshot,
         return FALSE;
     }
     if (active != CODEXBAR_CODEX_SOURCE_LIVE_SYSTEM) {
-        append_unique_codex(snapshot, fetch_provider(config, cancellable));
+        append_unique_codex(snapshot, fetch_provider(config, cancellable, cli_runtime));
     }
     for (guint index = 0; config->codex_profile_home_paths &&
                           index < config->codex_profile_home_paths->len; index++) {
@@ -524,11 +530,17 @@ static gboolean append_codex_accounts(CodexBarSnapshot *snapshot,
     return TRUE;
 }
 
+static CodexBarSnapshot *codexbar_backend_fetch_for_runtime(GCancellable *cancellable,
+                                                            gboolean cli_runtime,
+                                                            GError **error);
+
 CodexBarSnapshot *codexbar_backend_fetch(GError **error) {
-    return codexbar_backend_fetch_with_cancellable(NULL, error);
+    return codexbar_backend_fetch_for_runtime(NULL, TRUE, error);
 }
 
-CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancellable, GError **error) {
+static CodexBarSnapshot *codexbar_backend_fetch_for_runtime(GCancellable *cancellable,
+                                                            gboolean cli_runtime,
+                                                            GError **error) {
     const char *backend = g_getenv("CODEXBAR_BACKEND");
     if (backend && backend[0] != '\0') {
         return fetch_oracle(backend, NULL, NULL, NULL, -1, FALSE, cancellable, error);
@@ -551,14 +563,14 @@ CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancella
             continue;
         }
         if (g_str_equal(provider_config->id, "codex")) {
-            if (!append_codex_accounts(snapshot, provider_config, cancellable, error)) {
+            if (!append_codex_accounts(snapshot, provider_config, cancellable, cli_runtime, error)) {
                 codexbar_snapshot_free(snapshot);
                 codexbar_config_free(config);
                 return NULL;
             }
             continue;
         }
-        CodexBarProvider *provider = fetch_provider(provider_config, cancellable);
+        CodexBarProvider *provider = fetch_provider(provider_config, cancellable, cli_runtime);
         if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) {
             codexbar_provider_free(provider);
             codexbar_snapshot_free(snapshot);
@@ -569,6 +581,10 @@ CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancella
     }
     codexbar_config_free(config);
     return snapshot;
+}
+
+CodexBarSnapshot *codexbar_backend_fetch_with_cancellable(GCancellable *cancellable, GError **error) {
+    return codexbar_backend_fetch_for_runtime(cancellable, FALSE, error);
 }
 
 CodexBarSnapshot *codexbar_backend_fetch_all(GError **error) {
@@ -582,9 +598,9 @@ CodexBarSnapshot *codexbar_backend_fetch_all(GError **error) {
         const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_at(index);
         CodexBarProviderConfig *provider_config = codexbar_config_provider(config, descriptor->id);
         if (g_str_equal(provider_config->id, "codex")) {
-            append_codex_accounts(snapshot, provider_config, NULL, NULL);
+            append_codex_accounts(snapshot, provider_config, NULL, TRUE, NULL);
         } else {
-            g_ptr_array_add(snapshot->providers, fetch_provider(provider_config, NULL));
+            g_ptr_array_add(snapshot->providers, fetch_provider(provider_config, NULL, TRUE));
         }
     }
     codexbar_config_free(config);
@@ -629,7 +645,7 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     if (!source && g_str_equal(descriptor->id, "codex")) {
         CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
         snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
-        gboolean fetched = append_codex_accounts(snapshot, stored, NULL, error);
+        gboolean fetched = append_codex_accounts(snapshot, stored, NULL, TRUE, error);
         CodexBarProvider *result = fetched && snapshot->providers->len > 0
                                        ? g_ptr_array_steal_index(snapshot->providers, 0)
                                        : NULL;
@@ -639,7 +655,7 @@ CodexBarProvider *codexbar_backend_fetch_one(const char *provider_name, const ch
     }
     CodexBarProviderConfig selected = *stored;
     selected.source = g_strdup(source ? source : stored->source);
-    CodexBarProvider *result = fetch_provider(&selected, NULL);
+    CodexBarProvider *result = fetch_provider(&selected, NULL, TRUE);
     g_free(selected.source);
     codexbar_config_free(config);
     return result;
@@ -702,7 +718,7 @@ static CodexBarProvider *fetch_token_account(const CodexBarProviderConfig *store
         selected.api_key = account_api_key;
     }
 
-    CodexBarProvider *provider = fetch_provider(&selected, NULL);
+    CodexBarProvider *provider = fetch_provider(&selected, NULL, TRUE);
     if (provider) {
         g_free(provider->account);
         provider->account = g_strdup(label);

@@ -2,13 +2,80 @@
 
 #include <gio/gio.h>
 #include <json-c/json.h>
+#include <glib/gstdio.h>
+#include <sqlite3.h>
 #include <string.h>
+#include <unistd.h>
 
 static GByteArray *fixture_body;
 static GCancellable *expected_cancellable;
 static gboolean cancel_request;
 static long response_status = 200;
 static gboolean redirect_response;
+
+typedef struct {
+    char *directory;
+    char *database;
+} LocalDatabase;
+
+static CodexBarHttpResponse *unexpected_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)request;
+    (void)error;
+    g_assert_not_reached();
+}
+
+static LocalDatabase make_local_database(const char *json, gboolean utf16) {
+    char *current = g_get_current_dir();
+    char *base = g_build_filename(current, ".tmp", NULL);
+    g_free(current);
+    g_assert_cmpint(g_mkdir_with_parents(base, 0700), ==, 0);
+    char *pattern = g_strdup_printf("%s/windsurf-%ld-XXXXXX", base, (long)getpid());
+    g_free(base);
+    g_assert_nonnull(g_mkdtemp(pattern));
+    LocalDatabase local = {.directory = pattern, .database = g_build_filename(pattern, "state.vscdb", NULL)};
+    sqlite3 *database = NULL;
+    g_assert_cmpint(sqlite3_open(local.database, &database), ==, SQLITE_OK);
+    g_assert_cmpint(sqlite3_exec(database,
+                                "CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value BLOB);",
+                                NULL,
+                                NULL,
+                                NULL),
+                    ==,
+                    SQLITE_OK);
+    gsize value_length = strlen(json);
+    char *converted = NULL;
+    const void *value = json;
+    if (utf16) {
+        converted = g_convert(json, -1, "UTF-16LE", "UTF-8", NULL, &value_length, NULL);
+        g_assert_nonnull(converted);
+        value = converted;
+    }
+    sqlite3_stmt *statement = NULL;
+    g_assert_cmpint(sqlite3_prepare_v2(database,
+                                      "INSERT INTO ItemTable(key, value) VALUES(?, ?);",
+                                      -1,
+                                      &statement,
+                                      NULL),
+                    ==,
+                    SQLITE_OK);
+    g_assert_cmpint(sqlite3_bind_text(statement, 1, "windsurf.settings.cachedPlanInfo", -1, SQLITE_STATIC),
+                    ==,
+                    SQLITE_OK);
+    g_assert_cmpint(sqlite3_bind_blob(statement, 2, value, (int)value_length, SQLITE_TRANSIENT), ==, SQLITE_OK);
+    g_assert_cmpint(sqlite3_step(statement), ==, SQLITE_DONE);
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
+    g_free(converted);
+    return local;
+}
+
+static void clear_local_database(LocalDatabase *local) {
+    g_remove(local->database);
+    g_rmdir(local->directory);
+    g_free(local->database);
+    g_free(local->directory);
+    *local = (LocalDatabase){0};
+}
 
 static void append_varint(GByteArray *data, guint64 value) {
     while (value >= 0x80) {
@@ -160,6 +227,61 @@ static void test_parser(void) {
     fixture_body = NULL;
 }
 
+static void test_cached_plan(void) {
+    const char *json =
+        "{\"planName\":\"Pro\",\"endTimestamp\":1774029950000,"
+        "\"usage\":{\"messages\":50000,\"usedMessages\":1200,\"flowActions\":150000,"
+        "\"remainingFlowActions\":150000},\"quotaUsage\":{\"dailyRemainingPercent\":9.5,"
+        "\"dailyResetAtUnix\":1774080000}}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_windsurf_parse_cached_plan(json, strlen(json), 1773993600000, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "local");
+    g_assert_cmpstr(provider->plan, ==, "Pro");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 90.5);
+    g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->resets_at_ms, ==, 1774080000000);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 0);
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 1)->reset_description,
+                    ==,
+                    "0 / 150000 flow actions");
+    g_assert_true(provider->has_subscription_expires_at);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_windsurf_parse_cached_plan("[]", 2, 1, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_clear_error(&error);
+}
+
+static void test_local_database_and_sources(void) {
+    const char *json =
+        "{\"planName\":\"Local Pro\",\"quotaUsage\":{\"dailyRemainingPercent\":68,"
+        "\"weeklyRemainingPercent\":84}}";
+    for (guint utf16 = 0; utf16 < 2; utf16++) {
+        LocalDatabase local = make_local_database(json, utf16 != 0);
+        GError *error = NULL;
+        CodexBarProvider *provider = codexbar_windsurf_fetch_local(local.database, 1, &error);
+        g_assert_no_error(error);
+        g_assert_nonnull(provider);
+        g_assert_cmpstr(provider->plan, ==, "Local Pro");
+        codexbar_provider_free(provider);
+
+        CodexBarProviderConfig config = {0};
+        config.raw = json_object_new_object();
+        json_object_object_add(config.raw, "dbPath", json_object_new_string(local.database));
+        provider = codexbar_windsurf_fetch_for_source_with_transport_and_cancellable(
+            &config, utf16 ? "auto" : "cli", unexpected_transport, NULL, 1, &error);
+        g_assert_no_error(error);
+        g_assert_nonnull(provider);
+        g_assert_cmpstr(provider->source, ==, "local");
+        codexbar_provider_free(provider);
+        json_object_put(config.raw);
+        clear_local_database(&local);
+    }
+}
+
 static void test_transport_sessions(void) {
     fixture_body = plan_response();
     response_status = 200;
@@ -228,6 +350,8 @@ static void test_security_and_errors(void) {
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/windsurf/parser", test_parser);
+    g_test_add_func("/windsurf/cached-plan", test_cached_plan);
+    g_test_add_func("/windsurf/local-database-sources", test_local_database_and_sources);
     g_test_add_func("/windsurf/transport-sessions", test_transport_sessions);
     g_test_add_func("/windsurf/security-errors", test_security_and_errors);
     return g_test_run();

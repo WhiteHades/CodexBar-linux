@@ -326,11 +326,11 @@ test('codexbar-linux-api-providers2', api_providers2_test, env: normalized_test_
 
 api_providers3_test = executable(
   'codexbar-linux-api-providers3-tests',
-  files('tests/test_api_providers3.c', 'src/api_providers3.c', 'src/http.c', 'src/model.c'),
+  files('tests/test_api_providers3.c', 'src/api_providers3.c', 'src/http.c', 'src/model.c', 'src/process.c'),
   include_directories: source_includes,
   dependencies: core_deps,
 )
-test('codexbar-linux-api-providers3', api_providers3_test, env: normalized_test_env)
+test('codexbar-linux-api-providers3', api_providers3_test, env: normalized_test_env, depends: process_supervisor)
 
 api_providers4_test = executable(
   'codexbar-linux-api-providers4-tests',

@@ -1,6 +1,7 @@
 #include "api_providers3.h"
 
 #include <gio/gio.h>
+#include <json-c/json.h>
 #include <string.h>
 
 typedef struct {
@@ -17,6 +18,34 @@ typedef struct {
 } TransportFixture;
 
 static TransportFixture fixture;
+static const char *cli_output;
+static const char *cli_error;
+static int cli_status;
+static guint cli_calls;
+
+static CodexBarProcessResult *stub_process(const CodexBarProcessRequest *request,
+                                          GCancellable *cancellable,
+                                          GError **error) {
+    (void)error;
+    cli_calls++;
+    g_assert_cmpstr(request->arguments[0], ==, "/test/arkcli");
+    g_assert_cmpstr(request->arguments[1], ==, "usage");
+    g_assert_cmpstr(request->arguments[2], ==, "plan");
+    g_assert_cmpstr(request->arguments[3], ==, "--format");
+    g_assert_cmpstr(request->arguments[4], ==, "json");
+    g_assert_null(request->arguments[5]);
+    g_assert_cmpuint(request->timeout_milliseconds, ==, 15000);
+    g_assert_cmpuint(request->maximum_output_bytes, ==, 256U * 1024U);
+    g_assert_true(request->new_session);
+    g_assert_null(cancellable);
+    CodexBarProcessResult *result = g_new0(CodexBarProcessResult, 1);
+    result->standard_output = g_strdup(cli_output ? cli_output : "");
+    result->standard_output_length = strlen(result->standard_output);
+    result->standard_error = g_strdup(cli_error ? cli_error : "");
+    result->standard_error_length = strlen(result->standard_error);
+    result->exit_status = cli_status;
+    return result;
+}
 
 static void response_header_free(gpointer data) {
     CodexBarHttpResponseHeader *header = data;
@@ -313,6 +342,108 @@ static void test_doubao_parse(void) {
     assert_parse_error(codexbar_doubao_parse_agent_plan, "[]", 2);
 }
 
+static void test_doubao_cli_parse(void) {
+    const char *body =
+        "{\"viewer\":{\"auth_method\":\"sso\"},\"items\":["
+        "{\"product\":\"coding-plan\",\"updated_at\":1784199993,\"periods\":["
+        "{\"label\":\"session\",\"percent\":7.48,\"reset_at\":\"2026-08-02T12:00:00Z\"},"
+        "{\"label\":\"weekly\",\"percent\":25,\"reset_at\":1786296000000}]},"
+        "{\"product\":\"agent-plan-team\",\"updated_at\":1784200000000,\"periods\":["
+        "{\"label\":\"5h\",\"percent\":5},{\"label\":\"monthly\",\"percent\":15}]},"
+        "{\"product\":\"other\",\"periods\":[]},"
+        "{\"product\":\"agent-plan\",\"subscribed\":false,\"periods\":["
+        "{\"label\":\"5h\",\"percent\":99}]}]}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_doubao_parse_cli_usage(body, strlen(body), 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "cli");
+    g_assert_cmpstr(provider->plan, ==, "sso");
+    g_assert_cmpint(provider->updated_at_ms, ==, 1784200000000);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 4);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 7.48);
+    g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->window_minutes, ==, 300);
+    g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->resets_at_ms, ==, 1785672000000);
+    g_assert_cmpint(codexbar_provider_quota_window(provider, 1)->resets_at_ms, ==, 1786296000000);
+    codexbar_provider_free(provider);
+
+    const char *logged_out = "{\"viewer\":{\"auth_method\":\"none\"},\"items\":[]}";
+    provider = codexbar_doubao_parse_cli_usage(logged_out, strlen(logged_out), 1, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+    g_clear_error(&error);
+
+    const char *incomplete =
+        "{\"items\":[{\"product\":\"coding-plan\",\"error\":\"no seat bound to caller\"},"
+        "{\"product\":\"agent-plan\",\"periods\":[{\"label\":\"5h\",\"percent\":5}]}]}";
+    provider = codexbar_doubao_parse_cli_usage(incomplete, strlen(incomplete), 1, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_nonnull(strstr(error->message, "no seat bound to caller"));
+    g_clear_error(&error);
+}
+
+static CodexBarProviderConfig doubao_cli_config(void) {
+    CodexBarProviderConfig config = {0};
+    config.raw = json_object_new_object();
+    json_object_object_add(config.raw, "arkcliPath", json_object_new_string("/test/arkcli"));
+    return config;
+}
+
+static void test_doubao_source_routing(void) {
+    g_unsetenv("ARK_API_KEY");
+    g_unsetenv("VOLCENGINE_API_KEY");
+    g_unsetenv("DOUBAO_API_KEY");
+    g_unsetenv("VOLCENGINE_ACCESS_KEY_ID");
+    g_unsetenv("VOLCENGINE_ACCESS_KEY");
+    g_unsetenv("VOLC_ACCESSKEY");
+    g_unsetenv("DOUBAO_ACCESS_KEY_ID");
+    CodexBarProviderConfig config = doubao_cli_config();
+    cli_output =
+        "{\"viewer\":{\"auth_method\":\"sso\"},\"items\":[{\"product\":\"coding-plan\","
+        "\"periods\":[{\"label\":\"session\",\"percent\":12.5}]}]}";
+    cli_error = NULL;
+    cli_status = 0;
+    cli_calls = 0;
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_doubao_fetch_for_source_with_adapters(
+        &config, "auto", unexpected_transport, stub_process, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "cli");
+    g_assert_cmpuint(cli_calls, ==, 1);
+    codexbar_provider_free(provider);
+
+    config.api_key = "ark-key";
+    provider = codexbar_doubao_fetch_for_source_with_adapters(
+        &config, "cli", unexpected_transport, stub_process, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(cli_calls, ==, 2);
+    codexbar_provider_free(provider);
+
+    reset_fixture();
+    fixture.urls[0] = "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions";
+    fixture.statuses[0] = 200;
+    fixture.bodies[0] = "{\"usage\":{\"total_tokens\":1}}";
+    provider = codexbar_doubao_fetch_for_source_with_adapters(
+        &config, "auto", stub_transport, stub_process, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "api");
+    g_assert_cmpuint(cli_calls, ==, 2);
+    codexbar_provider_free(provider);
+
+    cli_status = 1;
+    cli_error = "please log in first";
+    provider = codexbar_doubao_fetch_for_source_with_adapters(
+        &config, "cli", unexpected_transport, stub_process, NULL, 1, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+    g_clear_error(&error);
+    json_object_put(config.raw);
+}
+
 static void test_doubao_bearer(void) {
     reset_fixture();
     fixture.urls[0] = "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions";
@@ -400,6 +531,8 @@ int main(int argc, char **argv) {
     g_test_add_func("/api-providers3/alibaba/parse", test_alibaba_parse);
     g_test_add_func("/api-providers3/alibaba/fetch", test_alibaba_fetch);
     g_test_add_func("/api-providers3/doubao/parse", test_doubao_parse);
+    g_test_add_func("/api-providers3/doubao/cli-parse", test_doubao_cli_parse);
+    g_test_add_func("/api-providers3/doubao/sources", test_doubao_source_routing);
     g_test_add_func("/api-providers3/doubao/bearer", test_doubao_bearer);
     g_test_add_func("/api-providers3/doubao/signed", test_doubao_signed_and_agent_fallback);
     return g_test_run();

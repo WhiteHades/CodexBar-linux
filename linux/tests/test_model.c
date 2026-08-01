@@ -1643,13 +1643,21 @@ static void test_provider_registry(void) {
     const char *single_source_providers[][2] = {
         {"alibaba", "api"},
         {"antigravity", "cli"}, {"minimax", "api"}, {"kimi", "api"},
-        {"ollama", "api"},      {"windsurf", "web"}, {"groq", "api"},
+        {"ollama", "api"},      {"groq", "api"},
     };
     for (guint index = 0; index < G_N_ELEMENTS(single_source_providers); index++) {
         const CodexBarProviderDescriptor *single = codexbar_provider_registry_find(single_source_providers[index][0]);
         g_assert_cmpuint(codexbar_provider_auto_source_plan(single, plan, G_N_ELEMENTS(plan)), ==, 1);
         g_assert_cmpstr(plan[0], ==, single_source_providers[index][1]);
     }
+    const CodexBarProviderDescriptor *windsurf = codexbar_provider_registry_find("windsurf");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(windsurf, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "web");
+    g_assert_cmpstr(plan[1], ==, "cli");
+    const CodexBarProviderDescriptor *doubao = codexbar_provider_registry_find("doubao");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(doubao, plan, G_N_ELEMENTS(plan)), ==, 2);
+    g_assert_cmpstr(plan[0], ==, "api");
+    g_assert_cmpstr(plan[1], ==, "cli");
     g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "api"));
     g_assert_false(codexbar_provider_supports_source(codexbar_provider_registry_find("deepseek"), "web"));
     const CodexBarProviderDescriptor *clinepass = codexbar_provider_registry_find("clinepass");

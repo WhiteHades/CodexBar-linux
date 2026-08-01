@@ -14,6 +14,11 @@ CodexBarProvider *codexbar_claude_fetch(const CodexBarProviderConfig *config,
                                        const char *source,
                                        GCancellable *cancellable,
                                        GError **error);
+CodexBarProvider *codexbar_claude_fetch_for_runtime(const CodexBarProviderConfig *config,
+                                                   const char *source,
+                                                   gboolean cli_runtime,
+                                                   GCancellable *cancellable,
+                                                   GError **error);
 CodexBarProvider *codexbar_claude_fetch_with_adapters(const CodexBarProviderConfig *config,
                                                      const char *source,
                                                      CodexBarClaudeTransport transport,
@@ -21,6 +26,15 @@ CodexBarProvider *codexbar_claude_fetch_with_adapters(const CodexBarProviderConf
                                                      GCancellable *cancellable,
                                                      gint64 now_ms,
                                                      GError **error);
+CodexBarProvider *codexbar_claude_fetch_with_adapters_for_runtime(
+    const CodexBarProviderConfig *config,
+    const char *source,
+    gboolean cli_runtime,
+    CodexBarClaudeTransport transport,
+    CodexBarClaudeRunner runner,
+    GCancellable *cancellable,
+    gint64 now_ms,
+    GError **error);
 CodexBarProvider *codexbar_claude_parse_oauth_usage(const char *json,
                                                     const char *rate_limit_tier,
                                                     const char *subscription_type,

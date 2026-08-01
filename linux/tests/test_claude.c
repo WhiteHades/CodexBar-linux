@@ -82,6 +82,7 @@ static void test_invalid_usage(void) {
 static guint transport_calls;
 static guint runner_calls;
 static int transport_mode;
+static gboolean runner_fails;
 
 static CodexBarHttpResponse *response(long status, const char *body) {
     CodexBarHttpResponse *value = g_new0(CodexBarHttpResponse, 1);
@@ -95,6 +96,9 @@ static CodexBarHttpResponse *source_transport(const CodexBarHttpRequest *request
     (void)error;
     transport_calls++;
     if (transport_mode == 1) return response(401, "{}");
+    if (transport_mode == 3 && strstr(request->url, "/api/oauth/usage")) {
+        return response(200, "{\"five_hour\":{\"utilization\":9}}");
+    }
     if (transport_mode == 2) {
         if (strstr(request->url, "cost_report")) {
             return response(200,
@@ -128,6 +132,7 @@ static CodexBarProcessResult *source_runner(const CodexBarProcessRequest *reques
         "Current session\n25% used\nCurrent week (all models)\n80% left\n"
         "Current week (Sonnet only)\n10% used\nAccount: cli@example.test\nOrg: CLI Org\n");
     result->standard_output_length = strlen(result->standard_output);
+    result->exit_status = runner_fails ? 1 : 0;
     return result;
 }
 
@@ -152,6 +157,8 @@ static void test_source_planner(void) {
     json_object_object_add(config.raw, "cookieHeader", json_object_new_string("sessionKey=sk-ant-session"));
     transport_calls = 0;
     runner_calls = 0;
+    runner_fails = FALSE;
+    g_setenv("CLAUDE_CONFIG_DIR", "/nonexistent-codexbar-claude-test", TRUE);
     transport_mode = 1;
     GError *error = NULL;
     CodexBarProvider *provider = codexbar_claude_fetch_with_adapters(
@@ -168,13 +175,33 @@ static void test_source_planner(void) {
     g_assert_cmpuint(runner_calls, ==, 1);
     codexbar_provider_free(provider);
 
+    json_object_object_add(config.raw, "oauthToken", json_object_new_string("sk-ant-oat-test"));
+    transport_mode = 3;
+    guint previous_runner_calls = runner_calls;
+    provider = codexbar_claude_fetch_with_adapters_for_runtime(
+        &config, "auto", FALSE, source_transport, source_runner, NULL, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "oauth");
+    g_assert_cmpuint(runner_calls, ==, previous_runner_calls);
+    codexbar_provider_free(provider);
+    json_object_object_del(config.raw, "oauthToken");
+
+    runner_fails = TRUE;
+    transport_mode = 0;
+    provider = codexbar_claude_fetch_with_adapters_for_runtime(
+        &config, "auto", FALSE, source_transport, source_runner, NULL, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->source, ==, "web");
+    codexbar_provider_free(provider);
+    runner_fails = FALSE;
+
     transport_mode = 0;
     provider = codexbar_claude_fetch_with_adapters(
         &config, "web", source_transport, source_runner, NULL, 1000, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(provider->source, ==, "web");
     g_assert_cmpstr(provider->identity->account_id, ==, "org-1");
-    g_assert_cmpuint(runner_calls, ==, 1);
+    g_assert_cmpuint(runner_calls, ==, 2);
     codexbar_provider_free(provider);
 
     config.api_key = "admin-key";
@@ -187,9 +214,10 @@ static void test_source_planner(void) {
     g_assert_cmpfloat(provider->provider_cost->used, ==, 8.5);
     g_assert_cmpint(provider->token_cost->last_days_tokens, ==, 1950);
     g_assert_cmpuint(transport_calls, ==, 2);
-    g_assert_cmpuint(runner_calls, ==, 1);
+    g_assert_cmpuint(runner_calls, ==, 2);
     codexbar_provider_free(provider);
     json_object_put(config.raw);
+    g_unsetenv("CLAUDE_CONFIG_DIR");
 }
 
 int main(int argc, char **argv) {
