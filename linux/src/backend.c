@@ -14,6 +14,7 @@
 #include "copilot.h"
 #include "codex.h"
 #include "deepinfra.h"
+#include "grok.h"
 #include "jetbrains.h"
 #include "kilo.h"
 #include "kimi.h"
@@ -236,6 +237,7 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_KILO:
     case CODEXBAR_NATIVE_AMP:
+    case CODEXBAR_NATIVE_GROK:
         native_source = configured_source;
         break;
     case CODEXBAR_NATIVE_UNAVAILABLE:
@@ -416,6 +418,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config, GC
         break;
     case CODEXBAR_NATIVE_WINDSURF:
         provider = codexbar_windsurf_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_GROK:
+        provider = codexbar_grok_fetch_with_cancellable(config, configured_source, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_LITELLM:
         provider = codexbar_litellm_fetch_with_cancellable(config, cancellable, &error);

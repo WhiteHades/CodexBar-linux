@@ -37,6 +37,7 @@ core_sources = files(
   'src/codex.c',
   'src/cost.c',
   'src/deepinfra.c',
+  'src/grok.c',
   'src/diagnose.c',
   'src/desktop.c',
   'src/http.c',
@@ -340,6 +341,14 @@ windsurf_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-windsurf', windsurf_test, env: normalized_test_env)
+
+grok_test = executable(
+  'codexbar-linux-grok-tests',
+  files('tests/test_grok.c', 'src/grok.c', 'src/http.c', 'src/model.c', 'src/process.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-grok', grok_test, env: normalized_test_env, depends: process_supervisor)
 
 xai_test = executable(
   'codexbar-linux-xai-tests',
