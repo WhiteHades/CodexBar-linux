@@ -30,7 +30,11 @@ trap 'rm -rf "$stage"' EXIT HUP INT TERM
 DESTDIR="$stage" meson install -C "$build_dir" --strip
 
 name="codexbar-linux-$version-linux-$arch"
-tar -C "$stage" -czf "$output_dir/$name.tar.gz" .
+tar --owner=0 --group=0 --numeric-owner -C "$stage" -czf "$output_dir/$name.tar.gz" .
+if ! tar --numeric-owner -tvzf "$output_dir/$name.tar.gz" | awk '$2 != "0/0" { exit 1 }'; then
+    printf '%s\n' 'archive contains non-normalized ownership metadata' >&2
+    exit 1
+fi
 (
     cd "$output_dir"
     sha256sum "$name.tar.gz" >"$name.tar.gz.sha256"

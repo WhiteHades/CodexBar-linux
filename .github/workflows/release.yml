@@ -57,6 +57,7 @@ jobs:
           test -n "$checksum"
           (cd dist && sha256sum -c "$(basename "$checksum")")
           tar -tzf "$archive" | grep -Fx './usr/local/bin/codexbar-linux'
+          tar --numeric-owner -tvzf "$archive" | awk '$2 != "0/0" { exit 1 }'
           file .build/release/linux/codexbar-linux | grep -F '${{ matrix.file-pattern }}'
           .build/release/linux/codexbar-linux --version
 
