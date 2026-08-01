@@ -344,7 +344,11 @@ int main(int argc, char **argv) {
     } while (waited < 0 && errno == EINTR);
     if (waited != target || !WIFSTOPPED(target_status)) {
         int execution_error = ECHILD;
-        read(execution_pipe[0], &execution_error, sizeof(execution_error));
+        ssize_t execution_result;
+        do {
+            execution_result = read(execution_pipe[0], &execution_error, sizeof(execution_error));
+        } while (execution_result < 0 && errno == EINTR);
+        if (execution_result != (ssize_t)sizeof(execution_error)) execution_error = ECHILD;
         close(execution_pipe[0]);
         report_startup(execution_error, -1, true);
         return 125;
