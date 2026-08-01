@@ -1552,6 +1552,9 @@ static void test_provider_registry(void) {
                     CODEXBAR_NATIVE_SYNTHETIC);
     g_assert_cmpint(codexbar_provider_registry_find("warp-ai")->native_provider, ==, CODEXBAR_NATIVE_WARP);
     g_assert_cmpint(codexbar_provider_registry_find("groq-api")->native_provider, ==, CODEXBAR_NATIVE_GROQ);
+    g_assert_cmpint(codexbar_provider_registry_find("mini-max")->native_provider, ==, CODEXBAR_NATIVE_MINIMAX);
+    g_assert_cmpint(codexbar_provider_registry_find("bailian")->native_provider, ==, CODEXBAR_NATIVE_ALIBABA);
+    g_assert_cmpint(codexbar_provider_registry_find("ark")->native_provider, ==, CODEXBAR_NATIVE_DOUBAO);
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }
