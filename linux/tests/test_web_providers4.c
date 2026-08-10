@@ -51,7 +51,10 @@ static void assert_policy(const CodexBarHttpRequest *request) {
 
 static const char *command_credits(void) {
     return "{\"credits\":{\"monthlyCredits\":8.75,\"purchasedCredits\":3,"
-           "\"premiumMonthlyCredits\":0,\"opensourceMonthlyCredits\":2}}";
+           "\"premiumMonthlyCredits\":0,\"opensourceMonthlyCredits\":2},"
+           "\"windowLimits\":{\"fiveHour\":{\"cap\":3,\"used\":0.75,"
+           "\"resetAt\":1780000000000},\"weekly\":{\"cap\":15,\"used\":1.5,"
+           "\"resetAt\":1780100000000}}}";
 }
 
 static const char *command_subscription(void) {
@@ -150,10 +153,72 @@ static void test_command_parser_and_transport(void) {
         command_subscription(), strlen(command_subscription()), 1000, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(provider->plan, ==, "Go");
-    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    g_assert_true(provider->explicit_quota_slots);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    const CodexBarQuotaWindow *five_hour = codexbar_provider_quota_window(provider, 0);
+    g_assert_cmpstr(five_hour->id, ==, "primary");
+    g_assert_cmpfloat(five_hour->used_percent, ==, 25);
+    g_assert_cmpint(five_hour->window_minutes, ==, 300);
+    g_assert_cmpint(five_hour->resets_at_ms, ==, 1780000000000LL);
+    const CodexBarQuotaWindow *weekly = codexbar_provider_quota_window(provider, 1);
+    g_assert_cmpstr(weekly->id, ==, "secondary");
+    g_assert_cmpfloat(weekly->used_percent, ==, 10);
+    g_assert_cmpint(weekly->window_minutes, ==, 10080);
+    g_assert_cmpint(weekly->resets_at_ms, ==, 1780100000000LL);
+    const CodexBarQuotaWindow *monthly = codexbar_provider_quota_window(provider, 2);
+    g_assert_cmpstr(monthly->id, ==, "tertiary");
     g_assert_cmpfloat_with_epsilon(
-        codexbar_provider_quota_window(provider, 0)->used_percent, 12.5, 0.0001);
+        monthly->used_percent, 12.5, 0.0001);
+    g_assert_cmpint(monthly->window_minutes, ==, 31 * 24 * 60);
     g_assert_cmpuint(provider->balances->len, ==, 3);
+    codexbar_provider_free(provider);
+
+    const char *nested =
+        "{\"credits\":{\"monthlyCredits\":7.25,\"purchasedCredits\":2,"
+        "\"premiumMonthlyCredits\":0,\"opensourceMonthlyCredits\":0,\"windowLimits\":{"
+        "\"fiveHour\":{\"cap\":\"4\",\"used\":\"1\",\"resetAt\":\"1780200000\"},"
+        "\"weekly\":{\"cap\":20,\"used\":4,\"resetAt\":1780300000000}}}}";
+    provider = codexbar_commandcode_parse(nested, strlen(nested), NULL, 0, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    five_hour = codexbar_provider_quota_window(provider, 0);
+    g_assert_cmpfloat(five_hour->used_percent, ==, 25);
+    g_assert_cmpint(five_hour->resets_at_ms, ==, 1780200000000LL);
+    weekly = codexbar_provider_quota_window(provider, 1);
+    g_assert_cmpfloat(weekly->used_percent, ==, 20);
+    g_assert_cmpint(weekly->resets_at_ms, ==, 1780300000000LL);
+    codexbar_provider_free(provider);
+
+    const char *goat_subscription =
+        "{\"success\":true,\"data\":{\"planId\":\"individual-goat\","
+        "\"status\":\"active\",\"currentPeriodEnd\":\"2026-09-01T00:00:00Z\"}}";
+    provider = codexbar_commandcode_parse(
+        command_credits(), strlen(command_credits()), goat_subscription, strlen(goat_subscription), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->plan, ==, "GOAT");
+    monthly = codexbar_provider_quota_window(provider, 2);
+    g_assert_cmpfloat_with_epsilon(monthly->used_percent, 87.5, 0.0001);
+    codexbar_provider_free(provider);
+
+    const char *failed_subscription = "{\"success\":false,\"error\":\"temporarily unavailable\"}";
+    provider = codexbar_commandcode_parse(
+        command_credits(), strlen(command_credits()),
+        failed_subscription, strlen(failed_subscription), 1000, &error);
+    g_assert_no_error(error);
+    json_object *unavailable = NULL;
+    g_assert_true(json_object_object_get_ex(
+        provider->usage_extensions, "commandCodeSubscriptionEnrichmentUnavailable", &unavailable));
+    g_assert_true(json_object_get_boolean(unavailable));
+    codexbar_provider_free(provider);
+
+    const char *malformed_subscription = "{\"success\":true,\"data\":{\"status\":\"active\"}}";
+    provider = codexbar_commandcode_parse(
+        command_credits(), strlen(command_credits()),
+        malformed_subscription, strlen(malformed_subscription), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_true(json_object_object_get_ex(
+        provider->usage_extensions, "commandCodeSubscriptionEnrichmentUnavailable", &unavailable));
+    g_assert_true(json_object_get_boolean(unavailable));
     codexbar_provider_free(provider);
 
     CodexBarProviderConfig config = config_with_cookie("secret");

@@ -10,6 +10,10 @@
 - Native Notion AI rolling and monthly allowance usage with manual cookie and cURL capture authentication, workspace
   selection, and calendar-month pace support.
 
+### Changed
+
+- Parse Command Code five-hour and weekly rolling limits and include the Goat plan's monthly allowance.
+
 ## 0.4.2.2 - 2026-08-10
 
 ### Added
