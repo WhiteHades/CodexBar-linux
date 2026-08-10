@@ -1,7 +1,7 @@
 project(
   'codexbar-linux',
   'c',
-  version: '0.4.2.1',
+  version: '0.4.2.2',
   license: 'MIT',
   license_files: 'LICENSE',
   meson_version: '>=1.6.0',

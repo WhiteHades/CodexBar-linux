@@ -132,6 +132,7 @@ case " $ID ${ID_LIKE:-} " in
         image=${CODEXBAR_DEBIAN_IMAGE:-debian:trixie-slim}
         docker run --rm \
             -e CODEXBAR_DEB_CONTAINER=1 \
+            -e CODEXBAR_VERIFIED_SOURCE_ARCHIVE=1 \
             -e CODEXBAR_DIST_DIR=/out \
             -e SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
             -e HOST_UID="$(id -u)" \

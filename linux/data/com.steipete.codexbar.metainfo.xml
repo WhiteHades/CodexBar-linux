@@ -28,7 +28,7 @@
     <name>WhiteHades</name>
   </developer>
   <releases>
-    <release version="0.4.2.1" date="2026-08-10">
+    <release version="0.4.2.2" date="2026-08-10">
       <description>
         <p>Adds native distro packages, AppImage delivery, stronger tray discovery, and current z.ai credit limits.</p>
       </description>

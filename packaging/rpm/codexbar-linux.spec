@@ -1,5 +1,5 @@
 Name:           codexbar-linux
-Version:        0.4.2.1
+Version:        0.4.2.2
 Release:        1%{?dist}
 Summary:        Native Linux AI usage monitor
 
@@ -53,7 +53,7 @@ appstreamcli validate --no-net \
 %config(noreplace) %{_sysconfdir}/xdg/autostart/codexbar-status.desktop
 
 %changelog
-* Mon Aug 10 2026 WhiteHades <WhiteHades@users.noreply.github.com> - 0.4.2.1-1
+* Mon Aug 10 2026 WhiteHades <WhiteHades@users.noreply.github.com> - 0.4.2.2-1
 - Add Debian, RPM, AppImage, and AUR packaging
 
 * Sat Aug 01 2026 WhiteHades <WhiteHades@users.noreply.github.com> - 0.4.1-1
