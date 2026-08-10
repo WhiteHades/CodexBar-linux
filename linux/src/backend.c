@@ -14,6 +14,7 @@
 #include "copilot.h"
 #include "codex.h"
 #include "deepinfra.h"
+#include "fireworks.h"
 #include "grok.h"
 #include "jetbrains.h"
 #include "kilo.h"
@@ -212,6 +213,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         break;
     case CODEXBAR_NATIVE_DEEPINFRA:
         provider = codexbar_deepinfra_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_FIREWORKS:
+        provider = codexbar_fireworks_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_AIAND:
         provider = codexbar_aiand_fetch_with_cancellable(config, cancellable, &error);

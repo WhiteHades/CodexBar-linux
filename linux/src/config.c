@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include "fireworks.h"
 #include "hooks.h"
 #include "provider_registry.h"
 #include "token_accounts.h"
@@ -871,6 +872,25 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
                       "api_key_unused",
                       "apiKey is set but %s does not support api source.",
                       provider->id);
+        }
+        if (g_str_equal(provider->id, "fireworks")) {
+            char *account_slug = clean_string(provider->raw, "accountSlug");
+            if (provider->api_key && !account_slug) {
+                add_issue(issues,
+                          TRUE,
+                          provider->id,
+                          "accountSlug",
+                          "missing_account_slug",
+                          "Fireworks needs the account slug from app.fireworks.ai/accounts/<slug> to read billing.");
+            } else if (account_slug && !codexbar_fireworks_account_slug_is_valid(account_slug)) {
+                add_issue(issues,
+                          TRUE,
+                          provider->id,
+                          "accountSlug",
+                          "invalid_account_slug",
+                          "Fireworks accountSlug must contain only ASCII letters, digits, dots, underscores, or hyphens.");
+            }
+            g_free(account_slug);
         }
         gboolean profile_backed_bedrock =
             g_str_equal(provider->id, "bedrock") &&

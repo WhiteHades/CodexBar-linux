@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Native Fireworks billing usage with strict account-slug validation and 30-day spend reporting.
+
 ## 0.4.2.2 - 2026-08-10
 
 ### Added

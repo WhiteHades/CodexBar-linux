@@ -21,6 +21,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"alibabatokenplan", "Alibaba Token Plan", "alibaba-token-plan", "alibaba-token,bailian-token-plan", A | W, FALSE, "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=plan#/efm/subscription/token-plan", "https://status.aliyun.com", CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN},
     {"qwencloud", "Qwen Cloud", "qwen-cloud", "qwencloud,qwen,qwen-token-plan", A | W, FALSE, "https://home.qwencloud.com/billing/subscription/token-plan-individual", "https://status.alibabacloud.com", CODEXBAR_NATIVE_QWEN_CLOUD},
     {"factory", "Droid", "factory", NULL, A | P | W | C, FALSE, "https://app.factory.ai/settings/billing", "https://status.factory.ai", CODEXBAR_NATIVE_FACTORY},
+    {"fireworks", "Fireworks", "fireworks", "fw", A | P, FALSE, "https://app.fireworks.ai", NULL, CODEXBAR_NATIVE_FIREWORKS},
     {"gemini", "Gemini", "gemini", NULL, A | P, FALSE, "https://gemini.google.com", "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_GEMINI},
     {"antigravity", "Antigravity", "antigravity", NULL, A | C | O, FALSE, NULL, "https://www.google.com/appsstatus/dashboard/products/npdyhgECDJ6tB66MxXyo/history", CODEXBAR_NATIVE_ANTIGRAVITY},
     {"copilot", "Copilot", "copilot", NULL, A | P, FALSE, "https://github.com/settings/copilot", "https://www.githubstatus.com/", CODEXBAR_NATIVE_COPILOT},
@@ -251,7 +252,7 @@ gboolean codexbar_provider_supports_config_api_key(const CodexBarProviderDescrip
         "moonshot",  "kimi",      "ollama",      "venice",     "deepgram",   "groq",
         "llmproxy",  "chutes",    "poe",         "litellm",    "clawrouter", "factory",
         "sub2api",   "zenmux",    "copilot",     "warp",       "codebuff",   "crof",
-        "doubao",    "deepinfra", "neuralwatt",  "aiand",      "xai",
+        "doubao",    "deepinfra", "fireworks",   "neuralwatt", "aiand",      "xai",
     };
     for (guint index = 0; index < G_N_ELEMENTS(supported); index++) {
         if (g_str_equal(provider->id, supported[index])) return TRUE;

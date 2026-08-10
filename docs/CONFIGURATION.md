@@ -1,7 +1,7 @@
 # Configuration
 
 Use the CLI for ordinary configuration. It validates providers, preserves provider-specific fields, writes atomically,
-rejects concurrent changes, and keeps the file private.
+rejects concurrent changes, and keeps the file private. `config providers` lists all 67 registered providers.
 
 ```sh
 codexbar-linux config validate
@@ -27,9 +27,12 @@ isolated profile or test. A minimal document is:
 }
 ```
 
-Common provider fields are `id`, `enabled`, `source`, `apiKey`, `endpoint`, `organizationID`, `workspaceID`,
-`usageScope`, `cookieHeader`, and `tokenAccounts`. The accepted fields depend on provider capabilities; `config
+Common provider fields are `id`, `enabled`, `source`, `apiKey`, `accountSlug`, `endpoint`, `organizationID`,
+`workspaceID`, `usageScope`, `cookieHeader`, and `tokenAccounts`. The accepted fields depend on provider capabilities; `config
 validate` rejects unsupported source/key combinations.
+
+Fireworks requires both an API key and account slug. Set `apiKey` and `accountSlug` on its provider entry, or use
+`FIREWORKS_API_KEY` (or `FIREWORKS_KEY`) with `FIREWORKS_ACCOUNT_SLUG`.
 
 ## Sources
 

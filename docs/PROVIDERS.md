@@ -1,9 +1,9 @@
 # Providers
 
-The registry currently exposes 66 stable providers, matching the audited upstream provider set:
+The registry currently exposes 67 stable native providers:
 
 `codex`, `openai`, `azureopenai`, `claude`, `clinepass`, `cursor`, `opencode`, `opencodego`, `alibaba`,
-`alibabatokenplan`, `qwencloud`, `factory`, `gemini`, `antigravity`, `copilot`, `devin`, `zai`, `minimax`, `manus`,
+`alibabatokenplan`, `qwencloud`, `factory`, `fireworks`, `gemini`, `antigravity`, `copilot`, `devin`, `zai`, `minimax`, `manus`,
 `kimi`, `kilo`, `kiro`, `vertexai`, `augment`, `jetbrains`, `moonshot`, `amp`, `t3chat`, `ollama`, `synthetic`,
 `warp`, `openrouter`, `elevenlabs`, `windsurf`, `zed`, `perplexity`, `mimo`, `doubao`, `sakana`, `abacus`,
 `mistral`, `deepseek`, `deepinfra`, `codebuff`, `crof`, `venice`, `commandcode`, `qoder`, `stepfun`, `bedrock`,

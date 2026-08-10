@@ -9,7 +9,7 @@ see your ai usage from the terminal and desktop tray
 [![c23](https://img.shields.io/badge/code-c23-00599c?style=flat-square)](https://github.com/WhiteHades/CodexBar-linux)
 [![license](https://img.shields.io/github/license/WhiteHades/CodexBar-linux?style=flat-square)](LICENSE)
 
-native • private • open source • 66 providers
+native • private • open source • 67 providers
 
 </div>
 
@@ -40,7 +40,7 @@ codexbar linux is a native linux fork of [steipete/codexbar](https://github.com/
 6. usage history, alerts, hooks, costs, and sessions
 7. multiple accounts with separate data
 8. bounded network requests and private config files
-9. 66 native providers with no compatibility subprocess
+9. 67 native providers with no compatibility subprocess
 10. x86_64 and aarch64 release support
 
 ## install
@@ -216,7 +216,7 @@ run `codexbar-linux --help` to see every command.
 
 ## providers
 
-codexbar linux includes 66 native providers. this includes codex, claude, copilot, cursor, gemini, openrouter, deepseek, deepgram, groq, kimi, kilo, z.ai, vertex ai, bedrock, xai, and many more.
+codexbar linux includes 67 native providers. this includes codex, claude, copilot, cursor, fireworks, gemini, openrouter, deepseek, deepgram, groq, kimi, kilo, z.ai, vertex ai, bedrock, xai, and many more.
 
 read the complete [provider list](docs/PROVIDERS.md).
 

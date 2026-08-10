@@ -864,6 +864,78 @@ static void test_config_skips_removed_and_unknown_providers(void) {
     g_free(path);
 }
 
+static gboolean config_has_issue(const GPtrArray *issues, const char *provider, const char *code) {
+    for (guint index = 0; index < issues->len; index++) {
+        const CodexBarConfigIssue *issue = g_ptr_array_index((GPtrArray *)issues, index);
+        if (g_strcmp0(issue->provider, provider) == 0 && g_str_equal(issue->code, code)) return TRUE;
+    }
+    return FALSE;
+}
+
+static void test_fireworks_config_validation(void) {
+    GError *error = NULL;
+    char *cwd = g_get_current_dir();
+    char *path = g_build_filename(cwd, "codexbar-config-fireworks-test.json", NULL);
+    g_free(cwd);
+    const char *previous = g_getenv("CODEXBAR_CONFIG");
+    char *saved = previous ? g_strdup(previous) : NULL;
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+
+    g_assert_true(g_file_set_contents(
+        path, "{\"version\":1,\"providers\":[{\"id\":\"fireworks\",\"apiKey\":\"key\"}]}", -1, &error));
+    g_assert_no_error(error);
+    CodexBarConfig *config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    g_assert_nonnull(config);
+    GPtrArray *issues = codexbar_config_validate(config);
+    g_assert_true(config_has_issue(issues, "fireworks", "missing_account_slug"));
+    g_ptr_array_unref(issues);
+    codexbar_config_free(config);
+
+    g_assert_true(g_file_set_contents(
+        path,
+        "{\"version\":1,\"providers\":[{\"id\":\"fireworks\",\"apiKey\":\"key\","
+        "\"accountSlug\":\"acct-1_x.d\"}]}",
+        -1,
+        &error));
+    g_assert_no_error(error);
+    config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    CodexBarProviderConfig *fireworks = codexbar_config_provider(config, "fw");
+    g_assert_nonnull(fireworks);
+    json_object *slug = NULL;
+    g_assert_true(json_object_object_get_ex(fireworks->raw, "accountSlug", &slug));
+    g_assert_cmpstr(json_object_get_string(slug), ==, "acct-1_x.d");
+    issues = codexbar_config_validate(config);
+    g_assert_false(config_has_issue(issues, "fireworks", "missing_account_slug"));
+    g_assert_false(config_has_issue(issues, "fireworks", "invalid_account_slug"));
+    g_ptr_array_unref(issues);
+    codexbar_config_free(config);
+
+    g_assert_true(g_file_set_contents(
+        path,
+        "{\"version\":1,\"providers\":[{\"id\":\"fireworks\",\"apiKey\":\"key\","
+        "\"accountSlug\":\"has/slash\"}]}",
+        -1,
+        &error));
+    g_assert_no_error(error);
+    config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    issues = codexbar_config_validate(config);
+    g_assert_true(config_has_issue(issues, "fireworks", "invalid_account_slug"));
+    g_ptr_array_unref(issues);
+    codexbar_config_free(config);
+
+    if (saved) {
+        g_setenv("CODEXBAR_CONFIG", saved, TRUE);
+    } else {
+        g_unsetenv("CODEXBAR_CONFIG");
+    }
+    g_free(saved);
+    g_assert_cmpint(g_remove(path), ==, 0);
+    g_free(path);
+}
+
 static void test_waybar_rendering(void) {
     GError *error = NULL;
     CodexBarSnapshot *snapshot = codexbar_snapshot_parse(fixture, &error);
@@ -1651,7 +1723,7 @@ static void test_codex_source_planner(void) {
 static void test_provider_registry(void) {
     const char *expected_ids[] = {
         "codex", "openai", "azureopenai", "claude", "clinepass", "cursor", "opencode", "opencodego",
-        "alibaba", "alibabatokenplan", "qwencloud", "factory", "gemini", "antigravity", "copilot", "devin", "zai",
+        "alibaba", "alibabatokenplan", "qwencloud", "factory", "fireworks", "gemini", "antigravity", "copilot", "devin", "zai",
         "minimax", "manus", "kimi", "kilo", "kiro", "vertexai", "augment", "jetbrains", "moonshot",
         "amp", "t3chat", "ollama", "synthetic", "warp", "openrouter", "elevenlabs", "windsurf", "zed",
         "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek", "deepinfra",
@@ -1659,6 +1731,7 @@ static void test_provider_registry(void) {
         "llmproxy", "litellm", "deepgram", "poe", "chutes", "neuralwatt", "clawrouter", "longcat",
         "sub2api", "wayfinder", "zenmux", "aiand", "zoommate", "xai",
     };
+    g_assert_cmpuint(G_N_ELEMENTS(expected_ids), ==, 67);
     g_assert_cmpuint(codexbar_provider_registry_count(), ==, G_N_ELEMENTS(expected_ids));
     for (guint index = 0; index < G_N_ELEMENTS(expected_ids); index++) {
         const CodexBarProviderDescriptor *provider = codexbar_provider_registry_at(index);
@@ -1818,6 +1891,15 @@ static void test_provider_registry(void) {
     g_assert_cmpint(codexbar_provider_registry_find("bailian")->native_provider, ==, CODEXBAR_NATIVE_ALIBABA);
     g_assert_cmpint(codexbar_provider_registry_find("ark")->native_provider, ==, CODEXBAR_NATIVE_DOUBAO);
     g_assert_cmpint(codexbar_provider_registry_find("factory")->native_provider, ==, CODEXBAR_NATIVE_FACTORY);
+    const CodexBarProviderDescriptor *fireworks = codexbar_provider_registry_find("fw");
+    g_assert_cmpstr(fireworks->id, ==, "fireworks");
+    g_assert_cmpint(fireworks->native_provider, ==, CODEXBAR_NATIVE_FIREWORKS);
+    g_assert_false(fireworks->default_enabled);
+    g_assert_cmpstr(fireworks->dashboard_url, ==, "https://app.fireworks.ai");
+    g_assert_true(codexbar_provider_supports_source(fireworks, "auto"));
+    g_assert_true(codexbar_provider_supports_source(fireworks, "api"));
+    g_assert_false(codexbar_provider_supports_source(fireworks, "web"));
+    g_assert_true(codexbar_provider_supports_config_api_key(fireworks));
     g_assert_cmpint(codexbar_provider_registry_find("gemini")->native_provider, ==, CODEXBAR_NATIVE_GEMINI);
     g_assert_cmpint(codexbar_provider_registry_find("ollama")->native_provider, ==, CODEXBAR_NATIVE_OLLAMA);
     g_assert_cmpint(codexbar_provider_registry_find("kiro-cli")->native_provider, ==, CODEXBAR_NATIVE_KIRO);
@@ -1940,6 +2022,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/config/extended-provider-fields", test_extended_provider_config);
     g_test_add_func("/config/normalization-secure-persistence", test_config_normalization_and_secure_persistence);
     g_test_add_func("/config/skips-removed-unknown-providers", test_config_skips_removed_and_unknown_providers);
+    g_test_add_func("/config/fireworks-validation", test_fireworks_config_validation);
     g_test_add_func("/render/waybar", test_waybar_rendering);
     g_test_add_func("/render/claude-presentation-metadata", test_claude_presentation_metadata);
     g_test_add_func("/render/freshness-login-fallback", test_freshness_and_login_method_fallback);

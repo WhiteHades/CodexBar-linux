@@ -86,6 +86,9 @@ static gboolean environment_api_auth(const char *provider) {
     if (g_str_equal(provider, "deepinfra")) {
         return nonempty_environment("DEEPINFRA_API_KEY") || nonempty_environment("DEEPINFRA_TOKEN");
     }
+    if (g_str_equal(provider, "fireworks")) {
+        return nonempty_environment("FIREWORKS_API_KEY") || nonempty_environment("FIREWORKS_KEY");
+    }
     if (g_str_equal(provider, "kimi")) return nonempty_environment("KIMI_CODE_API_KEY");
     if (g_str_equal(provider, "openrouter")) return nonempty_environment("OPENROUTER_API_KEY");
     if (g_str_equal(provider, "deepseek")) return nonempty_environment("DEEPSEEK_API_KEY");
@@ -172,7 +175,7 @@ static const char *error_category(const char *description, gboolean auth_configu
     if (!description) return auth_configured ? "unknown" : "auth";
     char *lower = g_ascii_strdown(description, -1);
     const char *category = "unknown";
-    if (strstr(lower, "endpoint override") || strstr(lower, "not implemented") ||
+    if (strstr(lower, "account slug") || strstr(lower, "endpoint override") || strstr(lower, "not implemented") ||
         strstr(lower, "not supported") || strstr(lower, "unsupported source")) {
         category = "configuration";
     } else if (strstr(lower, "network") || strstr(lower, "timeout") || strstr(lower, "connection") ||

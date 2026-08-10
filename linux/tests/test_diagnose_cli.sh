@@ -79,6 +79,24 @@ output=$(env "DEEPINFRA_API_KEY=invalid$(printf '\177')key" CODEXBAR_BACKEND="$c
   "$binary" diagnose --provider deepinfra --format json)
 printf '%s\n' "$output" | grep -q '"configured":false'
 
+fireworks_backend=$work/fireworks-backend.sh
+cat >"$fireworks_backend" <<'EOF'
+#!/bin/sh
+printf '%s\n' '[{"provider":"fireworks","source":"api","error":{"message":"Missing Fireworks account slug.","code":1,"kind":"provider"}}]'
+EOF
+chmod +x "$fireworks_backend"
+output=$(FIREWORKS_KEY=fireworks-secret CODEXBAR_BACKEND="$fireworks_backend" \
+  "$binary" diagnose --provider fw --format json)
+printf '%s\n' "$output" | grep -q '"provider":"fireworks"'
+printf '%s\n' "$output" | grep -q '"supportedSources":\["auto","api"\]'
+printf '%s\n' "$output" | grep -q '"autoSourceOrder":\["api"\]'
+printf '%s\n' "$output" | grep -q '"configured":true'
+printf '%s\n' "$output" | grep -q '"category":"configuration"'
+if printf '%s\n' "$output" | grep -q 'fireworks-secret'; then
+    printf 'Fireworks diagnostic leaked credentials\n' >&2
+    exit 1
+fi
+
 sed 's/deepinfra/neuralwatt/' "$credential_backend" >"$work/neuralwatt-credential-backend.sh"
 chmod +x "$work/neuralwatt-credential-backend.sh"
 output=$(env "NEURALWATT_API_KEY=$(printf '\342\200\203')" \

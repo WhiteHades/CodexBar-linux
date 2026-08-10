@@ -42,6 +42,7 @@ core_sources = files(
   'src/grok.c',
   'src/diagnose.c',
   'src/desktop.c',
+  'src/fireworks.c',
   'src/http.c',
   'src/hooks.c',
   'src/history.c',
@@ -340,6 +341,14 @@ deepinfra_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-deepinfra', deepinfra_test)
+
+fireworks_test = executable(
+  'codexbar-linux-fireworks-tests',
+  files('tests/test_fireworks.c', 'src/fireworks.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-fireworks', fireworks_test, env: normalized_test_env)
 
 aiand_test = executable(
   'codexbar-linux-aiand-tests',
