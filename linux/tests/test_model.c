@@ -662,6 +662,8 @@ static void test_http_cancellation(void) {
     g_mutex_clear(&server.mutex);
 }
 
+static gboolean config_has_issue(const GPtrArray *issues, const char *provider, const char *code);
+
 static void test_extended_provider_config(void) {
     GError *error = NULL;
     char *cwd = g_get_current_dir();
@@ -672,7 +674,9 @@ static void test_extended_provider_config(void) {
         "\"extrasEnabled\":false,\"apiKey\":\" access \",\"secretKey\":\" secret \","
         "\"region\":\"us-east-1\",\"workspaceID\":\"project-1\","
         "\"enterpriseHost\":\"api.example.com\",\"awsProfile\":\"prod\","
-        "\"awsAuthMode\":\"profile\"},{\"id\":\"poe\",\"enabled\":true},"
+        "\"awsAuthMode\":\"profile\"},{\"id\":\"notion\",\"enabled\":true,\"source\":\"web\","
+        "\"workspaceID\":\"11111111222233334444555555555555\",\"cookieSource\":\"manual\","
+        "\"cookieHeader\":\"token_v2=abc\"},{\"id\":\"poe\",\"enabled\":true},"
         "{\"id\":\"deepinfra\",\"enabled\":true,\"apiKey\":\"valid\\u0000bad\"}]}";
     g_assert_true(g_file_set_contents(path, json, -1, &error));
     g_assert_no_error(error);
@@ -692,7 +696,15 @@ static void test_extended_provider_config(void) {
     g_assert_cmpstr(provider->enterprise_host, ==, "api.example.com");
     g_assert_cmpstr(provider->aws_profile, ==, "prod");
     g_assert_cmpstr(provider->aws_auth_mode, ==, "profile");
-    provider = g_ptr_array_index(config->providers, 1);
+    provider = codexbar_config_provider(config, "notion");
+    g_assert_cmpstr(provider->source, ==, "web");
+    g_assert_cmpstr(provider->workspace_id, ==, "11111111222233334444555555555555");
+    GPtrArray *issues = codexbar_config_validate(config);
+    g_assert_false(config_has_issue(issues, "notion", "workspace_unused"));
+    g_assert_false(config_has_issue(issues, "notion", "unsupported_source"));
+    g_assert_false(config_has_issue(issues, "notion", "cookie_header_missing"));
+    g_ptr_array_unref(issues);
+    provider = codexbar_config_provider(config, "poe");
     g_assert_false(provider->has_extras_enabled);
     provider = codexbar_config_provider(config, "deepinfra");
     g_assert_null(provider->api_key);
@@ -872,6 +884,14 @@ static gboolean config_has_issue(const GPtrArray *issues, const char *provider, 
     return FALSE;
 }
 
+static gboolean config_has_error_issue(const GPtrArray *issues, const char *provider, const char *code) {
+    for (guint index = 0; index < issues->len; index++) {
+        const CodexBarConfigIssue *issue = g_ptr_array_index((GPtrArray *)issues, index);
+        if (issue->error && g_strcmp0(issue->provider, provider) == 0 && g_str_equal(issue->code, code)) return TRUE;
+    }
+    return FALSE;
+}
+
 static void test_fireworks_config_validation(void) {
     GError *error = NULL;
     char *cwd = g_get_current_dir();
@@ -923,6 +943,57 @@ static void test_fireworks_config_validation(void) {
     g_assert_no_error(error);
     issues = codexbar_config_validate(config);
     g_assert_true(config_has_issue(issues, "fireworks", "invalid_account_slug"));
+    g_ptr_array_unref(issues);
+    codexbar_config_free(config);
+
+    if (saved) {
+        g_setenv("CODEXBAR_CONFIG", saved, TRUE);
+    } else {
+        g_unsetenv("CODEXBAR_CONFIG");
+    }
+    g_free(saved);
+    g_assert_cmpint(g_remove(path), ==, 0);
+    g_free(path);
+}
+
+static void test_notion_config_validation(void) {
+    GError *error = NULL;
+    char *cwd = g_get_current_dir();
+    char *path = g_build_filename(cwd, "codexbar-config-notion-test.json", NULL);
+    g_free(cwd);
+    const char *previous = g_getenv("CODEXBAR_CONFIG");
+    char *saved = previous ? g_strdup(previous) : NULL;
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+
+    const char *invalid[] = {
+        "{\"version\":1,\"providers\":[{\"id\":\"notion\",\"enabled\":true,"
+        "\"source\":\"web\",\"cookieHeader\":\"token_v2=abc\"}]}",
+        "{\"version\":1,\"providers\":[{\"id\":\"notion\",\"enabled\":true,"
+        "\"source\":\"web\",\"cookieSource\":\"auto\",\"cookieHeader\":\"token_v2=abc\"}]}",
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(invalid); index++) {
+        g_assert_true(g_file_set_contents(path, invalid[index], -1, &error));
+        g_assert_no_error(error);
+        CodexBarConfig *config = codexbar_config_load(&error);
+        g_assert_no_error(error);
+        g_assert_nonnull(config);
+        GPtrArray *issues = codexbar_config_validate(config);
+        g_assert_true(config_has_issue(issues, "notion", "invalid_cookie_source"));
+        g_ptr_array_unref(issues);
+        codexbar_config_free(config);
+    }
+
+    g_assert_true(g_file_set_contents(
+        path,
+        "{\"version\":1,\"providers\":[{\"id\":\"notion\",\"enabled\":true,"
+        "\"source\":\"web\",\"cookieSource\":\"manual\",\"cookieHeader\":\"   \"}]}",
+        -1,
+        &error));
+    g_assert_no_error(error);
+    CodexBarConfig *config = codexbar_config_load(&error);
+    g_assert_no_error(error);
+    GPtrArray *issues = codexbar_config_validate(config);
+    g_assert_true(config_has_error_issue(issues, "notion", "cookie_header_missing"));
     g_ptr_array_unref(issues);
     codexbar_config_free(config);
 
@@ -1729,9 +1800,9 @@ static void test_provider_registry(void) {
         "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek", "deepinfra",
         "codebuff", "crof", "venice", "commandcode", "qoder", "stepfun", "bedrock", "grok", "groq",
         "llmproxy", "litellm", "deepgram", "poe", "chutes", "neuralwatt", "clawrouter", "longcat",
-        "sub2api", "wayfinder", "zenmux", "aiand", "zoommate", "xai", "ibmbob",
+        "sub2api", "wayfinder", "zenmux", "aiand", "zoommate", "xai", "notion", "ibmbob",
     };
-    g_assert_cmpuint(G_N_ELEMENTS(expected_ids), ==, 68);
+    g_assert_cmpuint(G_N_ELEMENTS(expected_ids), ==, 69);
     g_assert_cmpuint(codexbar_provider_registry_count(), ==, G_N_ELEMENTS(expected_ids));
     for (guint index = 0; index < G_N_ELEMENTS(expected_ids); index++) {
         const CodexBarProviderDescriptor *provider = codexbar_provider_registry_at(index);
@@ -1879,6 +1950,16 @@ static void test_provider_registry(void) {
     g_assert_true(codexbar_provider_supports_source(codexbar_provider_registry_find("zoommate"), "web"));
     g_assert_cmpint(codexbar_provider_registry_find("xai")->native_provider, ==, CODEXBAR_NATIVE_XAI);
     g_assert_true(codexbar_provider_supports_config_api_key(codexbar_provider_registry_find("xai")));
+    const CodexBarProviderDescriptor *notion = codexbar_provider_registry_find("notion-ai");
+    g_assert_nonnull(notion);
+    g_assert_true(codexbar_provider_registry_find("notionai") == notion);
+    g_assert_cmpstr(notion->id, ==, "notion");
+    g_assert_cmpstr(notion->dashboard_url, ==, "https://app.notion.com");
+    g_assert_cmpstr(notion->status_url, ==, "https://status.notion.so");
+    g_assert_false(notion->default_enabled);
+    g_assert_true(codexbar_provider_supports_source(notion, "auto"));
+    g_assert_true(codexbar_provider_supports_source(notion, "web"));
+    g_assert_false(codexbar_provider_status_is_pollable(notion));
     g_assert_cmpint(codexbar_provider_registry_find("dg")->native_provider, ==, CODEXBAR_NATIVE_DEEPGRAM);
     g_assert_cmpint(codexbar_provider_registry_find("poe")->native_provider, ==, CODEXBAR_NATIVE_POE);
     g_assert_cmpint(codexbar_provider_registry_find("chutes.ai")->native_provider, ==, CODEXBAR_NATIVE_CHUTES);
@@ -2014,6 +2095,20 @@ static void test_pace_snapshot_provider_rules(void) {
     codexbar_pace_attach_snapshot(snapshot, now);
     g_assert_null(session->pace);
     g_assert_nonnull(weekly->pace);
+
+    provider = codexbar_provider_new();
+    provider->provider = g_strdup("notion");
+    session = codexbar_quota_window_new("primary", "Rolling");
+    session->usage_known = TRUE;
+    session->used_percent = 40;
+    session->has_window_minutes = TRUE;
+    session->window_minutes = 360;
+    session->has_resets_at = TRUE;
+    session->resets_at_ms = now + 2 * 60 * 60 * 1000LL;
+    codexbar_provider_add_quota_window(provider, session);
+    g_ptr_array_add(snapshot->providers, provider);
+    codexbar_pace_attach_snapshot(snapshot, now);
+    g_assert_nonnull(session->pace);
     codexbar_snapshot_free(snapshot);
 }
 
@@ -2037,6 +2132,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/config/normalization-secure-persistence", test_config_normalization_and_secure_persistence);
     g_test_add_func("/config/skips-removed-unknown-providers", test_config_skips_removed_and_unknown_providers);
     g_test_add_func("/config/fireworks-validation", test_fireworks_config_validation);
+    g_test_add_func("/config/notion-validation", test_notion_config_validation);
     g_test_add_func("/render/waybar", test_waybar_rendering);
     g_test_add_func("/render/claude-presentation-metadata", test_claude_presentation_metadata);
     g_test_add_func("/render/freshness-login-fallback", test_freshness_and_login_method_fallback);

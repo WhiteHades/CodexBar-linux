@@ -23,6 +23,7 @@
 #include "local_providers.h"
 #include "managed_codex.h"
 #include "neuralwatt.h"
+#include "notion.h"
 #include "openai_api.h"
 #include "opencode_go.h"
 #include "openrouter.h"
@@ -258,6 +259,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         break;
     case CODEXBAR_NATIVE_ZOOMMATE:
         provider = codexbar_zoommate_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_NOTION:
+        provider = codexbar_notion_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_XAI:
         provider = codexbar_xai_fetch_with_cancellable(config, cancellable, &error);

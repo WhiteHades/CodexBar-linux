@@ -76,6 +76,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"aiand", "ai&", "aiand", "ai&,ai-and", A | P, FALSE, "https://console.aiand.com", NULL, CODEXBAR_NATIVE_AIAND},
     {"zoommate", "ZoomMate", "zoommate", NULL, A | W, FALSE, "https://zoommate.zoom.us/#/?settings=credit-usage", "https://www.zoomstatus.com/", CODEXBAR_NATIVE_ZOOMMATE},
     {"xai", "xAI", "xai", NULL, A | P, FALSE, "https://console.x.ai", "https://status.x.ai", CODEXBAR_NATIVE_XAI},
+    {"notion", "Notion AI", "notion", "notion-ai,notionai", A | W, FALSE, "https://app.notion.com", "https://status.notion.so", CODEXBAR_NATIVE_NOTION},
     {"ibmbob", "IBM Bob", "ibmbob", "ibm-bob,bob,bobshell", A | P, FALSE, "https://bob.ibm.com", "https://status.bob.ibm.com", CODEXBAR_NATIVE_IBMBOB},
 };
 

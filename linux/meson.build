@@ -54,6 +54,7 @@ core_sources = files(
   'src/managed_codex.c',
   'src/model.c',
   'src/neuralwatt.c',
+  'src/notion.c',
   'src/notifications.c',
   'src/openai_api.c',
   'src/opencode_go.c',
@@ -574,6 +575,19 @@ zoommate_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-zoommate', zoommate_test, env: normalized_test_env)
+
+notion_test = executable(
+  'codexbar-linux-notion-tests',
+  files('tests/test_notion.c', 'src/notion.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test(
+  'codexbar-linux-notion',
+  notion_test,
+  args: [meson.project_source_root() / 'fixtures/native/notion'],
+  env: normalized_test_env,
+)
 
 zai_cli_test = find_program('tests/test_zai_cli.sh')
 test('codexbar-linux-zai-cli', zai_cli_test, args: [codexbar_linux])

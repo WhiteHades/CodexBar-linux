@@ -9,7 +9,7 @@ see your ai usage from the terminal and desktop tray
 [![c23](https://img.shields.io/badge/code-c23-00599c?style=flat-square)](https://github.com/WhiteHades/CodexBar-linux)
 [![license](https://img.shields.io/github/license/WhiteHades/CodexBar-linux?style=flat-square)](LICENSE)
 
-native • private • open source • 68 providers
+native • private • open source • 69 providers
 
 </div>
 
@@ -40,7 +40,7 @@ codexbar linux is a native linux fork of [steipete/codexbar](https://github.com/
 6. usage history, alerts, hooks, costs, and sessions
 7. multiple accounts with separate data
 8. bounded network requests and private config files
-9. 68 native providers with no compatibility subprocess
+9. 69 native providers with no compatibility subprocess
 10. x86_64 and aarch64 release support
 
 ## install
@@ -182,6 +182,12 @@ export BOBSHELL_API_KEY="your-api-key"
 codexbar-linux config enable --provider ibmbob
 ```
 
+notion ai uses a manual `token_v2` session cookie. add an enabled `notion` entry to the private config file with
+`"cookieSource":"manual"` and `"cookieHeader":"token_v2=..."`; a browser `Cookie` header or full Copy as cURL
+capture also works. add
+`"workspaceID":"..."` only to select a specific workspace. notion does not use automatic browser import or an
+environment variable on linux.
+
 check your setup:
 
 ```sh
@@ -223,7 +229,7 @@ run `codexbar-linux --help` to see every command.
 
 ## providers
 
-codexbar linux includes 68 native providers. this includes codex, claude, copilot, cursor, fireworks, gemini, ibm bob, openrouter, deepseek, deepgram, groq, kimi, kilo, z.ai, vertex ai, bedrock, xai, and many more.
+codexbar linux includes 69 native providers. this includes codex, claude, copilot, cursor, fireworks, gemini, ibm bob, notion ai, openrouter, deepseek, deepgram, groq, kimi, kilo, z.ai, vertex ai, bedrock, xai, and many more.
 
 read the complete [provider list](docs/PROVIDERS.md).
 

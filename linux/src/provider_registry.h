@@ -74,6 +74,7 @@ typedef enum {
     CODEXBAR_NATIVE_OPENROUTER,
     CODEXBAR_NATIVE_PROXY,
     CODEXBAR_NATIVE_SIMPLE,
+    CODEXBAR_NATIVE_NOTION,
 } CodexBarNativeProvider;
 
 typedef enum {

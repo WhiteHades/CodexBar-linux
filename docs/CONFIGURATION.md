@@ -1,7 +1,7 @@
 # Configuration
 
 Use the CLI for ordinary configuration. It validates providers, preserves provider-specific fields, writes atomically,
-rejects concurrent changes, and keeps the file private. `config providers` lists all 68 registered providers.
+rejects concurrent changes, and keeps the file private. `config providers` lists all 69 registered providers.
 
 ```sh
 codexbar-linux config validate
@@ -28,7 +28,7 @@ isolated profile or test. A minimal document is:
 ```
 
 Common provider fields are `id`, `enabled`, `source`, `apiKey`, `accountSlug`, `endpoint`, `organizationID`,
-`workspaceID`, `usageScope`, `cookieHeader`, and `tokenAccounts`. The accepted fields depend on provider capabilities; `config
+`workspaceID`, `usageScope`, `cookieSource`, `cookieHeader`, and `tokenAccounts`. The accepted fields depend on provider capabilities; `config
 validate` rejects unsupported source/key combinations.
 
 Fireworks requires both an API key and account slug. Set `apiKey` and `accountSlug` on its provider entry, or use
@@ -36,6 +36,24 @@ Fireworks requires both an API key and account slug. Set `apiKey` and `accountSl
 
 IBM Bob accepts `apiKey` or `BOBSHELL_API_KEY`. It also supports token accounts for keeping multiple Bob API keys
 separate.
+
+Notion AI accepts manual cookies only. Enable it with a private provider entry such as:
+
+```json
+{
+  "id": "notion",
+  "enabled": true,
+  "source": "web",
+  "cookieSource": "manual",
+  "cookieHeader": "token_v2=your-session-cookie",
+  "workspaceID": "optional-workspace-uuid"
+}
+```
+
+`cookieHeader` can contain the bare `token_v2` value, a `Cookie` header containing `token_v2`, or a full browser Copy
+as cURL capture. Notion does not import browser cookies automatically and does not read a provider environment
+variable. If `workspaceID` is absent or unknown, the provider selects the first Business or Enterprise workspace, then
+the first visible workspace.
 
 ## Sources
 

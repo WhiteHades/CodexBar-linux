@@ -835,7 +835,7 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
     g_return_val_if_fail(config != NULL, NULL);
     GPtrArray *issues = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_config_issue_free);
     const char *workspace_providers[] = {
-        "azureopenai", "openai", "opencode", "opencodego", "devin", "deepgram", "xai"};
+        "azureopenai", "openai", "opencode", "opencodego", "devin", "deepgram", "xai", "notion"};
     const char *host_providers[] = {
         "azureopenai", "clawrouter", "copilot", "kimi", "litellm", "llmproxy", "sub2api", "wayfinder"};
     if (config->version != CODEXBAR_CONFIG_VERSION) {
@@ -983,16 +983,25 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
         json_object *cookie_source = NULL;
         json_object *cookie_header = NULL;
         gboolean manual_cookie = provider->raw &&
-                                 json_object_object_get_ex(provider->raw, "cookieSource", &cookie_source) &&
-                                 json_object_is_type(cookie_source, json_type_string) &&
-                                 g_str_equal(json_object_get_string(cookie_source), "manual");
+                                  json_object_object_get_ex(provider->raw, "cookieSource", &cookie_source) &&
+                                  json_object_is_type(cookie_source, json_type_string) &&
+                                  g_str_equal(json_object_get_string(cookie_source), "manual");
+        if (provider->enabled && g_str_equal(provider->id, "notion") && !manual_cookie) {
+            add_issue(issues,
+                      TRUE,
+                      provider->id,
+                      "cookieSource",
+                      "invalid_cookie_source",
+                      "Notion AI requires cookieSource manual.");
+        }
         gboolean has_cookie_header = provider->raw &&
-                                     json_object_object_get_ex(provider->raw, "cookieHeader", &cookie_header) &&
-                                     json_object_is_type(cookie_header, json_type_string) &&
-                                     json_object_get_string(cookie_header)[0] != '\0';
+                                      json_object_object_get_ex(provider->raw, "cookieHeader", &cookie_header) &&
+                                      json_object_is_type(cookie_header, json_type_string) &&
+                                      json_object_get_string(cookie_header)[strspn(
+                                          json_object_get_string(cookie_header), " \t\r\n")] != '\0';
         if (manual_cookie && !has_cookie_header) {
             add_issue(issues,
-                      FALSE,
+                      provider->enabled && g_str_equal(provider->id, "notion"),
                       provider->id,
                       "cookieHeader",
                       "cookie_header_missing",

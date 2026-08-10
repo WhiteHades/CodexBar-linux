@@ -81,7 +81,8 @@ CodexBarPace *codexbar_pace_calculate(const CodexBarQuotaWindow *window,
 static gboolean session_pace_supported(const char *provider, const CodexBarQuotaWindow *window) {
     if (!provider || !window->has_window_minutes || window->window_minutes > 360) return FALSE;
     if (g_str_equal(provider, "codex") || g_str_equal(provider, "claude") ||
-        g_str_equal(provider, "ollama") || g_str_equal(provider, "kimi")) return TRUE;
+        g_str_equal(provider, "ollama") || g_str_equal(provider, "kimi") ||
+        g_str_equal(provider, "notion")) return TRUE;
     return g_str_equal(provider, "antigravity") && window->window_minutes == 300;
 }
 
