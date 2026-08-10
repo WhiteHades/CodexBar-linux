@@ -566,7 +566,11 @@ static json_object *provider_json(const CodexBarProvider *provider) {
         } else if (index < provider->quota_windows->len) {
             slot = codexbar_provider_quota_window(provider, index);
         }
-        json_object_object_add(usage, keys[index], slot ? window_json(slot) : NULL);
+        json_object *slot_json = slot ? window_json(slot) : NULL;
+        if (slot && !slot->usage_known) {
+            json_object_object_add(slot_json, "usageKnown", json_object_new_boolean(FALSE));
+        }
+        json_object_object_add(usage, keys[index], slot_json);
     }
     guint extra_count = 0;
     for (guint index = 0; index < provider->quota_windows->len; index++) {

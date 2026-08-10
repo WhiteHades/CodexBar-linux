@@ -26,7 +26,11 @@
               "windowMinutes": 10080,
               "resetsAt": "2020-07-21T10:00:00Z"
             },
-            "tertiary": null,
+            "tertiary": {
+              "usedPercent": 0.0,
+              "usageKnown": false,
+              "resetDescription": "usage unavailable"
+            },
             "extraRateWindows": [
               {
                 "id": "model-x",

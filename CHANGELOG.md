@@ -5,6 +5,8 @@
 ### Added
 
 - Native Fireworks billing usage with strict account-slug validation and 30-day spend reporting.
+- Native IBM Bob monthly Bobcoin usage with regional team aggregation, API-key and JWT authentication, and strict
+  regional-host validation.
 
 ## 0.4.2.2 - 2026-08-10
 

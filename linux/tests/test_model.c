@@ -1729,9 +1729,9 @@ static void test_provider_registry(void) {
         "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek", "deepinfra",
         "codebuff", "crof", "venice", "commandcode", "qoder", "stepfun", "bedrock", "grok", "groq",
         "llmproxy", "litellm", "deepgram", "poe", "chutes", "neuralwatt", "clawrouter", "longcat",
-        "sub2api", "wayfinder", "zenmux", "aiand", "zoommate", "xai",
+        "sub2api", "wayfinder", "zenmux", "aiand", "zoommate", "xai", "ibmbob",
     };
-    g_assert_cmpuint(G_N_ELEMENTS(expected_ids), ==, 67);
+    g_assert_cmpuint(G_N_ELEMENTS(expected_ids), ==, 68);
     g_assert_cmpuint(codexbar_provider_registry_count(), ==, G_N_ELEMENTS(expected_ids));
     for (guint index = 0; index < G_N_ELEMENTS(expected_ids); index++) {
         const CodexBarProviderDescriptor *provider = codexbar_provider_registry_at(index);
@@ -1931,6 +1931,20 @@ static void test_provider_registry(void) {
                     ==,
                     CODEXBAR_NATIVE_ALIBABA_TOKEN_PLAN);
     g_assert_cmpint(codexbar_provider_registry_find("xiaomi-mimo")->native_provider, ==, CODEXBAR_NATIVE_MIMO);
+    const CodexBarProviderDescriptor *ibmbob = codexbar_provider_registry_find("ibmbob");
+    g_assert_nonnull(ibmbob);
+    g_assert_true(codexbar_provider_registry_find("ibm-bob") == ibmbob);
+    g_assert_true(codexbar_provider_registry_find("bob") == ibmbob);
+    g_assert_true(codexbar_provider_registry_find("bobshell") == ibmbob);
+    g_assert_cmpint(ibmbob->native_provider, ==, CODEXBAR_NATIVE_IBMBOB);
+    g_assert_false(ibmbob->default_enabled);
+    g_assert_true(codexbar_provider_supports_source(ibmbob, "auto"));
+    g_assert_true(codexbar_provider_supports_source(ibmbob, "api"));
+    g_assert_false(codexbar_provider_supports_source(ibmbob, "web"));
+    g_assert_cmpstr(ibmbob->dashboard_url, ==, "https://bob.ibm.com");
+    g_assert_cmpstr(ibmbob->status_url, ==, "https://status.bob.ibm.com");
+    g_assert_false(codexbar_provider_status_is_pollable(ibmbob));
+    g_assert_true(codexbar_provider_supports_config_api_key(ibmbob));
     g_assert_true(codexbar_provider_status_is_pollable(codex));
     g_assert_false(codexbar_provider_status_is_pollable(codexbar_provider_registry_find("deepseek")));
 }

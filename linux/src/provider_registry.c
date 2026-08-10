@@ -76,6 +76,7 @@ static const CodexBarProviderDescriptor providers[] = {
     {"aiand", "ai&", "aiand", "ai&,ai-and", A | P, FALSE, "https://console.aiand.com", NULL, CODEXBAR_NATIVE_AIAND},
     {"zoommate", "ZoomMate", "zoommate", NULL, A | W, FALSE, "https://zoommate.zoom.us/#/?settings=credit-usage", "https://www.zoomstatus.com/", CODEXBAR_NATIVE_ZOOMMATE},
     {"xai", "xAI", "xai", NULL, A | P, FALSE, "https://console.x.ai", "https://status.x.ai", CODEXBAR_NATIVE_XAI},
+    {"ibmbob", "IBM Bob", "ibmbob", "ibm-bob,bob,bobshell", A | P, FALSE, "https://bob.ibm.com", "https://status.bob.ibm.com", CODEXBAR_NATIVE_IBMBOB},
 };
 
 #undef A
@@ -252,7 +253,8 @@ gboolean codexbar_provider_supports_config_api_key(const CodexBarProviderDescrip
         "moonshot",  "kimi",      "ollama",      "venice",     "deepgram",   "groq",
         "llmproxy",  "chutes",    "poe",         "litellm",    "clawrouter", "factory",
         "sub2api",   "zenmux",    "copilot",     "warp",       "codebuff",   "crof",
-        "doubao",    "deepinfra", "fireworks",   "neuralwatt", "aiand",      "xai",
+        "doubao",    "deepinfra", "fireworks",   "ibmbob",    "neuralwatt", "aiand",
+        "xai",
     };
     for (guint index = 0; index < G_N_ELEMENTS(supported); index++) {
         if (g_str_equal(provider->id, supported[index])) return TRUE;

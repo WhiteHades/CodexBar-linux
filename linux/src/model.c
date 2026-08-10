@@ -581,11 +581,7 @@ CodexBarSnapshot *codexbar_snapshot_parse(const char *json, GError **error) {
                 json_object *object = NULL;
                 if (json_object_object_get_ex(usage, ids[window_index], &object)) {
                     CodexBarQuotaWindow *window = parse_quota_window(object, ids[window_index], titles[window_index]);
-                    if (window && window->usage_known) {
-                        codexbar_provider_add_quota_window(provider, window);
-                    } else {
-                        codexbar_quota_window_free(window);
-                    }
+                    if (window) codexbar_provider_add_quota_window(provider, window);
                 }
             }
             json_object *extra_windows = NULL;

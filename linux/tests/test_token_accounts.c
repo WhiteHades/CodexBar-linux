@@ -21,6 +21,7 @@ static void clear_config(CodexBarProviderConfig *config) {
 static void test_catalog(void) {
     g_assert_true(codexbar_token_accounts_supported("openrouter"));
     g_assert_true(codexbar_token_accounts_supported("stepfun"));
+    g_assert_true(codexbar_token_accounts_supported("ibmbob"));
     g_assert_false(codexbar_token_accounts_supported("codex"));
     g_assert_true(codexbar_token_accounts_use_cookie("claude"));
     g_assert_false(codexbar_token_accounts_use_cookie("openai"));

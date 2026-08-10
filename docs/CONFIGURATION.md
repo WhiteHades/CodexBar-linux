@@ -1,7 +1,7 @@
 # Configuration
 
 Use the CLI for ordinary configuration. It validates providers, preserves provider-specific fields, writes atomically,
-rejects concurrent changes, and keeps the file private. `config providers` lists all 67 registered providers.
+rejects concurrent changes, and keeps the file private. `config providers` lists all 68 registered providers.
 
 ```sh
 codexbar-linux config validate
@@ -33,6 +33,9 @@ validate` rejects unsupported source/key combinations.
 
 Fireworks requires both an API key and account slug. Set `apiKey` and `accountSlug` on its provider entry, or use
 `FIREWORKS_API_KEY` (or `FIREWORKS_KEY`) with `FIREWORKS_ACCOUNT_SLUG`.
+
+IBM Bob accepts `apiKey` or `BOBSHELL_API_KEY`. It also supports token accounts for keeping multiple Bob API keys
+separate.
 
 ## Sources
 

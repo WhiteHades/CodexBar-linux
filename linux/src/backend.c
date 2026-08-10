@@ -16,6 +16,7 @@
 #include "deepinfra.h"
 #include "fireworks.h"
 #include "grok.h"
+#include "ibmbob.h"
 #include "jetbrains.h"
 #include "kilo.h"
 #include "kimi.h"
@@ -216,6 +217,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
         break;
     case CODEXBAR_NATIVE_FIREWORKS:
         provider = codexbar_fireworks_fetch_with_cancellable(config, cancellable, &error);
+        break;
+    case CODEXBAR_NATIVE_IBMBOB:
+        provider = codexbar_ibmbob_fetch_with_cancellable(config, cancellable, &error);
         break;
     case CODEXBAR_NATIVE_AIAND:
         provider = codexbar_aiand_fetch_with_cancellable(config, cancellable, &error);

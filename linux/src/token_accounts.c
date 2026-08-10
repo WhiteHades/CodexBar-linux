@@ -29,7 +29,7 @@ gboolean codexbar_token_accounts_supported(const char *provider) {
         "openai",   "openrouter", "claude",     "deepseek", "deepinfra", "antigravity", "zai",
         "cursor",   "opencode",   "opencodego", "factory",  "minimax",   "manus",       "augment",
         "ollama",   "abacus",     "mistral",    "qoder",    "copilot",   "venice",      "elevenlabs",
-        "neuralwatt", "groq",     "llmproxy",   "litellm",  "sub2api",   "stepfun",
+        "neuralwatt", "groq",     "llmproxy",   "litellm",  "sub2api",   "stepfun", "ibmbob",
     };
     return provider && id_in(provider, providers, G_N_ELEMENTS(providers));
 }

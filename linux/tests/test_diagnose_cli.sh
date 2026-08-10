@@ -97,6 +97,22 @@ if printf '%s\n' "$output" | grep -q 'fireworks-secret'; then
     exit 1
 fi
 
+ibmbob_backend=$work/ibmbob-backend.sh
+cat >"$ibmbob_backend" <<'EOF'
+#!/bin/sh
+printf '%s\n' '[{"provider":"ibmbob","source":"api","error":{"message":"IBM Bob rejected the API key.","code":1,"kind":"provider"}}]'
+EOF
+chmod +x "$ibmbob_backend"
+output=$(BOBSHELL_API_KEY=ibm-bob-secret CODEXBAR_BACKEND="$ibmbob_backend" \
+  "$binary" diagnose --provider bobshell --format json)
+printf '%s\n' "$output" | grep -q '"provider":"ibmbob"'
+printf '%s\n' "$output" | grep -q '"supportedSources":\["auto","api"\]'
+printf '%s\n' "$output" | grep -q '"configured":true'
+if printf '%s\n' "$output" | grep -q 'ibm-bob-secret'; then
+    printf 'IBM Bob diagnostic leaked credentials\n' >&2
+    exit 1
+fi
+
 sed 's/deepinfra/neuralwatt/' "$credential_backend" >"$work/neuralwatt-credential-backend.sh"
 chmod +x "$work/neuralwatt-credential-backend.sh"
 output=$(env "NEURALWATT_API_KEY=$(printf '\342\200\203')" \

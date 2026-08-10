@@ -44,6 +44,7 @@ core_sources = files(
   'src/desktop.c',
   'src/fireworks.c',
   'src/http.c',
+  'src/ibmbob.c',
   'src/hooks.c',
   'src/history.c',
   'src/jetbrains.c',
@@ -349,6 +350,14 @@ fireworks_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-fireworks', fireworks_test, env: normalized_test_env)
+
+ibmbob_test = executable(
+  'codexbar-linux-ibmbob-tests',
+  files('tests/test_ibmbob.c', 'src/ibmbob.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-ibmbob', ibmbob_test, env: normalized_test_env)
 
 aiand_test = executable(
   'codexbar-linux-aiand-tests',
