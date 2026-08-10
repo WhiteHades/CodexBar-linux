@@ -17,6 +17,7 @@
 typedef enum {
     ZAI_LIMIT_UNKNOWN,
     ZAI_LIMIT_TOKENS,
+    ZAI_LIMIT_CREDIT,
     ZAI_LIMIT_TIME,
 } ZaiLimitType;
 
@@ -112,6 +113,8 @@ static ZaiLimit parse_limit(json_object *value) {
                            : NULL;
     if (g_strcmp0(type, "TOKENS_LIMIT") == 0) {
         limit.type = ZAI_LIMIT_TOKENS;
+    } else if (g_strcmp0(type, "CREDIT_LIMIT") == 0) {
+        limit.type = ZAI_LIMIT_CREDIT;
     } else if (g_strcmp0(type, "TIME_LIMIT") == 0) {
         limit.type = ZAI_LIMIT_TIME;
     } else {
@@ -180,6 +183,11 @@ static double limit_used_percent(const ZaiLimit *limit) {
 }
 
 static char *limit_description(const ZaiLimit *limit) {
+    gint64 minutes = 0;
+    if ((limit->type == ZAI_LIMIT_TOKENS || limit->type == ZAI_LIMIT_CREDIT) &&
+        limit_window_minutes(limit, &minutes) && minutes == 5 * 60) {
+        return g_strdup("5-hour");
+    }
     if (limit->type == ZAI_LIMIT_TIME && limit->unit == 5 && limit->number == 1) {
         return g_strdup("Monthly");
     }
@@ -208,7 +216,8 @@ static CodexBarQuotaWindow *make_window(const char *id, const char *title, const
     window->usage_known = limit->has_percentage || (limit->has_usage && (limit->has_current || limit->has_remaining));
     window->used_percent = limit_used_percent(limit);
     gint64 minutes = 0;
-    if (limit->type == ZAI_LIMIT_TOKENS && limit_window_minutes(limit, &minutes)) {
+    if ((limit->type == ZAI_LIMIT_TOKENS || limit->type == ZAI_LIMIT_CREDIT) &&
+        limit_window_minutes(limit, &minutes)) {
         window->has_window_minutes = TRUE;
         window->window_minutes = minutes;
     }
@@ -288,7 +297,8 @@ CodexBarProvider *codexbar_zai_parse_usage(const char *json, GError **error) {
         size_t count = json_object_array_length(limits);
         for (size_t index = 0; index < count; index++) {
             ZaiLimit limit = parse_limit(json_object_array_get_idx(limits, index));
-            if (limit.type == ZAI_LIMIT_TOKENS && token_count < G_N_ELEMENTS(token_limits)) {
+            if ((limit.type == ZAI_LIMIT_TOKENS || limit.type == ZAI_LIMIT_CREDIT) &&
+                token_count < G_N_ELEMENTS(token_limits)) {
                 token_limits[token_count++] = limit;
             } else if (limit.type == ZAI_LIMIT_TIME) {
                 time_limit = limit;

@@ -47,6 +47,31 @@ static void test_missing_quota_fields(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_credit_limits(void) {
+    const char *json =
+        "{\"code\":200,\"success\":true,\"data\":{\"level\":\"lite\",\"limits\":["
+        "{\"type\":\"CREDIT_LIMIT\",\"unit\":3,\"number\":5,\"usage\":1000,"
+        "\"currentValue\":35.5,\"remaining\":964.5,\"percentage\":3.55,"
+        "\"nextResetTime\":1784706344993},"
+        "{\"type\":\"CREDIT_LIMIT\",\"unit\":6,\"number\":1,\"usage\":5000,"
+        "\"currentValue\":500,\"remaining\":4500,\"percentage\":10,"
+        "\"nextResetTime\":1785138344993}]}}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_zai_parse_usage(json, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->plan, ==, "Lite");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    CodexBarQuotaWindow *weekly = codexbar_provider_quota_window(provider, 0);
+    CodexBarQuotaWindow *session = codexbar_provider_quota_window(provider, 1);
+    g_assert_cmpint(weekly->window_minutes, ==, 10080);
+    g_assert_cmpint(session->window_minutes, ==, 300);
+    g_assert_cmpfloat_with_epsilon(session->used_percent, 3.55, 0.0001);
+    g_assert_cmpstr(session->reset_description, ==, "5-hour");
+    g_assert_cmpint(session->resets_at_ms, ==, G_GINT64_CONSTANT(1784706344993));
+    codexbar_provider_free(provider);
+}
+
 static void test_api_errors(void) {
     GError *error = NULL;
     CodexBarProvider *provider = codexbar_zai_parse_usage(
@@ -102,6 +127,7 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/zai/three-limits", test_three_limits);
     g_test_add_func("/zai/missing-fields", test_missing_quota_fields);
+    g_test_add_func("/zai/credit-limits", test_credit_limits);
     g_test_add_func("/zai/api-errors", test_api_errors);
     g_test_add_func("/zai/urls", test_quota_urls);
     return g_test_run();
