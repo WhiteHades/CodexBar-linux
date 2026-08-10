@@ -6,6 +6,7 @@ binary=$1
 backend=$2
 application_entry=$3
 autostart_entry=$4
+watcher=$5
 binary_dir=$(cd "$(dirname "$binary")" && pwd)
 binary=$binary_dir/$(basename "$binary")
 backend_dir=$(cd "$(dirname "$backend")" && pwd)
@@ -33,10 +34,14 @@ dbus-run-session -- sh -eu -c '
   stub_dir=$3
   launch_log=$4
   output=$5
+  watcher=$6
+  registration=$7
+  "$watcher" "$registration" &
+  watcher_pid=$!
   CODEXBAR_BACKEND="$backend" CODEXBAR_TEST_LAUNCH_LOG="$launch_log" PATH="$stub_dir:$PATH" \
     "$binary" status-item >"$output" 2>&1 &
   pid=$!
-  trap "kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true" EXIT
+  trap "kill $pid $watcher_pid 2>/dev/null || true; wait $pid $watcher_pid 2>/dev/null || true" EXIT
   service=org.freedesktop.StatusNotifierItem-$pid-1
 
   found=false
@@ -48,6 +53,22 @@ dbus-run-session -- sh -eu -c '
     sleep 0.02
   done
   test "$found" = true
+  for attempt in $(seq 1 100); do
+    test -s "$registration" && break
+    sleep 0.02
+  done
+  test "$(cat "$registration")" = "$service"
+
+  kill "$watcher_pid"
+  wait "$watcher_pid"
+  rm -f "$registration"
+  "$watcher" "$registration" &
+  watcher_pid=$!
+  for attempt in $(seq 1 100); do
+    test -s "$registration" && break
+    sleep 0.02
+  done
+  test "$(cat "$registration")" = "$service"
 
   tooltip=
   for attempt in $(seq 1 100); do
@@ -79,7 +100,7 @@ dbus-run-session -- sh -eu -c '
   test -s "$launch_log"
   kill "$pid"
   wait "$pid"
-' sh "$binary" "$backend" "$stub_dir" "$launch_log" "$work/status.log"
+' sh "$binary" "$backend" "$stub_dir" "$launch_log" "$work/status.log" "$watcher" "$work/registration"
 
 cat > "$work/expected.log" <<EOF
 --app-id=com.steipete.codexbar

@@ -554,6 +554,18 @@ static const GDBusInterfaceVTable status_item_vtable = {
     .get_property = status_item_property,
 };
 
+static void watcher_registered(GObject *source, GAsyncResult *result, gpointer user_data) {
+    const char *name = user_data;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), result, &error);
+    if (!reply) {
+        g_warning("could not register CodexBar with %s: %s", name, error->message);
+        g_error_free(error);
+        return;
+    }
+    g_variant_unref(reply);
+}
+
 static void watcher_appeared(
     GDBusConnection *connection, const char *name, const char *name_owner, gpointer user_data) {
     (void)name_owner;
@@ -571,8 +583,8 @@ static void watcher_appeared(
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
                            NULL,
-                           NULL,
-                           NULL);
+                           watcher_registered,
+                           (gpointer)interface_name);
 }
 
 static gboolean request_bus_name(CodexBarStatusItem *item, GError **error) {

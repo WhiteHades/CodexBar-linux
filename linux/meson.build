@@ -221,6 +221,11 @@ test(
   depends: process_supervisor,
 )
 
+status_notifier_watcher = executable(
+  'codexbar-status-notifier-watcher-test',
+  files('tests/status_notifier_watcher.c'),
+  dependencies: [glib_dep, gio_dep],
+)
 status_item_test = find_program('tests/test_status_item.sh')
 test(
   'codexbar-linux-status-item',
@@ -230,6 +235,7 @@ test(
     find_program('tests/fake_backend.sh'),
     files('data/com.steipete.codexbar.desktop'),
     files('data/codexbar-status.desktop'),
+    status_notifier_watcher,
   ],
   depends: process_supervisor,
   timeout: 30,
