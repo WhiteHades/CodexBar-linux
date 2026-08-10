@@ -86,7 +86,7 @@ static const char *mistral_usage_json(void) {
         "\"libraries_api\":{\"pages\":{\"models\":{\"ocr\":{\"input\":[{"
         "\"billing_metric\":\"pages\",\"billing_group\":\"input\","
         "\"timestamp\":\"2026-07-14\",\"value\":2}]}}}},"
-        "\"currency\":\"EUR\",\"currency_symbol\":\"€\","
+        "\"currency\":\"EUR\",\"currency_symbol\":\"\\u20ac\","
         "\"start_date\":\"2026-07-01T00:00:00Z\",\"end_date\":\"2026-07-31T23:59:59Z\","
         "\"prices\":["
         "{\"billing_metric\":\"tokens\",\"billing_group\":\"input\",\"price\":\"0.001\"},"
@@ -290,6 +290,7 @@ static void test_mistral_parsers(void) {
     g_assert_cmpstr(provider->provider, ==, "mistral");
     g_assert_cmpint(provider->token_cost->last_days_tokens, ==, 125);
     g_assert_cmpfloat_with_epsilon(provider->token_cost->last_days_cost, 0.1605, 0.000001);
+    g_assert_nonnull(strstr(provider->identity->login_method, "€"));
     json_object *snapshot = object_member(provider->usage_extensions, "mistralUsage");
     g_assert_nonnull(snapshot);
     g_assert_cmpint(json_object_get_int64(object_member(snapshot, "modelCount")), ==, 1);
