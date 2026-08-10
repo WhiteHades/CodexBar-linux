@@ -102,6 +102,15 @@ static const char status_item_xml[] =
 
 static char *resolve_executable(const char *program) {
     char *executable = g_file_read_link("/proc/self/exe", NULL);
+    const char *appimage = g_getenv("APPIMAGE");
+    const char *appdir = g_getenv("APPDIR");
+    size_t appdir_length = appdir ? strlen(appdir) : 0;
+    if (appimage && appdir && executable && g_path_is_absolute(appimage) && g_path_is_absolute(appdir) &&
+        g_file_test(appimage, G_FILE_TEST_IS_EXECUTABLE) && g_str_has_prefix(executable, appdir) &&
+        executable[appdir_length] == G_DIR_SEPARATOR) {
+        g_free(executable);
+        return g_strdup(appimage);
+    }
     if (executable) return executable;
     if (strchr(program, G_DIR_SEPARATOR)) return g_canonicalize_filename(program, NULL);
     return g_find_program_in_path(program);

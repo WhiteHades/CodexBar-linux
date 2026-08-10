@@ -45,32 +45,67 @@ codexbar linux is a native linux fork of [steipete/codexbar](https://github.com/
 
 ## install
 
-### ubuntu and debian
+### release packages
+
+release pages provide a debian package, rpm, appimage, generic archive, and deterministic source archive for the
+published version. verify the adjacent `.sha256` file before installation.
+
+install a downloaded debian package:
+
+```sh
+sudo apt install ./codexbar-linux_VERSION-1_ARCH.deb
+```
+
+install a downloaded rpm:
+
+```sh
+sudo dnf install ./codexbar-linux-VERSION-1.DISTRO.ARCH.rpm
+```
+
+run an appimage without installing system files:
+
+```sh
+chmod +x codexbar-linux-VERSION-ARCH.AppImage
+./codexbar-linux-VERSION-ARCH.AppImage
+```
+
+the appimage does not configure desktop autostart. configure your desktop to run the stable appimage path if you want
+the status item at login.
+
+install from the aur on arch linux or manjaro:
+
+```sh
+yay -S codexbar-linux
+```
+
+### build from source
+
+#### ubuntu and debian
 
 ```sh
 sudo apt update
 sudo apt install build-essential meson ninja-build pkg-config libglib2.0-dev libcurl4-openssl-dev libjson-c-dev libsqlite3-dev libncurses-dev
 ```
 
-### fedora
+#### fedora
 
 ```sh
 sudo dnf install gcc meson ninja-build pkgconf-pkg-config glib2-devel libcurl-devel json-c-devel sqlite-devel ncurses-devel
 ```
 
-### arch linux and manjaro
+#### arch linux and manjaro
 
 ```sh
 sudo pacman -S --needed base-devel meson ninja pkgconf glib2 curl json-c sqlite ncurses
 ```
 
-### opensuse
+#### opensuse
 
 ```sh
 sudo zypper install gcc meson ninja pkg-config glib2-devel libcurl-devel libjson-c-devel sqlite3-devel ncurses-devel
 ```
 
-### build and install
+#### build and install
 
 ```sh
 git clone https://github.com/WhiteHades/CodexBar-linux.git
@@ -87,7 +122,7 @@ run it now without logging out:
 codexbar-linux status-item
 ```
 
-you can also download a ready made archive from the [releases page](https://github.com/WhiteHades/CodexBar-linux/releases).
+the generic ready-made archive remains available for systems without one of the package formats above.
 
 ## tray
 
@@ -211,11 +246,15 @@ make check
 make sanitize
 make release
 make package
+make package-source
+make package-deb
+make package-rpm
+make package-appimage
+make check-packaging
 ```
 
-read the [development guide](docs/DEVELOPMENT.md) and [release guide](docs/RELEASING.md).
-
-codexbar linux follows portable behavior from [steipete/codexbar](https://github.com/steipete/CodexBar) and implements it with native linux code.
+read the [development guide](docs/DEVELOPMENT.md), [packaging guide](docs/PACKAGING.md), and
+[release guide](docs/RELEASING.md).
 
 ## license
 

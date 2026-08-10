@@ -1,0 +1,24 @@
+pkgname=codexbar-linux
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Native Linux AI usage monitor'
+arch=('x86_64')
+url='https://github.com/WhiteHades/CodexBar-linux'
+license=('MIT')
+depends=('curl' 'glib2' 'json-c' 'ncurses' 'sqlite')
+makedepends=('meson>=1.6.0' 'ninja' 'pkgconf')
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
+sha256sums=('@SOURCE_SHA256@')
+
+build() {
+  arch-meson "$pkgname-$pkgver" build --buildtype=release
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --no-rebuild --print-errorlogs
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+}

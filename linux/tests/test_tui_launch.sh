@@ -75,6 +75,33 @@ if ! cmp -s "$expected" "$fallback_log"; then
   exit 1
 fi
 
+appimage=$work/codexbar-linux.AppImage
+appimage_log=$work/appimage.log
+: >"$appimage"
+chmod +x "$appimage"
+binary_dir=$(dirname "$binary")
+timeout 2 env PATH="$stub_dir" APPIMAGE="$appimage" APPDIR="$binary_dir" CODEXBAR_TEST_LAUNCH_LOG="$appimage_log" \
+  "$binary" tui </dev/null >"$work/appimage-stdout.log" 2>"$work/appimage-stderr.log" || true
+
+for attempt in $(seq 1 50); do
+  test -s "$appimage_log" && break
+  sleep 0.02
+done
+
+cat > "$expected" <<EOF
+--app-id=com.steipete.codexbar
+--title=CodexBar
+-e
+$appimage
+tui
+EOF
+
+if ! cmp -s "$expected" "$appimage_log"; then
+  printf 'tui did not use the stable APPIMAGE path\n' >&2
+  cat "$appimage_log" >&2 2>/dev/null || true
+  exit 1
+fi
+
 empty_dir=$work/empty
 mkdir -p "$empty_dir"
 if timeout 2 env PATH="$empty_dir" "$binary" tui \

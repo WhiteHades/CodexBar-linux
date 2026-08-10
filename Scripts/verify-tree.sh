@@ -6,7 +6,8 @@ repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo"
 
 for forbidden in '*.swift' '*.xcodeproj/*' '*.xcworkspace/*' 'Package.swift' 'Package.resolved' \
-    '*.icns' 'appcast.xml' '.mac-release.env'; do
+    '*.icns' 'appcast.xml' '.mac-release.env' '*.AppImage' '*.AppImage.zsync' '*.deb' '*.rpm' '*.src.rpm' \
+    'packaging/aur/PKGBUILD' 'packaging/aur/.SRCINFO'; do
     if git ls-files -- "$forbidden" | grep -q .; then
         printf 'forbidden tracked artifact matching %s:\n' "$forbidden" >&2
         git ls-files -- "$forbidden" >&2
@@ -16,6 +17,17 @@ done
 
 if git ls-files | grep -E '(^|/)(build|build-[^/]*|\.build|\.tmp)/' >/dev/null; then
     printf '%s\n' 'generated build output is tracked' >&2
+    exit 1
+fi
+
+for script in Scripts/*.sh packaging/appimage/AppRun; do
+    if ! sh -n "$script"; then
+        printf 'invalid shell syntax: %s\n' "$script" >&2
+        exit 1
+    fi
+done
+if grep -q 'SKIP' packaging/aur/PKGBUILD.in; then
+    printf '%s\n' 'AUR template contains an unsafe SKIP checksum' >&2
     exit 1
 fi
 

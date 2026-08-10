@@ -111,6 +111,40 @@ install_data(
   'data/codexbar-status.desktop',
   install_dir: '/etc/xdg/autostart',
 )
+install_data(
+  'data/icons/hicolor/scalable/apps/com.steipete.codexbar.svg',
+  install_dir: get_option('datadir') / 'icons/hicolor/scalable/apps',
+)
+install_data(
+  'data/com.steipete.codexbar.metainfo.xml',
+  install_dir: get_option('datadir') / 'metainfo',
+)
+install_data(
+  '../LICENSE',
+  rename: 'copyright',
+  install_dir: get_option('datadir') / 'doc/codexbar-linux',
+)
+
+desktop_file_validate = find_program('desktop-file-validate', required: false)
+if desktop_file_validate.found()
+  test(
+    'codexbar-linux-desktop-metadata',
+    desktop_file_validate,
+    args: [
+      files('data/com.steipete.codexbar.desktop'),
+      files('data/codexbar-status.desktop'),
+    ],
+  )
+endif
+
+appstreamcli = find_program('appstreamcli', required: false)
+if appstreamcli.found()
+  test(
+    'codexbar-linux-appstream-metadata',
+    appstreamcli,
+    args: ['validate', '--no-net', files('data/com.steipete.codexbar.metainfo.xml')],
+  )
+endif
 
 test_executable = executable(
   'codexbar-linux-tests',

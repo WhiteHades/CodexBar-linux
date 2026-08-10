@@ -10,7 +10,13 @@ compile_commands.json
 *.sha256
 *.deb
 *.rpm
+*.src.rpm
+*.AppImage
+*.AppImage.zsync
+*.tar.zst
 dist/
+packaging/aur/PKGBUILD
+packaging/aur/.SRCINFO
 *.env
 *.local
 .codexbar/

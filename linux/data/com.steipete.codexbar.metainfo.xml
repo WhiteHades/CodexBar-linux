@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.steipete.codexbar</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>CodexBar</name>
+  <summary>Monitor AI provider usage and account limits</summary>
+  <description>
+    <p>
+      CodexBar is a native Linux usage monitor for AI services. It presents account limits and usage in a terminal
+      interface, desktop status item, Waybar, scripts, and JSON output.
+    </p>
+    <p>
+      Provider and account data remain separately scoped. Network requests use bounded responses, and local
+      configuration is stored with private permissions.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.steipete.codexbar.desktop</launchable>
+  <provides>
+    <binary>codexbar-linux</binary>
+  </provides>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <url type="homepage">https://github.com/WhiteHades/CodexBar-linux</url>
+  <url type="bugtracker">https://github.com/WhiteHades/CodexBar-linux/issues</url>
+  <developer id="com.github.whitehades">
+    <name>WhiteHades</name>
+  </developer>
+  <releases>
+    <release version="0.4.2.1" date="2026-08-10">
+      <description>
+        <p>Adds native distro packages, AppImage delivery, stronger tray discovery, and current z.ai credit limits.</p>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-08-01">
+      <description>
+        <p>Initial native Linux release.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

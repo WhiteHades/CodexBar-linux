@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -eu
+
+appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export PATH="$appdir/usr/bin${PATH:+:$PATH}"
+export XDG_DATA_DIRS="$appdir/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+if test "$#" -eq 0; then
+    set -- tui
+fi
+exec "$appdir/usr/bin/codexbar-linux" "$@"

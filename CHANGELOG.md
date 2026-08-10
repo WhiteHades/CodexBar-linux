@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2.1 - 2026-08-10
+
+### Added
+
+- Debian, RPM, AppImage, and AUR packaging with deterministic source archives and checksums.
+- Shared desktop icon and AppStream metadata for package managers and application launchers.
+- KDE-compatible status notifier registration and watcher restart coverage.
+
+### Changed
+
+- Parse z.ai credit limits as rolling usage windows.
+- Simplify installation and tray documentation and credit the upstream CodexBar project.
+
 ## 0.4.1 — 2026-08-01
 
 ### Added

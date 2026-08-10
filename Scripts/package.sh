@@ -8,6 +8,8 @@ output_dir=${CODEXBAR_DIST_DIR:-$repo/dist}
 version=$(sed -n "s/^[[:space:]]*version:[[:space:]]*'\([^']*\)'.*/\1/p" "$repo/meson.build")
 arch=$(uname -m)
 
+"$repo/Scripts/require-release-tree.sh"
+
 case "$version" in
     ''|*[!0-9A-Za-z._-]*) printf '%s\n' 'invalid Meson project version' >&2; exit 1 ;;
 esac
@@ -32,7 +34,10 @@ DESTDIR="$stage" meson install -C "$build_dir" --strip
 test -x "$stage/usr/local/bin/codexbar-linux"
 test -x "$stage/usr/local/bin/codexbar-process-supervisor"
 test -f "$stage/usr/local/share/applications/com.steipete.codexbar.desktop"
+test -f "$stage/usr/local/share/metainfo/com.steipete.codexbar.metainfo.xml"
+test -f "$stage/usr/local/share/icons/hicolor/scalable/apps/com.steipete.codexbar.svg"
 test -f "$stage/etc/xdg/autostart/codexbar-status.desktop"
+test "$("$stage/usr/local/bin/codexbar-linux" --version)" = "CodexBar $version"
 
 name="codexbar-linux-$version-linux-$arch"
 tar --owner=0 --group=0 --numeric-owner -C "$stage" -czf "$output_dir/$name.tar.gz" .

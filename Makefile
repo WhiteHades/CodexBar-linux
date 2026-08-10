@@ -5,8 +5,11 @@ BUILD_DIR ?= .build/debug
 RELEASE_DIR ?= .build/release
 SANITIZE_DIR ?= .build/sanitize
 PREFIX ?= /usr/local
+PACKAGE_VERSION := $(shell sed -n "s/^[[:space:]]*version:[[:space:]]*'\([^']*\)'.*/\1/p" meson.build)
+AUR_VERSION ?= $(PACKAGE_VERSION)
 
-.PHONY: all build check clean configure install package release run sanitize test verify-tree
+.PHONY: all build check check-packaging clean configure install package package-appimage package-aur package-deb \
+	package-rpm package-source release run sanitize test verify-tree
 
 all: build
 
@@ -54,8 +57,26 @@ run: build
 install: release
 	$(MESON) install -C "$(RELEASE_DIR)" --destdir "$(DESTDIR)"
 
-package:
+package: check-packaging
 	./Scripts/package.sh
+
+package-source: check-packaging
+	./Scripts/source-archive.sh
+
+package-deb: check-packaging
+	./Scripts/package-deb.sh
+
+package-rpm: check-packaging
+	./Scripts/package-rpm.sh
+
+package-appimage: check-packaging
+	./Scripts/package-appimage.sh
+
+package-aur:
+	./Scripts/prepare-aur.sh "$(AUR_VERSION)"
+
+check-packaging:
+	./Scripts/check-packaging.sh
 
 verify-tree:
 	./Scripts/verify-tree.sh
