@@ -15,7 +15,7 @@ native • private • open source • 66 providers
 
 codexbar linux shows how much ai usage you have left. it can live in your kde plasma tray, waybar tray, or another linux desktop tray. it also has a terminal app, simple commands, json output, history, alerts, cost reports, and a local dashboard api.
 
-it is a native linux app written in c23. it does not need swift, xcode, electron, or a browser window.
+codexbar linux is a native linux fork of [steipete/codexbar](https://github.com/steipete/CodexBar), which defines the upstream provider behavior this port follows.
 
 ## contents
 
