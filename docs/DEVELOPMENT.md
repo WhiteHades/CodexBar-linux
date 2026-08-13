@@ -51,9 +51,11 @@ integration test. Verify the newly built binary, not an older installed copy.
 ## Upstream review
 
 ```sh
+./Scripts/check-upstream-parity.sh
 ./Scripts/check-upstream.sh
 git diff "$(cat UPSTREAM_REVISION)..upstream/main" -- Sources/CodexBarCore Sources/CodexBar
 ```
 
-Port behavior and fixtures into native modules. Update `UPSTREAM_REVISION` only after the new upstream head has been
-audited and all applicable native checks pass.
+The machine-checkable commit ledger and disposition rules are documented in [UPSTREAM_PARITY.md](UPSTREAM_PARITY.md).
+Port behavior and fixtures into native modules. Update `UPSTREAM_REVISION` only after the new upstream head has no
+pending ledger entries and all applicable native checks pass.

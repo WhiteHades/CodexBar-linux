@@ -13,4 +13,6 @@ fi
 meson compile -C "$build_dir"
 meson test -C "$build_dir" --no-rebuild --print-errorlogs
 "$repo/Scripts/verify-tree.sh"
+"$repo/Scripts/check-upstream-parity.sh"
+"$repo/Scripts/test-upstream-parity.sh"
 git -C "$repo" diff --check
