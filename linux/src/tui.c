@@ -817,6 +817,28 @@ static guint tui_refresh_delay(CodexBarRefreshFrequency frequency, gint64 last_i
     return codexbar_refresh_policy_decide(frequency, input).delay_seconds;
 }
 
+static void apply_tui_reset_boundary(const CodexBarSnapshot *snapshot,
+                                     guint normal_refresh_seconds,
+                                     GArray *attempted_boundaries,
+                                     gint64 now_us,
+                                     gint64 *next_refresh_us,
+                                     gint64 *scheduled_boundary_ms) {
+    *scheduled_boundary_ms = 0;
+    CodexBarResetBoundaryDecision boundary = codexbar_refresh_next_reset_boundary(
+        snapshot,
+        g_get_real_time() / 1000,
+        normal_refresh_seconds,
+        attempted_boundaries ? (const gint64 *)attempted_boundaries->data : NULL,
+        attempted_boundaries ? attempted_boundaries->len : 0);
+    if (!boundary.scheduled) return;
+    gint64 boundary_delay_us = (boundary.refresh_at_ms - g_get_real_time() / 1000) * 1000;
+    gint64 boundary_deadline_us = now_us + MAX((gint64)G_TIME_SPAN_MILLISECOND, boundary_delay_us);
+    if (*next_refresh_us == 0 || boundary_deadline_us < *next_refresh_us) {
+        *next_refresh_us = boundary_deadline_us;
+        *scheduled_boundary_ms = boundary.boundary_ms;
+    }
+}
+
 int codexbar_tui_run(void) {
     CodexBarConfig *runtime_config = codexbar_config_load(NULL);
     CodexBarRefreshFrequency refresh_frequency =
@@ -856,6 +878,18 @@ int codexbar_tui_run(void) {
     gint64 next_refresh_us = refresh_delay == 0
                                  ? 0
                                  : g_get_monotonic_time() + (gint64)refresh_delay * G_USEC_PER_SEC;
+    gint64 fixed_refresh_deadline_us = !codexbar_refresh_frequency_is_adaptive(refresh_frequency) &&
+                                               refresh_frequency != CODEXBAR_REFRESH_MANUAL
+                                           ? next_refresh_us
+                                           : 0;
+    GArray *attempted_reset_boundaries = g_array_new(FALSE, FALSE, sizeof(gint64));
+    gint64 scheduled_reset_boundary_ms = 0;
+    apply_tui_reset_boundary(snapshot,
+                             refresh_delay,
+                             attempted_reset_boundaries,
+                             g_get_monotonic_time(),
+                             &next_refresh_us,
+                             &scheduled_reset_boundary_ms);
     while (running) {
         if (snapshot->providers->len > 0 && selected >= snapshot->providers->len) {
             selected = snapshot->providers->len - 1;
@@ -869,6 +903,11 @@ int codexbar_tui_run(void) {
         gint64 now = g_get_monotonic_time();
         if (key != ERR) last_interaction_us = now;
         if (next_refresh_us != 0 && now >= next_refresh_us) {
+            if (scheduled_reset_boundary_ms != 0) {
+                g_array_append_val(attempted_reset_boundaries, scheduled_reset_boundary_ms);
+                if (attempted_reset_boundaries->len > 64) g_array_remove_index(attempted_reset_boundaries, 0);
+                scheduled_reset_boundary_ms = 0;
+            }
             g_free(status);
             status = g_strdup("refreshing provider telemetry...");
             draw_screen(snapshot, selected, first_metric, status, mode, actions, selected_action);
@@ -885,10 +924,19 @@ int codexbar_tui_run(void) {
                 next_refresh_us = 0;
             } else if (!fixed) {
                 next_refresh_us = completed_at_us + (gint64)refresh_delay * G_USEC_PER_SEC;
-            } else if (next_refresh_us <= completed_at_us) {
-                next_refresh_us = codexbar_refresh_next_fixed_deadline(
-                    next_refresh_us, completed_at_us, (gint64)refresh_delay * G_USEC_PER_SEC);
+            } else {
+                if (fixed_refresh_deadline_us <= completed_at_us) {
+                    fixed_refresh_deadline_us = codexbar_refresh_next_fixed_deadline(
+                        fixed_refresh_deadline_us, completed_at_us, (gint64)refresh_delay * G_USEC_PER_SEC);
+                }
+                next_refresh_us = fixed_refresh_deadline_us;
             }
+            apply_tui_reset_boundary(snapshot,
+                                     refresh_delay,
+                                     attempted_reset_boundaries,
+                                     completed_at_us,
+                                     &next_refresh_us,
+                                     &scheduled_reset_boundary_ms);
             continue;
         }
         if (key == ERR) continue;
@@ -1010,10 +1058,19 @@ int codexbar_tui_run(void) {
                 next_refresh_us = 0;
             } else if (!fixed) {
                 next_refresh_us = completed_at_us + (gint64)refresh_delay * G_USEC_PER_SEC;
-            } else if (next_refresh_us <= completed_at_us) {
-                next_refresh_us = codexbar_refresh_next_fixed_deadline(
-                    next_refresh_us, completed_at_us, (gint64)refresh_delay * G_USEC_PER_SEC);
+            } else {
+                if (fixed_refresh_deadline_us <= completed_at_us) {
+                    fixed_refresh_deadline_us = codexbar_refresh_next_fixed_deadline(
+                        fixed_refresh_deadline_us, completed_at_us, (gint64)refresh_delay * G_USEC_PER_SEC);
+                }
+                next_refresh_us = fixed_refresh_deadline_us;
             }
+            apply_tui_reset_boundary(snapshot,
+                                     refresh_delay,
+                                     attempted_reset_boundaries,
+                                     completed_at_us,
+                                     &next_refresh_us,
+                                     &scheduled_reset_boundary_ms);
             break;
         }
         case KEY_RESIZE:
@@ -1031,6 +1088,7 @@ int codexbar_tui_run(void) {
     }
 
     codexbar_snapshot_free(snapshot);
+    g_array_unref(attempted_reset_boundaries);
     codexbar_runtime_free(runtime);
     g_clear_pointer(&actions, g_ptr_array_unref);
     g_free(status);

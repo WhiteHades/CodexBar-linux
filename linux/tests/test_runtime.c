@@ -32,6 +32,8 @@ static gboolean command_subscription_unavailable;
 static gboolean command_has_plan;
 static gboolean command_monthly_depleted;
 static const char *usage_runtime_scope;
+static const char *usage_note;
+static gboolean usage_has_token_cost;
 
 static CodexBarSnapshot *usage_fetcher(GCancellable *cancellable, gpointer user_data, GError **error) {
     (void)cancellable;
@@ -46,6 +48,7 @@ static CodexBarSnapshot *usage_fetcher(GCancellable *cancellable, gpointer user_
     provider->error = g_strdup(usage_error);
     provider->error_kind = g_strdup(usage_error_kind);
     provider->runtime_scope = g_strdup(usage_runtime_scope);
+    provider->note = g_strdup(usage_note);
     if (usage_updated_at > 0) {
         provider->has_updated_at = TRUE;
         provider->updated_at_ms = usage_updated_at;
@@ -94,6 +97,14 @@ static CodexBarSnapshot *usage_fetcher(GCancellable *cancellable, gpointer user_
         json_object_object_add(provider->usage_extensions,
                                "commandCodeMonthlyGrantDepleted",
                                json_object_new_boolean(command_monthly_depleted));
+    }
+    if (usage_has_token_cost) {
+        provider->token_cost = g_new0(CodexBarTokenCost, 1);
+        provider->token_cost->has_today_tokens = TRUE;
+        provider->token_cost->today_tokens = 4200;
+        provider->token_cost->has_today_cost = TRUE;
+        provider->token_cost->today_cost = 1.25;
+        provider->token_cost->currency = g_strdup("USD");
     }
     g_ptr_array_add(snapshot->providers, provider);
     return snapshot;
@@ -163,6 +174,8 @@ static void reset_usage(void) {
     command_has_plan = FALSE;
     command_monthly_depleted = FALSE;
     usage_runtime_scope = NULL;
+    usage_note = NULL;
+    usage_has_token_cost = FALSE;
 }
 
 static void reset_hooks(void) {
@@ -689,6 +702,113 @@ static void test_crof_credits_only_suppresses_quota_events(void) {
     remove_config(path);
 }
 
+static CodexBarProvider *only_provider(CodexBarSnapshot *snapshot) {
+    g_assert_nonnull(snapshot);
+    g_assert_cmpuint(snapshot->providers->len, ==, 1);
+    return g_ptr_array_index(snapshot->providers, 0);
+}
+
+static void test_claude_terminal_cli_failure_preservation(void) {
+    char *path = write_provider_config("claude", NULL);
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+    g_setenv("CODEXBAR_DISABLE_STATUS", "1", TRUE);
+    reset_usage();
+    usage_provider = "claude";
+    usage_source = "cli";
+    usage_has_window = TRUE;
+    usage_percent = 12;
+    usage_has_token_cost = TRUE;
+    CodexBarRuntime *runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
+
+    CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    g_assert_cmpfloat(codexbar_provider_quota_window(only_provider(snapshot), 0)->used_percent, ==, 12);
+    codexbar_snapshot_free(snapshot);
+
+    usage_has_window = FALSE;
+    usage_has_token_cost = FALSE;
+    usage_error = "Could not parse Claude CLI Current session usage";
+    usage_error_kind = "parse";
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    CodexBarProvider *provider = only_provider(snapshot);
+    g_assert_null(provider->error);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 12);
+    g_assert_nonnull(provider->token_cost);
+    g_assert_cmpint(provider->token_cost->today_tokens, ==, 4200);
+    codexbar_snapshot_free(snapshot);
+
+    usage_error = "Claude CLI usage is rate limited";
+    usage_error_kind = "rateLimit";
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    provider = only_provider(snapshot);
+    g_assert_null(provider->error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    codexbar_snapshot_free(snapshot);
+
+    usage_source = "web";
+    usage_error = "Claude web usage response was invalid";
+    usage_error_kind = "parse";
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    provider = only_provider(snapshot);
+    g_assert_nonnull(provider->error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    g_assert_null(provider->token_cost);
+    codexbar_snapshot_free(snapshot);
+
+    usage_source = "cli";
+    usage_error = NULL;
+    usage_error_kind = NULL;
+    usage_has_window = TRUE;
+    usage_percent = 25;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    usage_has_window = FALSE;
+    usage_error = "Claude CLI is not logged in";
+    usage_error_kind = "auth";
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    provider = only_provider(snapshot);
+    g_assert_nonnull(provider->error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    codexbar_snapshot_free(snapshot);
+
+    codexbar_runtime_free(runtime);
+    reset_usage();
+    g_unsetenv("CODEXBAR_DISABLE_STATUS");
+    g_unsetenv("CODEXBAR_CONFIG");
+    remove_config(path);
+}
+
+static void test_claude_limits_unavailable_preserves_local_cost(void) {
+    char *path = write_provider_config("claude", NULL);
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+    g_setenv("CODEXBAR_DISABLE_STATUS", "1", TRUE);
+    reset_usage();
+    usage_provider = "claude";
+    usage_source = "cli";
+    usage_has_window = TRUE;
+    usage_has_token_cost = TRUE;
+    CodexBarRuntime *runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
+    CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+
+    usage_has_window = FALSE;
+    usage_has_token_cost = FALSE;
+    usage_note = "Limits unavailable";
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    CodexBarProvider *provider = only_provider(snapshot);
+    g_assert_null(provider->error);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    g_assert_cmpstr(provider->note, ==, "Limits unavailable");
+    g_assert_nonnull(provider->token_cost);
+    g_assert_cmpint(provider->token_cost->today_tokens, ==, 4200);
+    codexbar_snapshot_free(snapshot);
+
+    codexbar_runtime_free(runtime);
+    reset_usage();
+    g_unsetenv("CODEXBAR_DISABLE_STATUS");
+    g_unsetenv("CODEXBAR_CONFIG");
+    remove_config(path);
+}
+
 int main(int argc, char **argv) {
     g_setenv("CODEXBAR_DISABLE_HISTORY", "1", TRUE);
     g_test_init(&argc, &argv, NULL);
@@ -701,5 +821,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/runtime/notifications/quota", test_quota_warning_notifications_follow_provider_config);
     g_test_add_func("/runtime/commandcode/preserve-depletion", test_command_code_preserves_confirmed_monthly_depletion);
     g_test_add_func("/runtime/crof/credits-only-events", test_crof_credits_only_suppresses_quota_events);
+    g_test_add_func("/runtime/claude/terminal-cli-preservation", test_claude_terminal_cli_failure_preservation);
+    g_test_add_func("/runtime/claude/limits-unavailable-cost", test_claude_limits_unavailable_preserves_local_cost);
     return g_test_run();
 }

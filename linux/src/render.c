@@ -523,6 +523,7 @@ static json_object *provider_json(const CodexBarProvider *provider) {
     json_object_object_add(object, "provider", json_object_new_string(provider->provider));
     if (provider->account) json_object_object_add(object, "account", json_object_new_string(provider->account));
     if (provider->source) json_object_object_add(object, "source", json_object_new_string(provider->source));
+    if (provider->note) json_object_object_add(object, "note", json_object_new_string(provider->note));
     if (provider->status) {
         json_object *status = json_object_new_object();
         json_object_object_add(

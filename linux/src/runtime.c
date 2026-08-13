@@ -37,6 +37,7 @@ struct CodexBarRuntime {
     GHashTable *warning_states;
     GHashTable *failure_states;
     GHashTable *command_code_monthly_states;
+    CodexBarProvider *last_good_claude;
     CodexBarHistoryStore *history;
 };
 
@@ -197,6 +198,7 @@ void codexbar_runtime_free(CodexBarRuntime *runtime) {
     g_hash_table_unref(runtime->warning_states);
     g_hash_table_unref(runtime->failure_states);
     g_hash_table_unref(runtime->command_code_monthly_states);
+    codexbar_provider_free(runtime->last_good_claude);
     codexbar_history_store_free(runtime->history);
     g_free(runtime->config_digest);
     g_mutex_clear(&runtime->lock);
@@ -937,6 +939,115 @@ static void attach_status(CodexBarSnapshot *snapshot,
     }
 }
 
+static gboolean claude_limits_unavailable(const CodexBarProvider *provider) {
+    return provider && provider->note && g_str_equal(provider->note, "Limits unavailable");
+}
+
+static gboolean claude_terminal_cli_transient(const CodexBarProvider *provider) {
+    return provider && provider->error && g_str_equal(provider->source, "cli") && provider->error_kind &&
+           (g_str_equal(provider->error_kind, "parse") || g_str_equal(provider->error_kind, "rateLimit"));
+}
+
+static CodexBarProvider *provider_copy(const CodexBarProvider *provider) {
+    if (!provider) return NULL;
+    CodexBarProvider *copy = codexbar_provider_new();
+    copy->provider = g_strdup(provider->provider);
+    copy->account = g_strdup(provider->account);
+    copy->plan = g_strdup(provider->plan);
+    copy->source = g_strdup(provider->source);
+    copy->dashboard_url = g_strdup(provider->dashboard_url);
+    copy->note = g_strdup(provider->note);
+    copy->error = g_strdup(provider->error);
+    copy->error_code = provider->error_code;
+    copy->error_kind = g_strdup(provider->error_kind);
+    copy->has_subscription_expires_at = provider->has_subscription_expires_at;
+    copy->subscription_expires_at_ms = provider->subscription_expires_at_ms;
+    copy->has_subscription_renews_at = provider->has_subscription_renews_at;
+    copy->subscription_renews_at_ms = provider->subscription_renews_at_ms;
+    copy->has_updated_at = provider->has_updated_at;
+    copy->updated_at_ms = provider->updated_at_ms;
+    copy->explicit_quota_slots = provider->explicit_quota_slots;
+    copy->has_credits_updated_at = provider->has_credits_updated_at;
+    copy->credits_updated_at_ms = provider->credits_updated_at_ms;
+    copy->runtime_scope = g_strdup(provider->runtime_scope);
+    if (provider->identity) {
+        copy->identity = g_new0(CodexBarProviderIdentity, 1);
+        copy->identity->organization = g_strdup(provider->identity->organization);
+        copy->identity->account_id = g_strdup(provider->identity->account_id);
+        copy->identity->login_method = g_strdup(provider->identity->login_method);
+    }
+    if (provider->status) copy->status = status_copy(provider->status);
+    if (provider->provider_cost) {
+        copy->provider_cost = g_new0(CodexBarProviderCost, 1);
+        *copy->provider_cost = *provider->provider_cost;
+        copy->provider_cost->currency = g_strdup(provider->provider_cost->currency);
+        copy->provider_cost->period = g_strdup(provider->provider_cost->period);
+    }
+    if (provider->token_cost) {
+        copy->token_cost = g_new0(CodexBarTokenCost, 1);
+        *copy->token_cost = *provider->token_cost;
+        copy->token_cost->currency = g_strdup(provider->token_cost->currency);
+        copy->token_cost->history_label = g_strdup(provider->token_cost->history_label);
+    }
+    copy->credit_events = provider->credit_events ? json_object_get(provider->credit_events) : NULL;
+    copy->usage_extensions = provider->usage_extensions ? json_object_get(provider->usage_extensions) : NULL;
+    copy->raw = provider->raw ? json_object_get(provider->raw) : NULL;
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+        CodexBarQuotaWindow *window_copy = codexbar_quota_window_new(window->id, window->title);
+        *window_copy = *window;
+        window_copy->id = g_strdup(window->id);
+        window_copy->output_id = g_strdup(window->output_id);
+        window_copy->title = g_strdup(window->title);
+        window_copy->detail = g_strdup(window->detail);
+        window_copy->reset_description = g_strdup(window->reset_description);
+        window_copy->pace = NULL;
+        if (window->pace) {
+            window_copy->pace = g_new0(CodexBarPace, 1);
+            *window_copy->pace = *window->pace;
+            window_copy->pace->summary = g_strdup(window->pace->summary);
+        }
+        codexbar_provider_add_quota_window(copy, window_copy);
+    }
+    for (guint index = 0; index < provider->balances->len; index++) {
+        const CodexBarBalance *balance = codexbar_provider_balance(provider, index);
+        CodexBarBalance *balance_copy = g_new0(CodexBarBalance, 1);
+        *balance_copy = *balance;
+        balance_copy->id = g_strdup(balance->id);
+        balance_copy->title = g_strdup(balance->title);
+        balance_copy->unit = g_strdup(balance->unit);
+        codexbar_provider_add_balance(copy, balance_copy);
+    }
+    return copy;
+}
+
+static void reconcile_claude_snapshot(CodexBarRuntime *runtime, CodexBarSnapshot *snapshot) {
+    g_mutex_lock(&runtime->lock);
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
+        if (!g_str_equal(provider->provider, "claude")) continue;
+        if (!provider->error) {
+            if (claude_limits_unavailable(provider) && !provider->token_cost && runtime->last_good_claude &&
+                runtime->last_good_claude->token_cost) {
+                CodexBarProvider *prior = provider_copy(runtime->last_good_claude);
+                provider->token_cost = prior->token_cost;
+                prior->token_cost = NULL;
+                codexbar_provider_free(prior);
+            }
+            codexbar_provider_free(runtime->last_good_claude);
+            runtime->last_good_claude = provider_copy(provider);
+        } else if (claude_terminal_cli_transient(provider) && runtime->last_good_claude) {
+            CodexBarProvider *preserved = provider_copy(runtime->last_good_claude);
+            g_ptr_array_index(snapshot->providers, index) = preserved;
+            codexbar_provider_free(provider);
+        } else {
+            codexbar_provider_free(runtime->last_good_claude);
+            runtime->last_good_claude = NULL;
+        }
+    }
+    g_mutex_unlock(&runtime->lock);
+}
+
 CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
                                         GCancellable *cancellable,
                                         GError **error) {
@@ -975,6 +1086,7 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
         g_ptr_array_unref(requests);
         return snapshot;
     }
+    reconcile_claude_snapshot(runtime, snapshot);
     for (guint index = 0; index < requests->len; index++) {
         StatusRequest *request = g_ptr_array_index(requests, index);
         CodexBarServiceStatus *fresh = request_status(request);

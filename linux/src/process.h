@@ -13,6 +13,7 @@ typedef struct {
     guint termination_grace_milliseconds;
     size_t maximum_output_bytes;
     gboolean new_session;
+    gboolean pseudo_terminal;
 } CodexBarProcessRequest;
 
 typedef struct {

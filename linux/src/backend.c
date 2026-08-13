@@ -161,6 +161,18 @@ static CodexBarProvider *provider_error(const CodexBarProviderConfig *config, co
         g_free(provider->error_kind);
         provider->error_kind = g_strdup("timeout");
     }
+    if (error && g_str_equal(config->id, "claude")) {
+        if (strstr(error->message, "Claude CLI") && strstr(error->message, "rate limited")) {
+            provider->error_code = 5;
+            g_free(provider->error_kind);
+            provider->error_kind = g_strdup("rateLimit");
+        } else if (strstr(error->message, "Claude CLI") &&
+                   (strstr(error->message, "not logged in") || strstr(error->message, "unauthorized"))) {
+            provider->error_code = 6;
+            g_free(provider->error_kind);
+            provider->error_kind = g_strdup("auth");
+        }
+    }
     g_clear_error(&error);
     return provider;
 }
@@ -408,6 +420,9 @@ static CodexBarProvider *fetch_provider(const CodexBarProviderConfig *config,
     const char *error_source = g_str_equal(configured_source, "auto") && auto_plan_count == 1
                                    ? auto_plan[0]
                                    : configured_source;
+    if (!provider && error && g_str_equal(config->id, "claude") && strstr(error->message, "Claude CLI")) {
+        error_source = "cli";
+    }
     return provider ? provider : provider_error(config, error_source, error);
 }
 

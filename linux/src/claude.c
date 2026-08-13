@@ -547,8 +547,35 @@ static char *line_value(char **lines, const char *prefix) {
 CodexBarProvider *codexbar_claude_parse_cli_usage(const char *text, gint64 updated_at_ms, GError **error) {
     char *clean = strip_ansi(text ? text : "");
     char *lower = g_ascii_strdown(clean, -1);
-    if (strstr(lower, "failed to load usage data") ||
-        strstr(lower, "currently using your subscription to power your claude code usage")) {
+    if (strstr(lower, "currently using your subscription to power your claude code usage")) {
+        CodexBarProvider *provider = codexbar_provider_new();
+        provider->provider = g_strdup("claude");
+        provider->source = g_strdup("cli");
+        provider->plan = g_strdup("Claude Education");
+        provider->note = g_strdup("Limits unavailable");
+        provider->explicit_quota_slots = TRUE;
+        provider->has_updated_at = TRUE;
+        provider->updated_at_ms = updated_at_ms;
+        provider->identity = g_new0(CodexBarProviderIdentity, 1);
+        provider->identity->login_method = g_strdup("Claude Education");
+        g_free(lower);
+        g_free(clean);
+        return provider;
+    }
+    if (strstr(lower, "not logged in") || strstr(lower, "login required") ||
+        strstr(lower, "run `claude login`") || strstr(lower, "run 'claude login'")) {
+        g_set_error_literal(error, claude_error_quark(), 20, "Claude CLI is not logged in");
+        g_free(lower);
+        g_free(clean);
+        return NULL;
+    }
+    if (strstr(lower, "rate limit") || strstr(lower, "too many requests")) {
+        g_set_error_literal(error, claude_error_quark(), 19, "Claude CLI usage is rate limited");
+        g_free(lower);
+        g_free(clean);
+        return NULL;
+    }
+    if (strstr(lower, "failed to load usage data")) {
         g_set_error_literal(error, claude_error_quark(), 9, "Claude CLI /usage did not return subscription quota data");
         g_free(lower);
         g_free(clean);
@@ -1074,6 +1101,16 @@ static CodexBarProvider *fetch_cli(CodexBarClaudeRunner runner,
     g_strfreev(environment);
     if (!result) return NULL;
     if (!codexbar_process_result_succeeded(result)) {
+        char *combined = g_strdup_printf("%s\n%s", result->standard_output, result->standard_error);
+        char *lower = g_ascii_strdown(combined, -1);
+        gboolean rate_limited = strstr(lower, "rate limit") || strstr(lower, "too many requests");
+        g_free(lower);
+        g_free(combined);
+        if (rate_limited) {
+            g_set_error_literal(error, claude_error_quark(), 19, "Claude CLI usage is rate limited");
+            codexbar_process_result_free(result);
+            return NULL;
+        }
         g_set_error(error, claude_error_quark(), 17,
                     "Claude CLI /usage exited with status %d", result->exit_status);
         codexbar_process_result_free(result);

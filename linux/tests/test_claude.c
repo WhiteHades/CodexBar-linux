@@ -111,6 +111,7 @@ static guint transport_calls;
 static guint runner_calls;
 static int transport_mode;
 static gboolean runner_fails;
+static gboolean runner_subscription_only;
 
 static CodexBarHttpResponse *response(long status, const char *body) {
     CodexBarHttpResponse *value = g_new0(CodexBarHttpResponse, 1);
@@ -156,9 +157,11 @@ static CodexBarProcessResult *source_runner(const CodexBarProcessRequest *reques
     g_assert_null(g_environ_getenv((char **)request->environment, "ANTHROPIC_ADMIN_KEY"));
     g_assert_cmpstr(g_environ_getenv((char **)request->environment, "DISABLE_AUTOUPDATER"), ==, "1");
     CodexBarProcessResult *result = g_new0(CodexBarProcessResult, 1);
-    result->standard_output = g_strdup(
-        "Current session\n25% used\nCurrent week (all models)\n80% left\n"
-        "Current week (Sonnet only)\n10% used\nAccount: cli@example.test\nOrg: CLI Org\n");
+    result->standard_output = runner_subscription_only
+                                  ? g_strdup("You are currently using your subscription to power your Claude Code usage.\n")
+                                  : g_strdup(
+                                        "Current session\n25% used\nCurrent week (all models)\n80% left\n"
+                                        "Current week (Sonnet only)\n10% used\nAccount: cli@example.test\nOrg: CLI Org\n");
     result->standard_output_length = strlen(result->standard_output);
     result->exit_status = runner_fails ? 1 : 0;
     return result;
@@ -178,6 +181,38 @@ static void test_cli_usage(void) {
     g_assert_cmpstr(provider->account, ==, "user@example.test");
     g_assert_cmpstr(provider->identity->organization, ==, "Example Org");
     codexbar_provider_free(provider);
+}
+
+static void test_cli_subscription_limits_unavailable(void) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_claude_parse_cli_usage(
+        "You are currently using your subscription to power your Claude Code usage.\n", 1000, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "cli");
+    g_assert_cmpstr(provider->plan, ==, "Claude Education");
+    g_assert_cmpstr(provider->note, ==, "Limits unavailable");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    codexbar_provider_free(provider);
+
+    CodexBarProviderConfig config = {.id = "claude", .raw = json_object_new_object()};
+    json_object_object_add(config.raw, "cookieHeader", json_object_new_string("sessionKey=sk-ant-session"));
+    g_setenv("CLAUDE_CONFIG_DIR", "/nonexistent-codexbar-claude-test", TRUE);
+    runner_subscription_only = TRUE;
+    transport_calls = 0;
+    runner_calls = 0;
+    transport_mode = 0;
+    provider = codexbar_claude_fetch_with_adapters_for_runtime(
+        &config, "auto", FALSE, source_transport, source_runner, NULL, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->note, ==, "Limits unavailable");
+    g_assert_cmpuint(runner_calls, ==, 1);
+    g_assert_cmpuint(transport_calls, ==, 0);
+    codexbar_provider_free(provider);
+    runner_subscription_only = FALSE;
+    json_object_put(config.raw);
+    g_unsetenv("CLAUDE_CONFIG_DIR");
 }
 
 static void test_source_planner(void) {
@@ -256,6 +291,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/claude/spend-only", test_spend_only);
     g_test_add_func("/claude/invalid-usage", test_invalid_usage);
     g_test_add_func("/claude/cli-usage", test_cli_usage);
+    g_test_add_func("/claude/cli-limits-unavailable", test_cli_subscription_limits_unavailable);
     g_test_add_func("/claude/source-planner", test_source_planner);
     return g_test_run();
 }

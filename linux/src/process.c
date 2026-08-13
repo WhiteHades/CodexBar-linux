@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pty.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdint.h>
@@ -442,6 +443,10 @@ static gboolean drain_pipe(int *descriptor,
         }
         if (errno == EINTR) continue;
         if (errno == EAGAIN || errno == EWOULDBLOCK) return TRUE;
+        if (errno == EIO) {
+            close_descriptor(descriptor);
+            return TRUE;
+        }
         int code = errno;
         close_descriptor(descriptor);
         if (!error || !*error) {
@@ -461,7 +466,7 @@ static char *finish_output(GByteArray *output, size_t *length) {
 
 static void free_supervisor_arguments(char **arguments, size_t target_count) {
     if (!arguments) return;
-    for (size_t index = 0; index < target_count; index++) g_free(arguments[index + 5]);
+    for (size_t index = 0; index < target_count; index++) g_free(arguments[index + 6]);
     g_free(arguments);
 }
 
@@ -473,6 +478,7 @@ CodexBarProcessResult *codexbar_process_run(
         request->termination_grace_milliseconds > 60000 ||
         request->standard_input_length > MAX_STANDARD_INPUT_BYTES ||
         (request->standard_input_length > 0 && !request->standard_input) ||
+        (request->pseudo_terminal && request->standard_input) ||
         (request->working_directory && strlen(request->working_directory) > UINT32_MAX)) {
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Process request is invalid");
         return NULL;
@@ -509,14 +515,15 @@ CodexBarProcessResult *codexbar_process_run(
     while (request->arguments[argument_count]) argument_count++;
     char *expected_parent = g_strdup_printf("%ld", (long)getpid());
     char *grace = g_strdup_printf("%u", request->termination_grace_milliseconds);
-    char **supervisor_arguments = g_new0(char *, argument_count + 6);
+    char **supervisor_arguments = g_new0(char *, argument_count + 7);
     supervisor_arguments[0] = supervisor;
     supervisor_arguments[1] = expected_parent;
     supervisor_arguments[2] = request->new_session ? "--session" : "--group";
-    supervisor_arguments[3] = grace;
-    supervisor_arguments[4] = "--";
+    supervisor_arguments[3] = request->pseudo_terminal ? "--pty" : "--pipes";
+    supervisor_arguments[4] = grace;
+    supervisor_arguments[5] = "--";
     for (size_t index = 0; index < argument_count; index++) {
-        supervisor_arguments[index + 5] = g_strdup(request->arguments[index]);
+        supervisor_arguments[index + 6] = g_strdup(request->arguments[index]);
     }
 
     int stdout_pipe[2] = {-1, -1};
@@ -532,7 +539,9 @@ CodexBarProcessResult *codexbar_process_run(
     int child_startup = -1;
     int child_acknowledgement = -1;
     gboolean has_standard_input = request->standard_input != NULL;
-    if (pipe2(stdout_pipe, O_CLOEXEC) < 0 || pipe2(stderr_pipe, O_CLOEXEC) < 0 ||
+    if ((request->pseudo_terminal && openpty(&stdout_pipe[0], &stdout_pipe[1], NULL, NULL, NULL) < 0) ||
+        (!request->pseudo_terminal && pipe2(stdout_pipe, O_CLOEXEC) < 0) ||
+        (!request->pseudo_terminal && pipe2(stderr_pipe, O_CLOEXEC) < 0) ||
         (has_standard_input && pipe2(stdin_pipe, O_CLOEXEC) < 0) ||
         pipe2(configuration_pipe, O_CLOEXEC) < 0 || pipe2(startup_pipe, O_CLOEXEC) < 0 ||
         pipe2(acknowledgement_pipe, O_CLOEXEC) < 0) {
@@ -552,15 +561,34 @@ CodexBarProcessResult *codexbar_process_run(
         g_set_error(error, G_IO_ERROR, g_io_error_from_errno(code), "Failed to create process pipes: %s", g_strerror(code));
         goto arguments_failed;
     }
-    if (!set_nonblocking(stdout_pipe[0], error) || !set_nonblocking(stderr_pipe[0], error) ||
+    if (request->pseudo_terminal &&
+        (fcntl(stdout_pipe[0], F_SETFD, FD_CLOEXEC) < 0 || fcntl(stdout_pipe[1], F_SETFD, FD_CLOEXEC) < 0)) {
+        int code = errno;
+        g_set_error(error,
+                    G_IO_ERROR,
+                    g_io_error_from_errno(code),
+                    "Failed to configure process terminal: %s",
+                    g_strerror(code));
+        goto setup_failed;
+    }
+    if (!set_nonblocking(stdout_pipe[0], error) ||
+        (!request->pseudo_terminal && !set_nonblocking(stderr_pipe[0], error)) ||
         (has_standard_input && !set_nonblocking(stdin_pipe[1], error)) ||
         !set_nonblocking(configuration_pipe[1], error) || !set_nonblocking(startup_pipe[0], error) ||
         !set_nonblocking(acknowledgement_pipe[1], error)) {
         goto setup_failed;
     }
-    if (has_standard_input) child_stdin = duplicate_child_descriptor(stdin_pipe[0], error);
-    child_stdout = has_standard_input && child_stdin < 0 ? -1 : duplicate_child_descriptor(stdout_pipe[1], error);
-    if (child_stdout >= 0) child_stderr = duplicate_child_descriptor(stderr_pipe[1], error);
+    if (request->pseudo_terminal) {
+        child_stdin = duplicate_child_descriptor(stdout_pipe[1], error);
+    } else if (has_standard_input) {
+        child_stdin = duplicate_child_descriptor(stdin_pipe[0], error);
+    }
+    child_stdout = (has_standard_input || request->pseudo_terminal) && child_stdin < 0
+                       ? -1
+                       : duplicate_child_descriptor(stdout_pipe[1], error);
+    if (child_stdout >= 0) {
+        child_stderr = duplicate_child_descriptor(request->pseudo_terminal ? stdout_pipe[1] : stderr_pipe[1], error);
+    }
     if (child_stderr >= 0) child_configuration = duplicate_child_descriptor(configuration_pipe[0], error);
     if (child_configuration >= 0) child_startup = duplicate_child_descriptor(startup_pipe[1], error);
     if (child_startup >= 0) child_acknowledgement = duplicate_child_descriptor(acknowledgement_pipe[0], error);
@@ -583,8 +611,9 @@ CodexBarProcessResult *codexbar_process_run(
     }
     attributes_initialized = TRUE;
 
-    code = has_standard_input ? posix_spawn_file_actions_adddup2(&actions, child_stdin, STDIN_FILENO)
-                              : posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    code = (has_standard_input || request->pseudo_terminal)
+               ? posix_spawn_file_actions_adddup2(&actions, child_stdin, STDIN_FILENO)
+               : posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     if (code == 0) code = posix_spawn_file_actions_adddup2(&actions, child_stdout, STDOUT_FILENO);
     if (code == 0) code = posix_spawn_file_actions_adddup2(&actions, child_stderr, STDERR_FILENO);
     if (code == 0) code = posix_spawn_file_actions_adddup2(&actions, child_configuration, 3);

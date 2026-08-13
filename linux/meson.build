@@ -91,6 +91,8 @@ core_sources = files(
 )
 
 core_deps = [glib_dep, gio_dep, json_dep, curl_dep, sqlite_dep, math_dep]
+util_dep = meson.get_compiler('c').find_library('util')
+core_deps += util_dep
 
 process_supervisor = executable(
   'codexbar-process-supervisor',
@@ -163,9 +165,9 @@ test('codexbar-linux', test_executable, env: normalized_test_env, depends: proce
 
 refresh_test = executable(
   'codexbar-linux-refresh-tests',
-  files('tests/test_refresh.c', 'src/refresh_coordinator.c', 'src/refresh_policy.c'),
+  files('tests/test_refresh.c', 'src/refresh_coordinator.c', 'src/refresh_policy.c', 'src/model.c'),
   include_directories: source_includes,
-  dependencies: [glib_dep],
+  dependencies: [glib_dep, json_dep, math_dep],
 )
 test('codexbar-linux-refresh', refresh_test, env: normalized_test_env)
 
@@ -727,7 +729,7 @@ process_test = executable(
   'codexbar-linux-process-tests',
   files('src/process.c', 'tests/test_process.c'),
   include_directories: source_includes,
-  dependencies: [glib_dep, gio_dep],
+  dependencies: [glib_dep, gio_dep, util_dep],
 )
 test('codexbar-linux-process', process_test, env: normalized_test_env, depends: process_supervisor)
 
