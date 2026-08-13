@@ -290,16 +290,26 @@ test(
 )
 
 cost_cli_test = find_program('tests/test_cost_cli.sh')
-test('codexbar-linux-cost-cli', cost_cli_test, args: [codexbar_linux], depends: process_supervisor)
+test(
+  'codexbar-linux-cost-cli',
+  cost_cli_test,
+  args: [codexbar_linux, meson.project_source_root() / 'fixtures/native/local-parity', find_program('python3')],
+  depends: process_supervisor,
+)
 
 sessions_cli_test = find_program('tests/test_sessions_cli.sh')
-test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], depends: process_supervisor)
+test(
+  'codexbar-linux-sessions-cli',
+  sessions_cli_test,
+  args: [codexbar_linux, meson.project_source_root() / 'fixtures/native/local-parity', find_program('python3')],
+  depends: process_supervisor,
+)
 
 remote_sessions_test = executable(
   'codexbar-linux-remote-sessions-tests',
   files('tests/test_remote_sessions.c', 'src/sessions.c', 'src/process.c'),
   include_directories: source_includes,
-  dependencies: [glib_dep, gio_dep, json_dep],
+  dependencies: [glib_dep, gio_dep, json_dep, sqlite_dep],
 )
 test('codexbar-linux-remote-sessions', remote_sessions_test, env: normalized_test_env)
 

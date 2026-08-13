@@ -4,13 +4,17 @@
 
 #include <errno.h>
 #include <json-c/json.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
 enum {
     MAX_JSONL_LINE_BYTES = 512 * 1024,
+    MAX_JSONL_FILE_BYTES = 512 * 1024 * 1024,
     MAX_DIRECTORY_DEPTH = 64,
+    MAX_JSONL_FILES = 4096,
+    MAX_TRACE_ROWS = 4096,
 };
 
 typedef struct {
@@ -56,7 +60,38 @@ typedef struct {
     CodexBarCostReport *report;
     const char *since;
     const char *current_since;
+    GHashTable *baselines;
+    GHashTable *priority_turns;
 } CodexScan;
+
+typedef struct {
+    char *session_id;
+    char *parent_id;
+    gboolean subagent;
+    gboolean compact_candidate;
+    TokenTotals compact_prefix;
+    gboolean has_totals;
+    TokenTotals totals;
+    GArray *totals_history;
+    guint line_index;
+    guint boundary_line;
+    guint pending_turn_line;
+    gboolean saw_turn;
+    gboolean has_last_total;
+    TokenTotals last_total;
+} CodexBaseline;
+
+typedef struct {
+    char *thread_id;
+    char *model;
+} PriorityTurn;
+
+typedef struct {
+    CodexBarCostReport *report;
+    const char *since;
+    const char *current_since;
+    GHashTable *seen_entries;
+} PiScan;
 
 typedef gboolean (*JsonlFileCallback)(const char *path, gpointer user_data, GError **error);
 
@@ -84,8 +119,8 @@ static const Pricing codex_pricing[] = {
     {"gpt-5.5", 5e-6, 0.5e-6, 30e-6, 5e-6},
     {"gpt-5.5-pro", 30e-6, 30e-6, 180e-6, 30e-6},
     {"gpt-5.6-sol", 5e-6, 0.5e-6, 30e-6, 6.25e-6},
-    {"gpt-5.6-terra", 2.5e-6, 0.25e-6, 15e-6, 3.125e-6},
-    {"gpt-5.6-luna", 1e-6, 0.1e-6, 6e-6, 1.25e-6},
+    {"gpt-5.6-terra", 2e-6, 0.2e-6, 12e-6, 2.5e-6},
+    {"gpt-5.6-luna", 0.2e-6, 0.02e-6, 1.2e-6, 0.25e-6},
 };
 
 static const Pricing claude_pricing[] = {
@@ -145,6 +180,23 @@ static void claude_row_free(gpointer data) {
     g_free(row->path);
     g_free(row->key);
     g_free(row);
+}
+
+static void codex_baseline_free(gpointer data) {
+    CodexBaseline *baseline = data;
+    if (!baseline) return;
+    g_free(baseline->session_id);
+    g_free(baseline->parent_id);
+    g_array_unref(baseline->totals_history);
+    g_free(baseline);
+}
+
+static void priority_turn_free(gpointer data) {
+    PriorityTurn *turn = data;
+    if (!turn) return;
+    g_free(turn->thread_id);
+    g_free(turn->model);
+    g_free(turn);
 }
 
 void codexbar_cost_report_free(CodexBarCostReport *report) {
@@ -299,6 +351,15 @@ static char *timestamp_day(const char *timestamp) {
     return day;
 }
 
+static GDateTime *cost_now(void) {
+    const char *override = g_getenv("CODEXBAR_COST_NOW");
+    if (override && override[0] != '\0') {
+        GDateTime *parsed = g_date_time_new_from_iso8601(override, NULL);
+        if (parsed) return parsed;
+    }
+    return g_date_time_new_now_local();
+}
+
 static gboolean day_in_range(const char *day, const char *since, const char *today) {
     return day && g_strcmp0(day, since) >= 0 && g_strcmp0(day, today) <= 0;
 }
@@ -336,6 +397,20 @@ static char *normalize_codex_model(const char *raw) {
     char *result = g_strdup(model);
     g_free(clean);
     return result;
+}
+
+static double codex_fast_multiplier(const char *model) {
+    char *normalized = normalize_codex_model(model);
+    double multiplier = 0;
+    if (g_str_equal(normalized, "gpt-5.4") || g_str_equal(normalized, "gpt-5.4-mini") ||
+        g_str_equal(normalized, "gpt-5.6-sol") || g_str_equal(normalized, "gpt-5.6-terra") ||
+        g_str_equal(normalized, "gpt-5.6-luna")) {
+        multiplier = 2;
+    } else if (g_str_equal(normalized, "gpt-5.5")) {
+        multiplier = 2.5;
+    }
+    g_free(normalized);
+    return multiplier;
 }
 
 static char *normalize_claude_model(const char *raw) {
@@ -406,6 +481,7 @@ static void add_model_usage(CodexBarCostReport *report,
                             TokenTotals usage,
                             gboolean priced,
                             double cost,
+                            gboolean priority,
                             gboolean current) {
     CodexBarCostModel *model = find_model(report, raw_model);
     add_unique_string(model->raw_aliases, raw_model ? raw_model : "unknown");
@@ -423,6 +499,13 @@ static void add_model_usage(CodexBarCostReport *report,
         if (priced) {
             model->known_cost_usd += cost;
             model->priced_tokens += tokens;
+            if (priority) {
+                model->priority_tokens += tokens;
+                model->priority_cost_usd += cost;
+            } else {
+                model->standard_tokens += tokens;
+                model->standard_cost_usd += cost;
+            }
         } else {
             model->unpriced_tokens += tokens;
         }
@@ -531,7 +614,8 @@ static gboolean scan_jsonl_file(const char *path,
 }
 
 static gboolean walk_jsonl(const char *directory,
-                           guint depth,
+                            guint depth,
+                            guint *file_count,
                            JsonlFileCallback callback,
                            gpointer user_data,
                            GError **error) {
@@ -557,9 +641,16 @@ static gboolean walk_jsonl(const char *directory,
         }
         gboolean ok = TRUE;
         if (S_ISDIR(status.st_mode)) {
-            ok = walk_jsonl(path, depth + 1, callback, user_data, error);
-        } else if (S_ISREG(status.st_mode) && g_str_has_suffix(name, ".jsonl") && status.st_size > 0) {
-            ok = callback(path, user_data, error);
+            ok = walk_jsonl(path, depth + 1, file_count, callback, user_data, error);
+        } else if (S_ISREG(status.st_mode) && g_str_has_suffix(name, ".jsonl") && status.st_size > 0 &&
+                   status.st_size <= MAX_JSONL_FILE_BYTES) {
+            if (*file_count >= MAX_JSONL_FILES) {
+                g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "Too many JSONL files under %s", directory);
+                ok = FALSE;
+            } else {
+                (*file_count)++;
+                ok = callback(path, user_data, error);
+            }
         }
         g_free(path);
         if (!ok) {
@@ -571,21 +662,62 @@ static gboolean walk_jsonl(const char *directory,
     return TRUE;
 }
 
+static gboolean collect_jsonl_path(const char *path, gpointer user_data, GError **error) {
+    (void)error;
+    g_ptr_array_add(user_data, g_strdup(path));
+    return TRUE;
+}
+
 static gboolean scan_roots(GPtrArray *roots,
                            JsonlFileCallback callback,
                            gpointer user_data,
                            GError **error) {
+    guint file_count = 0;
+    GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    GHashTable *seen_files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     for (guint index = 0; index < roots->len; index++) {
         const char *root = g_ptr_array_index(roots, index);
+        char *canonical = g_canonicalize_filename(root, NULL);
+        if (g_hash_table_contains(seen, canonical)) {
+            g_free(canonical);
+            continue;
+        }
+        g_hash_table_add(seen, canonical);
         struct stat status;
         if (lstat(root, &status) != 0) {
             if (errno == ENOENT) continue;
             g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno), "Could not inspect %s: %s", root, g_strerror(errno));
+            g_hash_table_unref(seen);
+            g_hash_table_unref(seen_files);
             return FALSE;
         }
         if (!S_ISDIR(status.st_mode)) continue;
-        if (!walk_jsonl(root, 0, callback, user_data, error)) return FALSE;
+        GPtrArray *files = g_ptr_array_new_with_free_func(g_free);
+        if (!walk_jsonl(root, 0, &file_count, collect_jsonl_path, files, error)) {
+            g_ptr_array_unref(files);
+            g_hash_table_unref(seen);
+            g_hash_table_unref(seen_files);
+            return FALSE;
+        }
+        for (guint file_index = 0; file_index < files->len; file_index++) {
+            const char *path = g_ptr_array_index(files, file_index);
+            char *canonical_file = g_canonicalize_filename(path, NULL);
+            if (!g_hash_table_contains(seen_files, canonical_file)) {
+                g_hash_table_add(seen_files, canonical_file);
+                if (!callback(path, user_data, error)) {
+                    g_ptr_array_unref(files);
+                    g_hash_table_unref(seen);
+                    g_hash_table_unref(seen_files);
+                    return FALSE;
+                }
+            } else {
+                g_free(canonical_file);
+            }
+        }
+        g_ptr_array_unref(files);
     }
+    g_hash_table_unref(seen);
+    g_hash_table_unref(seen_files);
     return TRUE;
 }
 
@@ -643,6 +775,20 @@ static GPtrArray *claude_roots(void) {
     return roots;
 }
 
+static GPtrArray *pi_roots(void) {
+    GPtrArray *roots = g_ptr_array_new_with_free_func(g_free);
+    const char *pi = g_getenv("CODEXBAR_COST_PI_ROOT");
+    const char *omp = g_getenv("CODEXBAR_COST_OMP_ROOT");
+    if ((pi && pi[0] != '\0') || (omp && omp[0] != '\0')) {
+        if (pi && pi[0] != '\0') g_ptr_array_add(roots, g_strdup(pi));
+        if (omp && omp[0] != '\0') g_ptr_array_add(roots, g_strdup(omp));
+        return roots;
+    }
+    g_ptr_array_add(roots, g_build_filename(g_get_home_dir(), ".pi", "agent", "sessions", NULL));
+    g_ptr_array_add(roots, g_build_filename(g_get_home_dir(), ".omp", "agent", "sessions", NULL));
+    return roots;
+}
+
 static TokenTotals token_totals(json_object *usage) {
     gint64 cached = integer_field(usage, "cached_input_tokens");
     if (cached == 0) cached = integer_field(usage, "cache_read_input_tokens");
@@ -658,6 +804,11 @@ static TokenTotals token_totals(json_object *usage) {
 static gboolean totals_equal(TokenTotals left, TokenTotals right) {
     return left.input == right.input && left.cached == right.cached && left.output == right.output &&
            left.cache_create == right.cache_create && left.reasoning == right.reasoning;
+}
+
+static gboolean prefix_totals_equal(TokenTotals left, TokenTotals right) {
+    return left.input == right.input && left.cached == right.cached && left.output == right.output &&
+        left.cache_create == right.cache_create;
 }
 
 static TokenTotals totals_delta(TokenTotals current, TokenTotals baseline) {
@@ -686,6 +837,153 @@ static TokenTotals totals_max(TokenTotals left, TokenTotals right) {
                          MAX(left.reasoning, right.reasoning)};
 }
 
+static gboolean baseline_line(json_object *object, const char *path, gpointer user_data) {
+    (void)path;
+    CodexBaseline *baseline = user_data;
+    guint line = baseline->line_index++;
+    const char *type = string_field(object, "type");
+    json_object *payload = object_field(object, "payload");
+    if (g_strcmp0(type, "session_meta") == 0) {
+        const char *id = string_field(payload, "id");
+        if (!id) id = string_field(payload, "session_id");
+        if (id && !baseline->session_id) baseline->session_id = g_strdup(id);
+        const char *parent = string_field(payload, "forked_from_id");
+        if (!parent) parent = string_field(payload, "parent_session_id");
+        if (!parent) parent = string_field(payload, "parent_thread_id");
+        if (parent && !baseline->parent_id) baseline->parent_id = g_strdup(parent);
+        json_object *source = object_field(payload, "source");
+        if (source && json_object_is_type(source, json_type_object) && object_field(source, "subagent")) {
+            baseline->subagent = TRUE;
+        }
+        return TRUE;
+    }
+    if (g_strcmp0(type, "turn_context") == 0) {
+        gboolean first = !baseline->saw_turn;
+        baseline->saw_turn = TRUE;
+        baseline->pending_turn_line = first && baseline->has_last_total ? line : G_MAXUINT;
+        return TRUE;
+    }
+    if (g_strcmp0(type, "inter_agent_communication_metadata") == 0) {
+        if (baseline->subagent && boolean_field(payload, "trigger_turn") &&
+            baseline->pending_turn_line != G_MAXUINT && line == baseline->pending_turn_line + 1) {
+            baseline->compact_candidate = TRUE;
+            baseline->compact_prefix = baseline->last_total;
+            baseline->boundary_line = baseline->pending_turn_line;
+        }
+        baseline->pending_turn_line = G_MAXUINT;
+        return TRUE;
+    }
+    if (g_strcmp0(type, "event_msg") != 0 || g_strcmp0(string_field(payload, "type"), "token_count") != 0) {
+        return TRUE;
+    }
+    json_object *info = object_field(payload, "info");
+    json_object *total_object = object_field(info, "total_token_usage");
+    if (total_object && json_object_is_type(total_object, json_type_object)) {
+        baseline->last_total = token_totals(total_object);
+        baseline->totals = baseline->last_total;
+        g_array_append_val(baseline->totals_history, baseline->last_total);
+        baseline->has_last_total = TRUE;
+        baseline->has_totals = TRUE;
+    }
+    return TRUE;
+}
+
+static gboolean collect_codex_baseline(const char *path, gpointer user_data, GError **error) {
+    GHashTable *baselines = user_data;
+    CodexBaseline *baseline = g_new0(CodexBaseline, 1);
+    baseline->totals_history = g_array_new(FALSE, FALSE, sizeof(TokenTotals));
+    baseline->pending_turn_line = G_MAXUINT;
+    if (!scan_jsonl_file(path, baseline_line, baseline, error)) {
+        codex_baseline_free(baseline);
+        return FALSE;
+    }
+    if (!baseline->session_id) {
+        codex_baseline_free(baseline);
+        return TRUE;
+    }
+    CodexBaseline *existing = g_hash_table_lookup(baselines, baseline->session_id);
+    if (!existing || (baseline->has_totals && !existing->has_totals)) {
+        g_hash_table_replace(baselines, g_strdup(baseline->session_id), baseline);
+    } else {
+        codex_baseline_free(baseline);
+    }
+    return TRUE;
+}
+
+static char *trace_value(const char *body, const char *name) {
+    char *needle = g_strdup_printf("%s=", name);
+    const char *start = strstr(body, needle);
+    g_free(needle);
+    if (!start) return NULL;
+    start = strchr(start, '=') + 1;
+    const char *end = start;
+    while (*end && !g_ascii_isspace(*end) && !strchr(",])}:", *end)) end++;
+    return end > start ? g_strndup(start, (gsize)(end - start)) : NULL;
+}
+
+static char *trace_quoted_value(const char *body, const char *name) {
+    char *needle = g_strdup_printf("%s: \"", name);
+    const char *start = strstr(body, needle);
+    if (start) start += strlen(needle);
+    g_free(needle);
+    if (!start) return NULL;
+    const char *end = strchr(start, '\"');
+    return end && end > start ? g_strndup(start, (gsize)(end - start)) : NULL;
+}
+
+static void load_priority_turns(GHashTable *turns, const char *since) {
+    const char *override = g_getenv("CODEXBAR_COST_CODEX_TRACE_DB");
+    char *path = override && override[0] != '\0'
+        ? g_strdup(override)
+        : g_build_filename(g_getenv("CODEX_HOME") ? g_getenv("CODEX_HOME") : g_get_home_dir(),
+                           g_getenv("CODEX_HOME") ? "logs_2.sqlite" : ".codex/logs_2.sqlite",
+                           NULL);
+    sqlite3 *database = NULL;
+    if (sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        sqlite3_close(database);
+        g_free(path);
+        return;
+    }
+    sqlite3_busy_timeout(database, 100);
+    GDateTime *since_date = g_date_time_new_from_iso8601(since, NULL);
+    gint64 since_epoch = since_date ? g_date_time_to_unix(since_date) : 0;
+    if (since_date) g_date_time_unref(since_date);
+    const char *query = "select feedback_log_body from logs where ts >= ?1 and feedback_log_body like ?2 "
+                        "order by rowid limit ?3";
+    sqlite3_stmt *statement = NULL;
+    if (sqlite3_prepare_v2(database, query, -1, &statement, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(statement, 1, since_epoch);
+        sqlite3_bind_text(statement, 2, "%service_tier: Some(Some(\"priority\"))%", -1, SQLITE_STATIC);
+        sqlite3_bind_int(statement, 3, MAX_TRACE_ROWS);
+        while (sqlite3_step(statement) == SQLITE_ROW) {
+            const char *body = (const char *)sqlite3_column_text(statement, 0);
+            int body_length = sqlite3_column_bytes(statement, 0);
+            if (!body || body_length <= 0 || body_length > 1024 * 1024 ||
+                !strstr(body, "Submission sub=Submission {")) {
+                continue;
+            }
+            const char *submission = strstr(body, "Submission sub=Submission {");
+            char *turn_id = trace_quoted_value(submission, "id");
+            if (!turn_id) continue;
+            PriorityTurn *turn = g_new0(PriorityTurn, 1);
+            turn->thread_id = trace_value(body, "thread_id");
+            g_hash_table_replace(turns, turn_id, turn);
+        }
+    }
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
+    g_free(path);
+}
+
+static gboolean baseline_contains_totals(const CodexBaseline *baseline, TokenTotals totals) {
+    if (!baseline) return FALSE;
+    for (guint index = 0; index < baseline->totals_history->len; index++) {
+        TokenTotals candidate = g_array_index(baseline->totals_history, TokenTotals, index);
+        if (prefix_totals_equal(candidate, totals)) return TRUE;
+    }
+    return FALSE;
+}
+
 typedef struct {
     CodexScan *scan;
     char *model;
@@ -701,6 +999,11 @@ typedef struct {
     TokenTotals watermark;
     gboolean divergent;
     gboolean interleaved;
+    gboolean compact_confirmed;
+    guint compact_boundary_line;
+    guint line_index;
+    TokenTotals compact_prefix;
+    char *turn_id;
     GArray *seen;
 } CodexFile;
 
@@ -721,6 +1024,7 @@ static void remember_totals(CodexFile *file, TokenTotals totals) {
 
 static gboolean codex_line(json_object *object, const char *path, gpointer user_data) {
     CodexFile *file = user_data;
+    guint line = file->line_index++;
     const char *type = string_field(object, "type");
     json_object *payload = object_field(object, "payload");
     if (g_strcmp0(type, "session_meta") == 0) {
@@ -733,6 +1037,16 @@ static gboolean codex_line(json_object *object, const char *path, gpointer user_
         if (session_id) {
             g_free(file->session_id);
             file->session_id = g_strdup(session_id);
+            CodexBaseline *shape = g_hash_table_lookup(file->scan->baselines, session_id);
+            CodexBaseline *parent = shape && shape->parent_id
+                ? g_hash_table_lookup(file->scan->baselines, shape->parent_id)
+                : NULL;
+            if (shape && parent && shape->compact_candidate &&
+                baseline_contains_totals(parent, shape->compact_prefix)) {
+                file->compact_confirmed = TRUE;
+                file->compact_boundary_line = shape->boundary_line;
+                file->compact_prefix = shape->compact_prefix;
+            }
         }
         if (string_field(payload, "forked_from_id") || string_field(payload, "forkedFromId") ||
             string_field(payload, "parent_session_id") || string_field(payload, "parentSessionId") ||
@@ -764,11 +1078,29 @@ static gboolean codex_line(json_object *object, const char *path, gpointer user_
             g_free(file->model);
             file->model = g_strdup(model);
         }
+        if (file->compact_confirmed && line == file->compact_boundary_line) {
+            file->baseline = file->compact_prefix;
+            file->watermark = file->compact_prefix;
+            file->has_baseline = TRUE;
+            file->has_watermark = TRUE;
+            file->counted = (TokenTotals){0};
+            file->has_counted = FALSE;
+            file->divergent = FALSE;
+        }
+        return TRUE;
+    }
+    if (g_strcmp0(type, "event_msg") == 0 && g_strcmp0(string_field(payload, "type"), "task_started") == 0) {
+        const char *turn_id = string_field(payload, "turn_id");
+        if (turn_id) {
+            g_free(file->turn_id);
+            file->turn_id = g_strdup(turn_id);
+        }
         return TRUE;
     }
     if (g_strcmp0(type, "event_msg") != 0 || g_strcmp0(string_field(payload, "type"), "token_count") != 0) {
         return TRUE;
     }
+    if (file->compact_confirmed && line < file->compact_boundary_line) return TRUE;
     char *day = timestamp_day(string_field(object, "timestamp"));
     if (!day || !day_in_range(day, file->scan->since, file->scan->report->today)) {
         g_free(day);
@@ -849,15 +1181,21 @@ static gboolean codex_line(json_object *object, const char *path, gpointer user_
     if (!model) model = file->model;
     double cost = 0;
     gboolean priced = codex_cost(model, delta.input, delta.cached, delta.output, &cost);
+    gboolean priority = file->turn_id && g_hash_table_contains(file->scan->priority_turns, file->turn_id);
+    if (priority && priced && delta.input <= 272000) {
+        double multiplier = codex_fast_multiplier(model);
+        if (multiplier > 0) cost *= multiplier;
+    }
     gboolean current = g_strcmp0(day, file->scan->current_since) >= 0;
     add_model_usage(file->scan->report,
                     day,
                     model,
                     file->session_id ? file->session_id : path,
-                    delta,
-                    priced,
-                    cost,
-                    current);
+                     delta,
+                     priced,
+                     cost,
+                     priority,
+                     current);
     if (current) {
         add_usage(file->scan->report->days, day, delta.input, delta.cached, 0, delta.output, TRUE, priced, cost);
         CodexBarCostProject *project = find_project(file->scan->report, file->project);
@@ -878,6 +1216,7 @@ static gboolean scan_codex_file(const char *path, gpointer user_data, GError **e
     g_free(file.model);
     g_free(file.project);
     g_free(file.session_id);
+    g_free(file.turn_id);
     return result;
 }
 
@@ -942,6 +1281,129 @@ static gboolean scan_claude_file(const char *path, gpointer user_data, GError **
     return scan_jsonl_file(path, claude_line, user_data, error);
 }
 
+typedef struct {
+    PiScan *scan;
+    char *session_id;
+    char *model;
+    char *provider;
+} PiFile;
+
+static const char *pi_string(json_object *entry, json_object *message, const char *name) {
+    const char *value = string_field(message, name);
+    return value ? value : string_field(entry, name);
+}
+
+static gint64 pi_integer(json_object *usage, const char *first, const char *second, const char *third) {
+    gint64 value = integer_field(usage, first);
+    if (value == 0 && second) value = integer_field(usage, second);
+    if (value == 0 && third) value = integer_field(usage, third);
+    return value;
+}
+
+static gboolean pi_line(json_object *object, const char *path, gpointer user_data) {
+    PiFile *file = user_data;
+    const char *type = string_field(object, "type");
+    if (g_strcmp0(type, "session") == 0) {
+        const char *id = string_field(object, "id");
+        if (id) {
+            g_free(file->session_id);
+            file->session_id = g_strdup(id);
+        }
+        return TRUE;
+    }
+    if (g_strcmp0(type, "model_change") == 0) {
+        const char *provider = string_field(object, "provider");
+        const char *model = string_field(object, "modelId");
+        if (provider) {
+            g_free(file->provider);
+            file->provider = g_strdup(provider);
+        }
+        if (model) {
+            g_free(file->model);
+            file->model = g_strdup(model);
+        }
+        return TRUE;
+    }
+    if (g_strcmp0(type, "message") != 0) return TRUE;
+    json_object *message = object_field(object, "message");
+    if (!message || g_strcmp0(string_field(message, "role"), "assistant") != 0) return TRUE;
+    const char *provider = pi_string(object, message, "provider");
+    if (!provider) provider = file->provider;
+    const char *model = pi_string(object, message, "model");
+    if (!model) model = pi_string(object, message, "modelId");
+    if (!model) model = file->model;
+    gboolean codex = g_strcmp0(provider, "openai-codex") == 0;
+    gboolean claude = g_strcmp0(provider, "anthropic") == 0;
+    if ((!codex && !claude) || !model) return TRUE;
+    if (!g_str_equal(file->scan->report->provider, codex ? "codex" : "claude")) return TRUE;
+    const char *timestamp = string_field(message, "timestamp");
+    if (!timestamp) timestamp = string_field(object, "timestamp");
+    char *day = timestamp_day(timestamp);
+    if (!day || !day_in_range(day, file->scan->since, file->scan->report->today)) {
+        g_free(day);
+        return TRUE;
+    }
+    json_object *usage_object = object_field(message, "usage");
+    TokenTotals usage = {
+        .input = pi_integer(usage_object, "input", "inputTokens", "input_tokens"),
+        .cached = pi_integer(usage_object, "cacheRead", "cacheReadTokens", "cache_read_tokens"),
+        .cache_create = pi_integer(usage_object, "cacheWrite", "cacheWriteTokens", "cache_creation_tokens"),
+        .output = pi_integer(usage_object, "output", "outputTokens", "output_tokens"),
+    };
+    if (usage.input == 0 && usage.cached == 0 && usage.cache_create == 0 && usage.output == 0) {
+        g_free(day);
+        return TRUE;
+    }
+    const char *entry_id = string_field(object, "id");
+    char *dedupe = file->session_id && entry_id
+        ? g_strdup_printf("%s:%s", file->session_id, entry_id)
+        : g_strdup_printf("%s:%s", path, entry_id ? entry_id : timestamp);
+    if (g_hash_table_contains(file->scan->seen_entries, dedupe)) {
+        g_free(dedupe);
+        g_free(day);
+        return TRUE;
+    }
+    g_hash_table_add(file->scan->seen_entries, dedupe);
+    double cost = 0;
+    gboolean priced = codex
+        ? codex_cost(model, usage.input + usage.cached + usage.cache_create, usage.cached, usage.output, &cost)
+        : claude_cost(model, day, usage.input, usage.cached, usage.cache_create, 0, usage.output, &cost);
+    gboolean current = g_strcmp0(day, file->scan->current_since) >= 0;
+    TokenTotals aggregate = usage;
+    if (codex) aggregate.input += usage.cached + usage.cache_create;
+    add_model_usage(file->scan->report,
+                    day,
+                    model,
+                    file->session_id ? file->session_id : path,
+                    aggregate,
+                    priced,
+                    cost,
+                    FALSE,
+                    current);
+    if (current) {
+        add_usage(file->scan->report->days,
+                  day,
+                  usage.input,
+                  usage.cached,
+                  usage.cache_create,
+                  usage.output,
+                  FALSE,
+                  priced,
+                  cost);
+    }
+    g_free(day);
+    return TRUE;
+}
+
+static gboolean scan_pi_file(const char *path, gpointer user_data, GError **error) {
+    PiFile file = {.scan = user_data};
+    gboolean ok = scan_jsonl_file(path, pi_line, &file, error);
+    g_free(file.session_id);
+    g_free(file.model);
+    g_free(file.provider);
+    return ok;
+}
+
 static void aggregate_claude_row(gpointer key, gpointer value, gpointer user_data) {
     (void)key;
     ClaudeScan *scan = user_data;
@@ -960,10 +1422,11 @@ static void aggregate_claude_row(gpointer key, gpointer value, gpointer user_dat
                     row->day,
                     row->model,
                     row->path,
-                    (TokenTotals){row->input, row->cached, row->cache_create, row->output, row->reasoning},
-                    priced,
-                    cost,
-                    current);
+                     (TokenTotals){row->input, row->cached, row->cache_create, row->output, row->reasoning},
+                     priced,
+                     cost,
+                     FALSE,
+                     current);
     if (current) {
         add_usage(scan->report->days,
                   row->day,
@@ -984,14 +1447,14 @@ static CodexBarCostReport *new_report(const char *provider, int history_days) {
     report->days = g_ptr_array_new_with_free_func(cost_day_free);
     report->projects = g_ptr_array_new_with_free_func(cost_project_free);
     report->models = g_ptr_array_new_with_free_func(cost_model_free);
-    GDateTime *now = g_date_time_new_now_local();
+    GDateTime *now = cost_now();
     report->today = g_date_time_format(now, "%Y-%m-%d");
     g_date_time_unref(now);
     return report;
 }
 
 static char *since_day(int history_days) {
-    GDateTime *now = g_date_time_new_now_local();
+    GDateTime *now = cost_now();
     GDateTime *since = g_date_time_add_days(now, -(history_days - 1));
     char *value = g_date_time_format(since, "%Y-%m-%d");
     g_date_time_unref(since);
@@ -1010,10 +1473,34 @@ CodexBarCostReport *codexbar_cost_scan(const char *provider, int history_days, G
     char *since = since_day(history_days * 2);
     gboolean ok = FALSE;
     if (g_str_equal(provider, "codex")) {
-        CodexScan scan = {.report = report, .since = since, .current_since = current_since};
+        CodexScan scan = {
+            .report = report,
+            .since = since,
+            .current_since = current_since,
+            .baselines = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, codex_baseline_free),
+            .priority_turns = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, priority_turn_free),
+        };
         GPtrArray *roots = codex_roots();
-        ok = scan_roots(roots, scan_codex_file, &scan, error);
+        ok = scan_roots(roots, collect_codex_baseline, scan.baselines, error);
+        if (ok) {
+            load_priority_turns(scan.priority_turns, since);
+            ok = scan_roots(roots, scan_codex_file, &scan, error);
+        }
+        if (ok) {
+            PiScan pi_scan = {
+                .report = report,
+                .since = since,
+                .current_since = current_since,
+                .seen_entries = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL),
+            };
+            GPtrArray *pi = pi_roots();
+            ok = scan_roots(pi, scan_pi_file, &pi_scan, error);
+            g_ptr_array_unref(pi);
+            g_hash_table_unref(pi_scan.seen_entries);
+        }
         g_ptr_array_unref(roots);
+        g_hash_table_unref(scan.priority_turns);
+        g_hash_table_unref(scan.baselines);
     } else {
         ClaudeScan scan = {
             .report = report,
@@ -1029,6 +1516,18 @@ CodexBarCostReport *codexbar_cost_scan(const char *provider, int history_days, G
             for (guint index = 0; index < scan.unkeyed_rows->len; index++) {
                 aggregate_claude_row(NULL, g_ptr_array_index(scan.unkeyed_rows, index), &scan);
             }
+        }
+        if (ok) {
+            PiScan pi_scan = {
+                .report = report,
+                .since = since,
+                .current_since = current_since,
+                .seen_entries = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL),
+            };
+            GPtrArray *pi = pi_roots();
+            ok = scan_roots(pi, scan_pi_file, &pi_scan, error);
+            g_ptr_array_unref(pi);
+            g_hash_table_unref(pi_scan.seen_entries);
         }
         g_ptr_array_unref(roots);
         g_hash_table_unref(scan.keyed_rows);

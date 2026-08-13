@@ -264,7 +264,7 @@ eae1e2b4aeb385cebf3e03d2fe7867811fb6b0d8	pending	unreviewed	-
 433be24c86e980c309e8b5348e31a77e62e27592	pending	unreviewed	-
 e10a6a350a484caf5c72c94aefb6aaea7ba7c018	pending	unreviewed	-
 73b3560165cb82e18dfc9d85ca9e414b6d6cef24	pending	unreviewed	-
-dd290c27f41318957be052bc1a2a5cef2c69ab66	pending	range2: Pi/OMP costs	-
+dd290c27f41318957be052bc1a2a5cef2c69ab66	ported	range2: Pi/OMP costs	linux/src/cost.c; linux/tests/test_cost_cli.sh; fixtures/native/local-parity
 ed8c5cefe37efc50861f81fe2f9e6a25c0369d0b	pending	unreviewed	-
 db0c358c9a4236c0f0f258874968e1cde3ef4586	pending	unreviewed	-
 f30789286ea1ff73ee003271767cee32d6e34e49	pending	unreviewed	-
@@ -282,7 +282,7 @@ f2a168eaaba3ee5e1a8d331086bae34efe19d8a0	pending	unreviewed	-
 2aa6f5b9e2b5e5f368091de4899c1ec82d083967	pending	unreviewed	-
 3cc43f681cd4ddc34304722e137dbaece140a857	pending	unreviewed	-
 b3f3d8cd2acd045537a7cb4ae5cecb123500a5b3	pending	unreviewed	-
-66ae09a25b301c299e32fee3a81d4013dd5a2a0e	pending	range2: session equivalents	-
+66ae09a25b301c299e32fee3a81d4013dd5a2a0e	already-covered	range2: session equivalents	linux/src/pace.c; linux/tests/test_model.c
 8a836a5dd4648f00420fde4073c66ebd26646be7	pending	unreviewed	-
 89720119f144da238625adb00023c254d4d9c6a6	pending	unreviewed	-
 8b3ccbd4ccb14996c101ad416183b371e001f270	pending	unreviewed	-
@@ -295,7 +295,7 @@ ccfcfa0adbe91fd73d11d08b71d59d5ecc33cf01	pending	unreviewed	-
 98c11fa7c94f5beb64a47e87517c821f2b55bcad	pending	unreviewed	-
 d7b2d0a5c5af65ebe2f233bca3923e56c7a8adc7	pending	unreviewed	-
 70061f63a5bb49fd94121e610260f821a3c4e820	pending	unreviewed	-
-2370d11d57b7cfa2d95e4d95cd59c08c0af57689	pending	range2: session labels	-
+2370d11d57b7cfa2d95e4d95cd59c08c0af57689	ported	range2: session labels	linux/src/sessions.c; linux/src/cli_sessions.c; linux/tests/test_sessions_cli.sh
 00414bcaee235aa26bb96c3f5189700ceae76448	pending	unreviewed	-
 94cc206f40eda2fd85adec4ec0c3398d16f8a674	pending	unreviewed	-
 e9f6cd16d162daf5edf2cef4a16149c1bf230e71	pending	unreviewed	-
@@ -375,7 +375,7 @@ ab1f76269601f2aa15adbf9a5985c6fda98bc5bf	pending	unreviewed	-
 1f422d579437abc4301a5b4d3cdb57e491445d5a	pending	unreviewed	-
 9e9f739b6a96e2a786467adb59f1ce6b35f1d6ac	pending	unreviewed	-
 f832115ba2ec9bec94a1c8c926183e6a2e2afe7a	pending	unreviewed	-
-1860a33525eb1442922ab31ac65ec30aa6caa1d4	pending	range2: compact subagent	-
+1860a33525eb1442922ab31ac65ec30aa6caa1d4	ported	range2: compact subagent	linux/src/cost.c; linux/tests/test_cost_cli.sh
 2fb6deb628d06d126ac0fc23c5bbb70f3defc854	pending	unreviewed	-
 4fd22717175a9b33a4b2eb2b050c765f69334273	pending	unreviewed	-
 4d0dcc84d0600b37c53f259c5330322184a4ac07	pending	unreviewed	-
@@ -851,7 +851,7 @@ d7bf94793dcdb02339ea9e95f10649209814d254	pending	unreviewed	-
 8cf2963c135daca5cce880e547f8c6974dffc8db	pending	unreviewed	-
 b557dbf48dec172ab511b6176676425c517dceec	pending	unreviewed	-
 a5e9e6d1e31f040a6ba34efcc53c242af1a5b948	pending	unreviewed	-
-0296845fb36e64bcb3e2c1d2be38816f56a3a565	pending	range4: priority/Fast costs	-
+0296845fb36e64bcb3e2c1d2be38816f56a3a565	ported	range4: priority/Fast costs	linux/src/cost.c; linux/src/cli_cost.c; linux/tests/test_cost_cli.sh
 26ce38d416ffb540b489a692bcb345da4b98d71f	pending	unreviewed	-
 1c4b04d8272772f0250fe1fb67432a7d0ce2732d	pending	range4: dashboard links	-
 9ca744186f6885a6bb37e5710ccacc8506a329bb	pending	unreviewed	-
@@ -894,11 +894,11 @@ a6722f39bc839b0c7858d2fc99c3b2444239e963	pending	unreviewed	-
 7002b5782053744b4cdb497b5fc3b744ef2986d1	pending	unreviewed	-
 6afa6728f3c42b090e1b3e1a0733ecf37c55399c	pending	range4: Kimi enrichment	-
 00ef23cdc9e4c73ddc193c1bb09b8aa1623952cc	pending	unreviewed	-
-8eb867c0c5ebba86a5b055fb990f7d35e6fc916d	pending	range4: Pi/OMP sessions	-
+8eb867c0c5ebba86a5b055fb990f7d35e6fc916d	ported	range4: Pi/OMP sessions	linux/src/sessions.c; linux/src/cli_sessions.c; linux/tests/test_sessions_cli.sh; fixtures/native/local-parity
 47e1d0426236e9ffb4d8664568a896299e42464f	pending	unreviewed	-
 698c332a250fe5a2ea4436e991edd59ce439b2a3	pending	unreviewed	-
 898df4c11ec7c94401fddb7b5da07b76a2e8011c	pending	unreviewed	-
-405a2a4678673de7f2003f004f06e3100f6659a4	pending	range4: priority/Fast costs	-
+405a2a4678673de7f2003f004f06e3100f6659a4	ported	range4: priority/Fast costs	linux/src/cost.c; linux/src/cli_cost.c; linux/tests/test_cost_cli.sh
 5f83a14058aa5b7ddf6afad02956cb643d6d90d8	pending	unreviewed	-
 94efcfdf4a4be495ddc80ad5193d4e488df06450	pending	unreviewed	-
 15a855a2132a83e4ae776b91ae64abc2e34042c1	pending	unreviewed	-

@@ -232,6 +232,18 @@ static json_object *model_json(const CodexBarCostModel *model, gint64 report_tok
     json_object_object_add(object, "sessionReferences", json_object_new_int64(model->session_ids->len));
     json_object_object_add(object, "associatedSessionIDs", string_array(model->session_ids));
     json_object_object_add(object, "cost", model_cost_json(model, FALSE));
+    json_object_object_add(object,
+                           "standardTokens",
+                           model->standard_tokens > 0 ? json_object_new_int64(model->standard_tokens) : NULL);
+    json_object_object_add(object,
+                           "standardCostUSD",
+                           model->standard_tokens > 0 ? cost_json_value(model->standard_cost_usd) : NULL);
+    json_object_object_add(object,
+                           "priorityTokens",
+                           model->priority_tokens > 0 ? json_object_new_int64(model->priority_tokens) : NULL);
+    json_object_object_add(object,
+                           "priorityCostUSD",
+                           model->priority_tokens > 0 ? cost_json_value(model->priority_cost_usd) : NULL);
     json_object_object_add(object, "previousTotalTokens", json_object_new_int64(model->previous_total_tokens));
     json_object_object_add(object, "previousCost", model_cost_json(model, TRUE));
     json_object_object_add(object,

@@ -7,7 +7,14 @@
 typedef enum {
     CODEXBAR_SESSION_CODEX,
     CODEXBAR_SESSION_CLAUDE,
+    CODEXBAR_SESSION_PI,
 } CodexBarSessionProvider;
+
+typedef enum {
+    CODEXBAR_SESSION_DIALECT_NONE,
+    CODEXBAR_SESSION_DIALECT_PI,
+    CODEXBAR_SESSION_DIALECT_OMP,
+} CodexBarSessionDialect;
 
 typedef enum {
     CODEXBAR_SESSION_CLI,
@@ -19,6 +26,7 @@ typedef enum {
 typedef struct {
     char *id;
     CodexBarSessionProvider provider;
+    CodexBarSessionDialect dialect;
     CodexBarSessionSource source;
     gboolean active;
     gboolean has_pid;
