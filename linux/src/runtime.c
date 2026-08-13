@@ -36,6 +36,7 @@ struct CodexBarRuntime {
     GHashTable *session_states;
     GHashTable *warning_states;
     GHashTable *failure_states;
+    GHashTable *command_code_monthly_states;
     CodexBarHistoryStore *history;
 };
 
@@ -66,6 +67,14 @@ typedef struct {
     guint64 fired_low;
     guint64 fired_high;
 } WarningState;
+
+typedef struct {
+    gboolean confirmed_paid_depletion;
+    gboolean has_reset;
+    gint64 reset_ms;
+    gint64 window_minutes;
+    char *reset_description;
+} CommandCodeMonthlyState;
 
 static CodexBarSnapshot *default_usage_fetcher(GCancellable *cancellable,
                                                gpointer user_data,
@@ -98,6 +107,12 @@ static void hook_dispatch_free(HookDispatch *dispatch) {
 static void session_state_free(SessionState *state) {
     if (!state) return;
     codexbar_session_quota_state_clear(&state->state);
+    g_free(state);
+}
+
+static void command_code_monthly_state_free(CommandCodeMonthlyState *state) {
+    if (!state) return;
+    g_free(state->reset_description);
     g_free(state);
 }
 
@@ -156,6 +171,8 @@ CodexBarRuntime *codexbar_runtime_new_with_transports(CodexBarRuntimeUsageFetche
         g_str_hash, g_str_equal, g_free, (GDestroyNotify)session_state_free);
     runtime->warning_states = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     runtime->failure_states = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    runtime->command_code_monthly_states = g_hash_table_new_full(
+        g_str_hash, g_str_equal, g_free, (GDestroyNotify)command_code_monthly_state_free);
     runtime->history = codexbar_history_store_new(NULL);
     return runtime;
 }
@@ -179,6 +196,7 @@ void codexbar_runtime_free(CodexBarRuntime *runtime) {
     g_hash_table_unref(runtime->session_states);
     g_hash_table_unref(runtime->warning_states);
     g_hash_table_unref(runtime->failure_states);
+    g_hash_table_unref(runtime->command_code_monthly_states);
     codexbar_history_store_free(runtime->history);
     g_free(runtime->config_digest);
     g_mutex_clear(&runtime->lock);
@@ -258,6 +276,7 @@ static void reconcile_config_revision(CodexBarRuntime *runtime, const char *dige
         g_hash_table_remove_all(runtime->session_states);
         g_hash_table_remove_all(runtime->warning_states);
         g_hash_table_remove_all(runtime->failure_states);
+        g_hash_table_remove_all(runtime->command_code_monthly_states);
     }
     g_free(runtime->config_digest);
     runtime->config_digest = g_strdup(digest);
@@ -519,11 +538,88 @@ static char *transition_lane_key(const CodexBarProvider *provider) {
     return g_strjoin("\x1f", provider->provider, account ? account : "", NULL);
 }
 
+static gboolean usage_extension_boolean(const CodexBarProvider *provider, const char *key) {
+    json_object *value = NULL;
+    return provider->usage_extensions &&
+           json_object_object_get_ex(provider->usage_extensions, key, &value) &&
+           json_object_is_type(value, json_type_boolean) && json_object_get_boolean(value);
+}
+
+static CodexBarQuotaWindow *quota_window_by_id(CodexBarProvider *provider, const char *id) {
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+        if (g_str_equal(window->id, id)) return window;
+    }
+    return NULL;
+}
+
+static gboolean crof_credits_only(const CodexBarProvider *provider) {
+    if (!g_str_equal(provider->provider, "crof") || provider->quota_windows->len != 1) return FALSE;
+    const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, 0);
+    return !window->has_window_minutes &&
+           (g_str_equal(window->id, "balance") || g_ascii_strcasecmp(window->title, "balance") == 0);
+}
+
+static void stabilize_command_code_monthly(CodexBarRuntime *runtime, CodexBarProvider *provider) {
+    if (!g_str_equal(provider->provider, "commandcode") || provider->error) return;
+    const char *account = provider_account_key(provider);
+    char *key = g_strjoin("\x1f",
+                          provider->provider,
+                          account ? account : "",
+                          provider->source ? provider->source : "",
+                          NULL);
+    char *scoped_key = g_strjoin("\x1f",
+                                 key,
+                                 provider->runtime_scope ? provider->runtime_scope : "",
+                                 NULL);
+    g_free(key);
+    key = scoped_key;
+    CodexBarQuotaWindow *monthly = quota_window_by_id(provider, "tertiary");
+    gboolean unavailable = usage_extension_boolean(
+        provider, "commandCodeSubscriptionEnrichmentUnavailable");
+    gboolean has_plan = usage_extension_boolean(provider, "commandCodeHasSubscriptionPlan");
+    gboolean depleted = usage_extension_boolean(provider, "commandCodeMonthlyGrantDepleted");
+    g_mutex_lock(&runtime->lock);
+    CommandCodeMonthlyState *state = g_hash_table_lookup(runtime->command_code_monthly_states, key);
+    if (!state) {
+        state = g_new0(CommandCodeMonthlyState, 1);
+        g_hash_table_insert(runtime->command_code_monthly_states, g_strdup(key), state);
+    }
+    if (unavailable && depleted && state->confirmed_paid_depletion) {
+        if (!monthly) {
+            monthly = codexbar_quota_window_new("tertiary", "Monthly credits");
+            monthly->usage_known = TRUE;
+            codexbar_provider_add_quota_window(provider, monthly);
+        }
+        monthly->used_percent = 100;
+        monthly->has_resets_at = state->has_reset;
+        monthly->resets_at_ms = state->reset_ms;
+        monthly->has_window_minutes = state->window_minutes > 0;
+        monthly->window_minutes = state->window_minutes;
+        g_free(monthly->reset_description);
+        monthly->reset_description = g_strdup(state->reset_description);
+    } else if (!unavailable) {
+        state->confirmed_paid_depletion = has_plan && depleted && monthly && monthly->used_percent >= 100;
+        state->has_reset = state->confirmed_paid_depletion && monthly->has_resets_at;
+        state->reset_ms = state->has_reset ? monthly->resets_at_ms : 0;
+        state->window_minutes = state->confirmed_paid_depletion && monthly->has_window_minutes
+                                    ? monthly->window_minutes
+                                    : 0;
+        g_free(state->reset_description);
+        state->reset_description = state->confirmed_paid_depletion
+                                       ? g_strdup(monthly->reset_description)
+                                       : NULL;
+    }
+    g_mutex_unlock(&runtime->lock);
+    g_free(key);
+}
+
 static CodexBarQuotaWindow *session_window(const CodexBarProvider *provider) {
     if (!provider->quota_windows || provider->quota_windows->len == 0 ||
         g_str_equal(provider->provider, "mimo") || g_str_equal(provider->provider, "qoder")) {
         return NULL;
     }
+    if (crof_credits_only(provider)) return NULL;
     if (g_str_equal(provider->provider, "antigravity")) {
         CodexBarQuotaWindow *selected = NULL;
         for (guint index = 0; index < provider->quota_windows->len; index++) {
@@ -720,6 +816,7 @@ static void dispatch_quota_low_transitions(CodexBarRuntime *runtime,
                                            json_object *warnings,
                                            const CodexBarProvider *provider) {
     gboolean hook_enabled = has_hook_rule(hooks, "quota_low", provider->provider);
+    if (crof_credits_only(provider)) return;
     for (guint index = 0; index < provider->quota_windows->len; index++) {
         CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
         if (!window->usage_known) continue;
@@ -887,6 +984,9 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
         codexbar_service_status_free(status);
     }
     codexbar_pace_attach_snapshot(snapshot, g_get_real_time() / 1000);
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        stabilize_command_code_monthly(runtime, g_ptr_array_index(snapshot->providers, index));
+    }
     dispatch_snapshot_hooks(runtime, hooks, warnings, snapshot);
     if (!environment_flag("CODEXBAR_DISABLE_HISTORY")) {
         codexbar_history_store_record(runtime->history,

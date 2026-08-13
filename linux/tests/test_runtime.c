@@ -21,6 +21,17 @@ static gint64 usage_updated_at;
 static const char *usage_account;
 static const char *usage_error;
 static const char *usage_error_kind;
+static const char *usage_provider = "codex";
+static const char *usage_source = "cli";
+static gboolean usage_has_secondary;
+static double usage_secondary_percent;
+static gboolean usage_has_monthly;
+static double usage_monthly_percent;
+static gint64 usage_monthly_reset;
+static gboolean command_subscription_unavailable;
+static gboolean command_has_plan;
+static gboolean command_monthly_depleted;
+static const char *usage_runtime_scope;
 
 static CodexBarSnapshot *usage_fetcher(GCancellable *cancellable, gpointer user_data, GError **error) {
     (void)cancellable;
@@ -29,22 +40,60 @@ static CodexBarSnapshot *usage_fetcher(GCancellable *cancellable, gpointer user_
     CodexBarSnapshot *snapshot = g_new0(CodexBarSnapshot, 1);
     snapshot->providers = g_ptr_array_new_with_free_func((GDestroyNotify)codexbar_provider_free);
     CodexBarProvider *provider = codexbar_provider_new();
-    provider->provider = g_strdup("codex");
-    provider->source = g_strdup("cli");
+    provider->provider = g_strdup(usage_provider);
+    provider->source = g_strdup(usage_source);
     provider->account = g_strdup(usage_account);
     provider->error = g_strdup(usage_error);
     provider->error_kind = g_strdup(usage_error_kind);
+    provider->runtime_scope = g_strdup(usage_runtime_scope);
     if (usage_updated_at > 0) {
         provider->has_updated_at = TRUE;
         provider->updated_at_ms = usage_updated_at;
     }
     if (usage_has_window) {
-        CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "5-hour");
+        gboolean crof = g_str_equal(usage_provider, "crof");
+        CodexBarQuotaWindow *window = codexbar_quota_window_new(
+            crof ? (usage_has_secondary ? "requests" : "balance") : "primary",
+            crof ? (usage_has_secondary ? "requests" : "balance") : "5-hour");
         window->usage_known = TRUE;
         window->used_percent = usage_percent;
-        window->has_window_minutes = TRUE;
-        window->window_minutes = 300;
+        if (!crof) {
+            window->has_window_minutes = TRUE;
+            window->window_minutes = 300;
+        }
         codexbar_provider_add_quota_window(provider, window);
+    }
+    if (usage_has_secondary) {
+        CodexBarQuotaWindow *window = codexbar_quota_window_new("secondary", "Weekly");
+        window->usage_known = TRUE;
+        window->used_percent = usage_secondary_percent;
+        window->has_window_minutes = TRUE;
+        window->window_minutes = 10080;
+        codexbar_provider_add_quota_window(provider, window);
+    }
+    if (usage_has_monthly) {
+        CodexBarQuotaWindow *window = codexbar_quota_window_new("tertiary", "Monthly credits");
+        window->usage_known = TRUE;
+        window->used_percent = usage_monthly_percent;
+        window->has_window_minutes = TRUE;
+        window->window_minutes = 43200;
+        if (usage_monthly_reset > 0) {
+            window->has_resets_at = TRUE;
+            window->resets_at_ms = usage_monthly_reset;
+        }
+        codexbar_provider_add_quota_window(provider, window);
+    }
+    if (g_str_equal(usage_provider, "commandcode")) {
+        provider->usage_extensions = json_object_new_object();
+        json_object_object_add(provider->usage_extensions,
+                               "commandCodeSubscriptionEnrichmentUnavailable",
+                               json_object_new_boolean(command_subscription_unavailable));
+        json_object_object_add(provider->usage_extensions,
+                               "commandCodeHasSubscriptionPlan",
+                               json_object_new_boolean(command_has_plan));
+        json_object_object_add(provider->usage_extensions,
+                               "commandCodeMonthlyGrantDepleted",
+                               json_object_new_boolean(command_monthly_depleted));
     }
     g_ptr_array_add(snapshot->providers, provider);
     return snapshot;
@@ -97,12 +146,23 @@ static void capture_notification(const CodexBarHookEvent *event, gpointer user_d
 }
 
 static void reset_usage(void) {
+    usage_provider = "codex";
+    usage_source = "cli";
     usage_has_window = FALSE;
     usage_percent = 0;
     usage_updated_at = 0;
     usage_account = NULL;
     usage_error = NULL;
     usage_error_kind = NULL;
+    usage_has_secondary = FALSE;
+    usage_secondary_percent = 0;
+    usage_has_monthly = FALSE;
+    usage_monthly_percent = 0;
+    usage_monthly_reset = 0;
+    command_subscription_unavailable = FALSE;
+    command_has_plan = FALSE;
+    command_monthly_depleted = FALSE;
+    usage_runtime_scope = NULL;
 }
 
 static void reset_hooks(void) {
@@ -129,6 +189,22 @@ static char *write_config(void) {
                                       "{\"version\":1,\"providers\":[{\"id\":\"codex\",\"enabled\":true}]}",
                                       -1,
                                       NULL));
+    g_free(directory);
+    return path;
+}
+
+static char *write_provider_config(const char *provider, const char *suffix) {
+    g_assert_cmpint(g_mkdir_with_parents(".tmp", 0700), ==, 0);
+    char *directory = g_strdup(".tmp/codexbar-runtime-XXXXXX");
+    g_assert_nonnull(g_mkdtemp(directory));
+    char *path = g_build_filename(directory, "config.json", NULL);
+    char *contents = g_strdup_printf(
+        "{\"version\":1,\"quotaWarningNotificationsEnabled\":true,"
+        "\"providers\":[{\"id\":\"%s\",\"enabled\":true%s}]}",
+        provider,
+        suffix ? suffix : "");
+    g_assert_true(g_file_set_contents(path, contents, -1, NULL));
+    g_free(contents);
     g_free(directory);
     return path;
 }
@@ -482,6 +558,137 @@ static void test_quota_warning_notifications_follow_provider_config(void) {
     remove_config(path);
 }
 
+static void test_command_code_preserves_confirmed_monthly_depletion(void) {
+    char *path = write_provider_config("commandcode", ",\"cookieHeader\":\"auth-one\"");
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+    g_setenv("CODEXBAR_DISABLE_STATUS", "1", TRUE);
+    reset_usage();
+    usage_provider = "commandcode";
+    usage_source = "web";
+    usage_account = "one";
+    usage_runtime_scope = "auth-one";
+    usage_has_window = TRUE;
+    usage_percent = 20;
+    usage_has_secondary = TRUE;
+    usage_secondary_percent = 30;
+    usage_has_monthly = TRUE;
+    usage_monthly_percent = 100;
+    usage_monthly_reset = 9000;
+    command_has_plan = TRUE;
+    command_monthly_depleted = TRUE;
+    CodexBarRuntime *runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
+
+    CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 2)->used_percent, ==, 100);
+    codexbar_snapshot_free(snapshot);
+
+    command_has_plan = FALSE;
+    command_subscription_unavailable = TRUE;
+    usage_has_monthly = FALSE;
+    usage_monthly_reset = 0;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 2)->used_percent, ==, 100);
+    g_assert_true(codexbar_provider_quota_window(provider, 2)->has_resets_at);
+    g_assert_cmpint(codexbar_provider_quota_window(provider, 2)->resets_at_ms, ==, 9000);
+    codexbar_snapshot_free(snapshot);
+
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 2)->used_percent, ==, 100);
+    codexbar_snapshot_free(snapshot);
+
+    usage_account = "two";
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    codexbar_snapshot_free(snapshot);
+
+    usage_account = "one";
+    usage_runtime_scope = "auth-two";
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    provider = g_ptr_array_index(snapshot->providers, 0);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    codexbar_snapshot_free(snapshot);
+
+    codexbar_runtime_free(runtime);
+    reset_usage();
+    g_unsetenv("CODEXBAR_DISABLE_STATUS");
+    g_unsetenv("CODEXBAR_CONFIG");
+    remove_config(path);
+}
+
+static void test_crof_credits_only_suppresses_quota_events(void) {
+    char *path = write_provider_config(
+        "crof",
+        ",\"quotaWarnings\":{\"session\":{\"enabled\":true,\"thresholds\":[50,20]}},"
+        "\"apiKey\":\"test\"");
+    g_assert_true(g_file_set_contents(
+        path,
+        "{\"version\":1,\"quotaWarningNotificationsEnabled\":true,"
+        "\"providers\":[{\"id\":\"crof\",\"enabled\":true,\"apiKey\":\"test\","
+        "\"quotaWarnings\":{\"session\":{\"enabled\":true,\"thresholds\":[50,20]}}}],"
+        "\"hooks\":{\"enabled\":true,\"events\":["
+        "{\"event\":\"quota_low\",\"threshold\":0.5,\"executable\":\"/bin/true\"},"
+        "{\"event\":\"quota_reached\",\"executable\":\"/bin/true\"},"
+        "{\"event\":\"quota_reset\",\"executable\":\"/bin/true\"}]}}",
+        -1,
+        NULL));
+    g_setenv("CODEXBAR_CONFIG", path, TRUE);
+    g_setenv("CODEXBAR_DISABLE_STATUS", "1", TRUE);
+    reset_usage();
+    reset_hooks();
+    reset_notifications();
+    usage_provider = "crof";
+    usage_source = "api";
+    usage_account = "one";
+    usage_has_window = TRUE;
+    usage_percent = 40;
+    CodexBarRuntime *runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
+    codexbar_runtime_set_hook_dispatcher(runtime, capture_hook, NULL);
+    codexbar_runtime_set_notification_dispatcher(runtime, capture_notification, NULL);
+
+    const double observations[] = {40, 100, 50};
+    for (guint index = 0; index < G_N_ELEMENTS(observations); index++) {
+        usage_percent = observations[index];
+        usage_updated_at = 1000 + index * 1000;
+        CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+        codexbar_snapshot_free(snapshot);
+    }
+    g_assert_cmpuint(hook_calls, ==, 0);
+    g_assert_cmpuint(notification_calls, ==, 0);
+
+    codexbar_runtime_free(runtime);
+    reset_hooks();
+    reset_notifications();
+    usage_has_secondary = TRUE;
+    usage_secondary_percent = 0;
+    usage_percent = 20;
+    usage_updated_at = 4000;
+    runtime = codexbar_runtime_new_with_transports(usage_fetcher, NULL, status_transport);
+    codexbar_runtime_set_hook_dispatcher(runtime, capture_hook, NULL);
+    codexbar_runtime_set_notification_dispatcher(runtime, capture_notification, NULL);
+    CodexBarSnapshot *snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    usage_percent = 100;
+    usage_updated_at = 5000;
+    snapshot = codexbar_runtime_fetch(runtime, NULL, NULL);
+    codexbar_snapshot_free(snapshot);
+    g_assert_cmpuint(hook_calls, ==, 2);
+    g_assert_cmpstr(last_hook_event, ==, "quota_reached");
+    g_assert_cmpuint(notification_calls, ==, 2);
+    g_assert_cmpstr(last_notification_event, ==, "quota_reached");
+
+    codexbar_runtime_free(runtime);
+    reset_notifications();
+    reset_hooks();
+    reset_usage();
+    g_unsetenv("CODEXBAR_DISABLE_STATUS");
+    g_unsetenv("CODEXBAR_CONFIG");
+    remove_config(path);
+}
+
 int main(int argc, char **argv) {
     g_setenv("CODEXBAR_DISABLE_HISTORY", "1", TRUE);
     g_test_init(&argc, &argv, NULL);
@@ -492,5 +699,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/runtime/hooks/session", test_session_hooks_confirm_codex_restore);
     g_test_add_func("/runtime/hooks/refresh-failed", test_refresh_failure_suppression_and_rate_limit);
     g_test_add_func("/runtime/notifications/quota", test_quota_warning_notifications_follow_provider_config);
+    g_test_add_func("/runtime/commandcode/preserve-depletion", test_command_code_preserves_confirmed_monthly_depletion);
+    g_test_add_func("/runtime/crof/credits-only-events", test_crof_credits_only_suppresses_quota_events);
     return g_test_run();
 }

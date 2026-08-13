@@ -412,7 +412,11 @@ char *codexbar_render_waybar(const CodexBarSnapshot *snapshot) {
             g_string_append_printf(tooltip, "\n  %s", provider->note);
         }
         for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
-            append_window(tooltip, codexbar_provider_quota_window(provider, window_index));
+            CodexBarQuotaWindowProjection projection = {0};
+            const CodexBarQuotaWindow *window = codexbar_provider_projected_quota_window(
+                provider, window_index, g_get_real_time() / 1000, &projection);
+            append_window(tooltip, window);
+            codexbar_quota_window_projection_clear(&projection);
         }
         for (guint balance_index = 0; balance_index < provider->balances->len; balance_index++) {
             append_balance(tooltip, codexbar_provider_balance(provider, balance_index));
@@ -749,7 +753,9 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
         if (provider->source) g_string_append_printf(text, " [%s]", provider->source);
         g_string_append_c(text, '\n');
         for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
-            const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, window_index);
+            CodexBarQuotaWindowProjection projection = {0};
+            const CodexBarQuotaWindow *window = codexbar_provider_projected_quota_window(
+                provider, window_index, g_get_real_time() / 1000, &projection);
             g_string_append_printf(text, "  %s: ", window->title);
             if (window->usage_known) {
                 double display_percent =
@@ -759,6 +765,7 @@ char *codexbar_render_usage_text(const CodexBarSnapshot *snapshot) {
                 g_string_append(text, "usage unavailable");
             }
             g_string_append_c(text, '\n');
+            codexbar_quota_window_projection_clear(&projection);
         }
         for (guint balance_index = 0; balance_index < provider->balances->len; balance_index++) {
             const CodexBarBalance *balance = codexbar_provider_balance(provider, balance_index);

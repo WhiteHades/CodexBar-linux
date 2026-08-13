@@ -437,7 +437,11 @@ static int draw_wayfinder(int y, int x, int width, const CodexBarProvider *provi
 static int provider_content_height(const CodexBarProvider *provider) {
     int height = provider_overview_height(provider) + (provider->error ? 1 : 0);
     for (guint index = 0; index < provider->quota_windows->len; index++) {
-        height += rate_window_height(codexbar_provider_quota_window(provider, index));
+        CodexBarQuotaWindowProjection projection = {0};
+        const CodexBarQuotaWindow *window = codexbar_provider_projected_quota_window(
+            provider, index, g_get_real_time() / 1000, &projection);
+        height += rate_window_height(window);
+        codexbar_quota_window_projection_clear(&projection);
     }
     for (guint index = 0; index < provider->balances->len; index++) {
         height += balance_height(codexbar_provider_balance(provider, index));
@@ -492,7 +496,12 @@ static int provider_metric_height(const CodexBarProvider *provider, guint index)
         index--;
     }
     if (index < provider->quota_windows->len) {
-        return rate_window_height(codexbar_provider_quota_window(provider, index));
+        CodexBarQuotaWindowProjection projection = {0};
+        const CodexBarQuotaWindow *window = codexbar_provider_projected_quota_window(
+            provider, index, g_get_real_time() / 1000, &projection);
+        int height = rate_window_height(window);
+        codexbar_quota_window_projection_clear(&projection);
+        return height;
     }
     index -= provider->quota_windows->len;
     if (index < provider->balances->len) return balance_height(codexbar_provider_balance(provider, index));
@@ -522,7 +531,12 @@ static int draw_provider_metric(const CodexBarProvider *provider, guint index, i
         index--;
     }
     if (index < provider->quota_windows->len) {
-        return draw_rate_window(y, x, width, codexbar_provider_quota_window(provider, index));
+        CodexBarQuotaWindowProjection projection = {0};
+        const CodexBarQuotaWindow *window = codexbar_provider_projected_quota_window(
+            provider, index, g_get_real_time() / 1000, &projection);
+        int next_y = draw_rate_window(y, x, width, window);
+        codexbar_quota_window_projection_clear(&projection);
+        return next_y;
     }
     index -= provider->quota_windows->len;
     if (index < provider->balances->len) {
