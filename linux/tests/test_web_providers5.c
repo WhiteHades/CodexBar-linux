@@ -181,6 +181,17 @@ static void test_mimo_parser(void) {
     g_assert_cmpfloat_with_epsilon(
         codexbar_provider_quota_window(provider, 0)->used_percent, 5.05, 0.0001);
     g_assert_true(codexbar_provider_quota_window(provider, 0)->has_resets_at);
+    g_assert_true(codexbar_provider_quota_window(provider, 0)->has_window_minutes);
+    g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->window_minutes, ==, 43200);
+    codexbar_provider_free(provider);
+
+    const char *detail_without_reset = "{\"code\":0,\"data\":{\"planCode\":\"standard\"}}";
+    provider = codexbar_mimo_parse(balance, strlen(balance),
+                                   detail_without_reset, strlen(detail_without_reset),
+                                   usage, strlen(usage), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_false(codexbar_provider_quota_window(provider, 0)->has_resets_at);
+    g_assert_false(codexbar_provider_quota_window(provider, 0)->has_window_minutes);
     codexbar_provider_free(provider);
 
     provider = codexbar_mimo_parse("{}", 2, NULL, 0, NULL, 0, 1000, &error);

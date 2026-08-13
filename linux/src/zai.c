@@ -179,7 +179,9 @@ static double limit_used_percent(const ZaiLimit *limit) {
             return codexbar_usage_percent_display(codexbar_usage_percent_from_ratio(used, limit->usage));
         }
     }
-    return limit->has_percentage ? limit->percentage : 0.0;
+    return limit->has_percentage
+               ? codexbar_usage_percent_display(codexbar_usage_percent_from_raw(limit->percentage))
+               : 0.0;
 }
 
 static char *limit_description(const ZaiLimit *limit) {

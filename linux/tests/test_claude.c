@@ -29,9 +29,10 @@ static void test_oauth_usage(void) {
     g_assert_cmpfloat_with_epsilon(session->used_percent, 12.5, 0.0001);
     g_assert_cmpint(session->window_minutes, ==, 300);
     g_assert_true(session->has_resets_at);
-    CodexBarQuotaWindow *fable = codexbar_provider_quota_window(provider, 4);
+    CodexBarQuotaWindow *fable = codexbar_provider_quota_window(provider, 3);
     g_assert_cmpstr(fable->id, ==, "claude-weekly-scoped-fable");
     g_assert_cmpstr(fable->title, ==, "Fable only");
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 4)->id, ==, "claude-routines");
     g_assert_nonnull(provider->provider_cost);
     g_assert_cmpfloat_with_epsilon(provider->provider_cost->used, 3.25, 0.0001);
     g_assert_cmpfloat_with_epsilon(provider->provider_cost->limit, 20.5, 0.0001);
@@ -45,10 +46,37 @@ static void test_null_routines(void) {
     CodexBarProvider *provider = codexbar_claude_parse_oauth_usage(json, NULL, "pro", 1, &error);
     g_assert_no_error(error);
     g_assert_nonnull(provider);
-    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
-    CodexBarQuotaWindow *routines = codexbar_provider_quota_window(provider, 1);
-    g_assert_cmpstr(routines->id, ==, "claude-routines");
-    g_assert_cmpfloat(routines->used_percent, ==, 0);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_claude_parse_web_usage(json, NULL, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    codexbar_provider_free(provider);
+}
+
+static void test_routines_follow_scoped_weekly_windows(void) {
+    const char *json =
+        "{\"five_hour\":{\"utilization\":1},"
+        "\"seven_day_cowork\":{\"utilization\":18},"
+        "\"limits\":[{\"kind\":\"weekly_scoped\",\"group\":\"weekly\",\"percent\":7,"
+        "\"scope\":{\"model\":{\"id\":\"fable\",\"display_name\":\"Fable\"}}}]}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_claude_parse_oauth_usage(json, NULL, "pro", 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 1)->id, ==, "claude-weekly-scoped-fable");
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 2)->id, ==, "claude-routines");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_claude_parse_web_usage(json, NULL, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 1)->id, ==, "claude-weekly-scoped-fable");
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 2)->id, ==, "claude-routines");
     codexbar_provider_free(provider);
 }
 
@@ -224,6 +252,7 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/claude/oauth-usage", test_oauth_usage);
     g_test_add_func("/claude/null-routines", test_null_routines);
+    g_test_add_func("/claude/routines-order", test_routines_follow_scoped_weekly_windows);
     g_test_add_func("/claude/spend-only", test_spend_only);
     g_test_add_func("/claude/invalid-usage", test_invalid_usage);
     g_test_add_func("/claude/cli-usage", test_cli_usage);

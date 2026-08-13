@@ -145,7 +145,7 @@ static void test_reset_boundaries(void) {
         {"2030-01-15T11:59:00Z", "Expired"},
         {"2030-01-15T12:00:00Z", "Expired"},
         {"2030-01-15T12:00:30Z", "Resets in 0m"},
-        {"2030-01-16T12:00:00Z", "Resets in 24h 0m"},
+        {"2030-01-16T12:00:00Z", "Resets in 1d 0h"},
         {"2030-01-17T13:00:00Z", "Resets in 2d 1h"},
     };
     gint64 now_ms = timestamp_ms("2030-01-15T12:00:00Z");

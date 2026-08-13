@@ -47,6 +47,40 @@ static void test_missing_quota_fields(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_raw_percentage_fallback_normalization(void) {
+    const struct {
+        double percentage;
+        double expected;
+    } cases[] = {
+        {150.0, 100.0},
+        {-5.0, 0.0},
+        {42.0, 42.0},
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(cases); index++) {
+        char *json = g_strdup_printf(
+            "{\"code\":200,\"success\":true,\"data\":{\"limits\":[{"
+            "\"type\":\"TOKENS_LIMIT\",\"unit\":3,\"number\":5,\"percentage\":%.2f}]}}",
+            cases[index].percentage);
+        GError *error = NULL;
+        CodexBarProvider *provider = codexbar_zai_parse_usage(json, &error);
+        g_assert_no_error(error);
+        g_assert_nonnull(provider);
+        g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, cases[index].expected);
+        codexbar_provider_free(provider);
+        g_free(json);
+    }
+
+    const char *computed =
+        "{\"code\":200,\"success\":true,\"data\":{\"limits\":[{"
+        "\"type\":\"TOKENS_LIMIT\",\"unit\":3,\"number\":5,\"usage\":100,"
+        "\"currentValue\":25,\"percentage\":999}]}}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_zai_parse_usage(computed, &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 25.0);
+    codexbar_provider_free(provider);
+}
+
 static void test_credit_limits(void) {
     const char *json =
         "{\"code\":200,\"success\":true,\"data\":{\"level\":\"lite\",\"limits\":["
@@ -127,6 +161,7 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/zai/three-limits", test_three_limits);
     g_test_add_func("/zai/missing-fields", test_missing_quota_fields);
+    g_test_add_func("/zai/raw-percentage-normalization", test_raw_percentage_fallback_normalization);
     g_test_add_func("/zai/credit-limits", test_credit_limits);
     g_test_add_func("/zai/api-errors", test_api_errors);
     g_test_add_func("/zai/urls", test_quota_urls);

@@ -623,7 +623,12 @@ CodexBarProvider *codexbar_mimo_parse(const char *balance_json,
         if (number(member(item, "used"), &used) && number(member(item, "limit"), &limit) &&
             number(member(item, "percent"), &fraction) && used >= 0 && limit > 0 && fraction >= 0) {
             add_window(provider, "Monthly token plan", used, limit, reset_ms, has_reset);
-            codexbar_provider_quota_window(provider, 0)->used_percent = CLAMP(fraction * 100, 0, 100);
+            CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, 0);
+            window->used_percent = CLAMP(fraction * 100, 0, 100);
+            if (has_reset) {
+                window->has_window_minutes = TRUE;
+                window->window_minutes = 30 * 24 * 60;
+            }
         }
     }
     if (usage_root) json_object_put(usage_root);

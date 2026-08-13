@@ -222,29 +222,15 @@ static CodexBarQuotaWindow *parse_window(json_object *root,
     return window;
 }
 
-static gboolean key_exists(json_object *object, const char *key) {
-    json_object *value = NULL;
-    return json_object_object_get_ex(object, key, &value);
-}
-
 static void add_routines_window(CodexBarProvider *provider, json_object *root) {
     static const char *const keys[] = {
         "seven_day_routines", "seven_day_claude_routines", "claude_routines", "routines",
         "routine", "seven_day_cowork", "cowork",
     };
-    gboolean known = FALSE;
     CodexBarQuotaWindow *window = NULL;
     for (size_t index = 0; index < G_N_ELEMENTS(keys); index++) {
-        if (key_exists(root, keys[index])) known = TRUE;
         window = parse_window(root, keys[index], "claude-routines", "Daily Routines", 7 * 24 * 60);
         if (window) break;
-    }
-    if (!window && known) {
-        window = codexbar_quota_window_new("claude-routines", "Daily Routines");
-        window->usage_known = TRUE;
-        window->used_percent = 0;
-        window->has_window_minutes = TRUE;
-        window->window_minutes = 7 * 24 * 60;
     }
     if (window) codexbar_provider_add_quota_window(provider, window);
 }
@@ -433,8 +419,8 @@ CodexBarProvider *codexbar_claude_parse_oauth_usage(const char *text,
     if (weekly) codexbar_provider_add_quota_window(provider, weekly);
     CodexBarQuotaWindow *sonnet = parse_window(root, "seven_day_sonnet", "sonnet", "sonnet", 7 * 24 * 60);
     if (sonnet) codexbar_provider_add_quota_window(provider, sonnet);
-    add_routines_window(provider, root);
     add_scoped_windows(provider, root);
+    add_routines_window(provider, root);
     apply_extra_usage(provider, root, primary != NULL, updated_at_ms);
     json_object_put(root);
 
@@ -477,8 +463,8 @@ CodexBarProvider *codexbar_claude_parse_web_usage(const char *text,
     CodexBarQuotaWindow *sonnet = parse_window(root, "seven_day_sonnet", "sonnet", "sonnet", 7 * 24 * 60);
     if (!sonnet) sonnet = parse_window(root, "seven_day_opus", "opus", "opus", 7 * 24 * 60);
     if (sonnet) codexbar_provider_add_quota_window(provider, sonnet);
-    add_routines_window(provider, root);
     add_scoped_windows(provider, root);
+    add_routines_window(provider, root);
     apply_extra_usage(provider, root, TRUE, updated_at_ms);
     json_object_put(root);
     return provider;
