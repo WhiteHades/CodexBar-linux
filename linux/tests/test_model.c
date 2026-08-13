@@ -822,7 +822,8 @@ static void test_extended_provider_config(void) {
         "\"enterpriseHost\":\"api.example.com\",\"awsProfile\":\"prod\","
         "\"awsAuthMode\":\"profile\"},{\"id\":\"notion\",\"enabled\":true,\"source\":\"web\","
         "\"workspaceID\":\"11111111222233334444555555555555\",\"cookieSource\":\"manual\","
-        "\"cookieHeader\":\"token_v2=abc\"},{\"id\":\"poe\",\"enabled\":true},"
+        "\"cookieHeader\":\"token_v2=abc\"},{\"id\":\"alibabatokenplan\",\"enabled\":true,"
+        "\"region\":\"intl-personal\"},{\"id\":\"poe\",\"enabled\":true},"
         "{\"id\":\"deepinfra\",\"enabled\":true,\"apiKey\":\"valid\\u0000bad\"}]}";
     g_assert_true(g_file_set_contents(path, json, -1, &error));
     g_assert_no_error(error);
@@ -849,7 +850,10 @@ static void test_extended_provider_config(void) {
     g_assert_false(config_has_issue(issues, "notion", "workspace_unused"));
     g_assert_false(config_has_issue(issues, "notion", "unsupported_source"));
     g_assert_false(config_has_issue(issues, "notion", "cookie_header_missing"));
+    g_assert_false(config_has_issue(issues, "alibabatokenplan", "invalid_region"));
     g_ptr_array_unref(issues);
+    provider = codexbar_config_provider(config, "alibabatokenplan");
+    g_assert_cmpstr(provider->region, ==, "intl-personal");
     provider = codexbar_config_provider(config, "poe");
     g_assert_false(provider->has_extras_enabled);
     provider = codexbar_config_provider(config, "deepinfra");
@@ -1461,6 +1465,7 @@ static void test_kimi_usage(void) {
 }
 
 static gboolean kimi_test_web;
+static guint kimi_test_requests;
 
 static const char *kimi_test_header(const CodexBarHttpRequest *request, const char *name) {
     for (size_t index = 0; index < request->header_count; index++) {
@@ -1473,7 +1478,17 @@ static CodexBarHttpResponse *kimi_test_transport(const CodexBarHttpRequest *requ
     (void)error;
     CodexBarHttpResponse *response = g_new0(CodexBarHttpResponse, 1);
     response->status = 200;
-    if (kimi_test_web) {
+    kimi_test_requests++;
+    if (strstr(request->url, "GetSubscriptionStats")) {
+        g_assert_cmpstr(request->method, ==, "POST");
+        g_assert_cmpstr(kimi_test_header(request, "Authorization"), ==, "Bearer eyJtest.payload.signature");
+        g_assert_cmpstr(kimi_test_header(request, "Cookie"), ==, "kimi-auth=eyJtest.payload.signature");
+        response->body = g_strdup(
+            "{\"subscriptionBalance\":{\"feature\":\"FEATURE_OMNI\",\"type\":\"SUBSCRIPTION\","
+            "\"amountUsedRatio\":0.42,\"expireTime\":\"2026-09-01T00:00:00Z\"},"
+            "\"ratelimitCode7d\":{\"ratio\":0.2935,\"enabled\":true,"
+            "\"resetTime\":\"2026-08-13T17:02:43Z\"}}" );
+    } else if (kimi_test_web) {
         g_assert_cmpstr(request->url,
                         ==,
                         "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages");
@@ -1486,7 +1501,8 @@ static CodexBarHttpResponse *kimi_test_transport(const CodexBarHttpRequest *requ
                         strlen("{\"scope\":[\"FEATURE_CODING\"]}"));
         response->body = g_strdup(
             "{\"usages\":[{\"scope\":\"OTHER\",\"detail\":{\"limit\":1}},"
-            "{\"scope\":\"FEATURE_CODING\",\"detail\":{\"limit\":100,\"remaining\":40},"
+            "{\"scope\":\"FEATURE_CODING\",\"detail\":{\"limit\":100,\"used\":29,"
+            "\"remaining\":71,\"resetTime\":\"2026-08-13T17:02:44Z\"},"
             "\"limits\":[{\"window\":{\"duration\":5,\"timeUnit\":\"TIME_UNIT_HOUR\"},"
             "\"detail\":{\"limit\":20,\"used\":5}}]}]}");
     } else {
@@ -1494,7 +1510,9 @@ static CodexBarHttpResponse *kimi_test_transport(const CodexBarHttpRequest *requ
         g_assert_cmpstr(request->method, ==, "GET");
         g_assert_cmpstr(kimi_test_header(request, "Authorization"), ==, "Bearer kimi-api-key");
         g_assert_null(kimi_test_header(request, "Cookie"));
-        response->body = g_strdup("{\"usage\":{\"limit\":100,\"used\":10}}");
+        response->body = g_strdup(
+            "{\"usage\":{\"limit\":100,\"used\":29,"
+            "\"resetTime\":\"2026-08-13T17:02:44Z\"}}");
     }
     response->body_length = strlen(response->body);
     response->headers = g_ptr_array_new();
@@ -1507,14 +1525,18 @@ static void test_kimi_sources(void) {
                            "cookieHeader",
                            json_object_new_string("kimi-auth=eyJtest.payload.signature; other=value"));
     kimi_test_web = TRUE;
+    kimi_test_requests = 0;
     GError *error = NULL;
     CodexBarProvider *provider = codexbar_kimi_fetch_with_transport_and_cancellable(
         &config, "web", kimi_test_transport, NULL, 1, &error);
     g_assert_no_error(error);
     g_assert_nonnull(provider);
     g_assert_cmpstr(provider->source, ==, "web");
-    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
-    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 60);
+    g_assert_cmpuint(kimi_test_requests, ==, 2);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 29.0, 0.0001);
+    g_assert_cmpstr(window_at(provider, 2)->id, ==, "kimi-monthly");
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 2)->used_percent, 42.0, 0.0001);
     codexbar_provider_free(provider);
 
     provider = codexbar_kimi_fetch_with_transport_and_cancellable(
@@ -1526,11 +1548,15 @@ static void test_kimi_sources(void) {
 
     config.api_key = "kimi-api-key";
     kimi_test_web = FALSE;
+    kimi_test_requests = 0;
     provider = codexbar_kimi_fetch_with_transport_and_cancellable(
         &config, "api", kimi_test_transport, NULL, 1, &error);
     g_assert_no_error(error);
     g_assert_nonnull(provider);
     g_assert_cmpstr(provider->source, ==, "api");
+    g_assert_cmpuint(kimi_test_requests, ==, 2);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    g_assert_cmpstr(window_at(provider, 1)->id, ==, "kimi-monthly");
     codexbar_provider_free(provider);
     json_object_put(config.raw);
 }

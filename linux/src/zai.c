@@ -263,7 +263,58 @@ static char *plan_name(json_object *data) {
     return NULL;
 }
 
-CodexBarProvider *codexbar_zai_parse_usage(const char *json, GError **error) {
+static void add_credit_burn_rate(CodexBarProvider *provider, gint64 now_ms) {
+    GDateTime *now = g_date_time_new_from_unix_utc(now_ms / 1000);
+    if (!now) return;
+    int day = g_date_time_get_day_of_week(now);
+    int hour = g_date_time_get_hour(now);
+    gboolean peak = day >= 1 && day <= 5 && hour >= 6 && hour < 10;
+    GDateTime *boundary = g_date_time_new_utc(g_date_time_get_year(now),
+                                              g_date_time_get_month(now),
+                                              g_date_time_get_day_of_month(now),
+                                              peak ? 10 : 6,
+                                              0,
+                                              0);
+    if (!peak && hour >= 6) {
+        GDateTime *next = g_date_time_add_days(boundary, 1);
+        g_date_time_unref(boundary);
+        boundary = next;
+    }
+    while (g_date_time_get_day_of_week(boundary) >= 6) {
+        GDateTime *next = g_date_time_add_days(boundary, 1);
+        g_date_time_unref(boundary);
+        boundary = next;
+    }
+    json_object *metadata = json_object_new_object();
+    json_object_object_add(metadata, "phase", json_object_new_string(peak ? "peak" : "off-peak"));
+    json_object_object_add(metadata, "multiplier", json_object_new_double(peak ? 1.0 : 0.5));
+    json_object_object_add(metadata, "nextPhase", json_object_new_string(peak ? "off-peak" : "peak"));
+    json_object_object_add(metadata,
+                           "changesAtMs",
+                           json_object_new_int64(g_date_time_to_unix(boundary) * 1000));
+    GDateTime *peak_start = peak ? g_date_time_add_hours(boundary, -4) : g_date_time_ref(boundary);
+    GDateTime *peak_end = g_date_time_add_hours(peak_start, 4);
+    json_object_object_add(metadata,
+                           "activePhaseStartsAtMs",
+                           json_object_new_int64(g_date_time_to_unix(peak ? peak_start : now) * 1000));
+    json_object_object_add(metadata,
+                           "nextPeakStartsAtMs",
+                           json_object_new_int64(g_date_time_to_unix(peak_start) * 1000));
+    json_object_object_add(metadata,
+                           "nextPeakEndsAtMs",
+                           json_object_new_int64(g_date_time_to_unix(peak_end) * 1000));
+    json_object_object_add(metadata,
+                           "peakSchedule",
+                           json_object_new_string("Mon-Fri 06:00-10:00 UTC"));
+    if (!provider->usage_extensions) provider->usage_extensions = json_object_new_object();
+    json_object_object_add(provider->usage_extensions, "zaiCreditBurnRate", metadata);
+    g_date_time_unref(peak_end);
+    g_date_time_unref(peak_start);
+    g_date_time_unref(boundary);
+    g_date_time_unref(now);
+}
+
+CodexBarProvider *codexbar_zai_parse_usage_at(const char *json, gint64 now_ms, GError **error) {
     json_object *root = parse_json_object(json, error);
     if (!root) {
         return NULL;
@@ -294,11 +345,13 @@ CodexBarProvider *codexbar_zai_parse_usage(const char *json, GError **error) {
     ZaiLimit token_limits[64] = {0};
     size_t token_count = 0;
     ZaiLimit time_limit = {0};
+    gboolean has_credit_limit = FALSE;
     json_object *limits = object_member(data, "limits");
     if (limits && json_object_get_type(limits) == json_type_array) {
         size_t count = json_object_array_length(limits);
         for (size_t index = 0; index < count; index++) {
             ZaiLimit limit = parse_limit(json_object_array_get_idx(limits, index));
+            if (limit.type == ZAI_LIMIT_CREDIT) has_credit_limit = TRUE;
             if ((limit.type == ZAI_LIMIT_TOKENS || limit.type == ZAI_LIMIT_CREDIT) &&
                 token_count < G_N_ELEMENTS(token_limits)) {
                 token_limits[token_count++] = limit;
@@ -342,7 +395,7 @@ CodexBarProvider *codexbar_zai_parse_usage(const char *json, GError **error) {
         provider->identity->login_method = g_strdup(provider->plan);
     }
     provider->has_updated_at = TRUE;
-    provider->updated_at_ms = g_get_real_time() / 1000;
+    provider->updated_at_ms = now_ms;
     provider->explicit_quota_slots = TRUE;
 
     if (primary_token.type != ZAI_LIMIT_UNKNOWN) {
@@ -356,9 +409,14 @@ CodexBarProvider *codexbar_zai_parse_usage(const char *json, GError **error) {
     if (session_token.type != ZAI_LIMIT_UNKNOWN) {
         codexbar_provider_add_quota_window(provider, make_window("session", "Session", &session_token));
     }
+    if (has_credit_limit) add_credit_burn_rate(provider, now_ms);
 
     json_object_put(root);
     return provider;
+}
+
+CodexBarProvider *codexbar_zai_parse_usage(const char *json, GError **error) {
+    return codexbar_zai_parse_usage_at(json, g_get_real_time() / 1000, error);
 }
 
 static char *api_host_url(const char *raw, GError **error) {

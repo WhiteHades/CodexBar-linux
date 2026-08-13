@@ -10,6 +10,8 @@
 #define KIMI_RESPONSE_LIMIT (1024U * 1024U)
 #define KIMI_CREDENTIAL_LIMIT (16U * 1024U)
 #define KIMI_WEB_USAGE_URL "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages"
+#define KIMI_SUBSCRIPTION_STATS_URL \
+    "https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats"
 
 static GQuark kimi_error_quark(void) {
     return g_quark_from_static_string("codexbar-kimi-error");
@@ -126,9 +128,11 @@ static CodexBarQuotaWindow *kimi_window(
                                ? codexbar_usage_percent_display(
                                      codexbar_usage_percent_from_ratio((double)used, (double)limit))
                                : 0.0;
-    if (rate) {
+    if (rate || has_used || has_remaining) {
         window->has_window_minutes = TRUE;
-        window->window_minutes = rate_minutes;
+        window->window_minutes = rate ? rate_minutes : 7 * 24 * 60;
+    }
+    if (rate) {
         if (rate_minutes % 60 == 0) {
             gint64 hours = rate_minutes / 60;
             window->detail = g_strdup_printf("Rate: %" G_GINT64_FORMAT "/%" G_GINT64_FORMAT
@@ -230,6 +234,96 @@ static CodexBarProvider *kimi_provider(json_object *usage,
         }
     }
     return provider;
+}
+
+static gboolean kimi_number(json_object *object, const char *key, double *result) {
+    json_object *value = NULL;
+    if (!object || !json_object_object_get_ex(object, key, &value) ||
+        (!json_object_is_type(value, json_type_double) && !json_object_is_type(value, json_type_int))) {
+        return FALSE;
+    }
+    double number = json_object_get_double(value);
+    if (!isfinite(number)) return FALSE;
+    *result = number;
+    return TRUE;
+}
+
+static gboolean kimi_boolean(json_object *object, const char *key, gboolean *result) {
+    json_object *value = NULL;
+    if (!object || !json_object_object_get_ex(object, key, &value) ||
+        !json_object_is_type(value, json_type_boolean)) return FALSE;
+    *result = json_object_get_boolean(value);
+    return TRUE;
+}
+
+static gboolean kimi_equivalent_weekly(const CodexBarQuotaWindow *weekly,
+                                       double percent,
+                                       gint64 reset_ms,
+                                       gboolean has_reset) {
+    return weekly && weekly->usage_known && weekly->has_window_minutes &&
+           weekly->window_minutes == 7 * 24 * 60 && fabs(weekly->used_percent - percent) <= 1.0 &&
+           weekly->has_resets_at && has_reset && llabs(weekly->resets_at_ms - reset_ms) <= 5 * 60 * 1000;
+}
+
+static gboolean kimi_enrich_subscription(CodexBarProvider *provider,
+                                         const char *json,
+                                         GError **error) {
+    json_object *root = parse_json_document(json);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error, kimi_error_quark(), 1, "Kimi subscription statistics are malformed");
+        return FALSE;
+    }
+    json_object *balance = NULL;
+    if (json_object_object_get_ex(root, "subscriptionBalance", &balance) &&
+        json_object_is_type(balance, json_type_object)) {
+        json_object *feature_value = NULL;
+        json_object *type_value = NULL;
+        const char *feature = json_object_object_get_ex(balance, "feature", &feature_value) &&
+                                      json_object_is_type(feature_value, json_type_string)
+                                  ? json_object_get_string(feature_value)
+                                  : NULL;
+        const char *type = json_object_object_get_ex(balance, "type", &type_value) &&
+                                   json_object_is_type(type_value, json_type_string)
+                               ? json_object_get_string(type_value)
+                               : NULL;
+        double ratio = 0;
+        if ((!feature || g_str_equal(feature, "FEATURE_OMNI")) &&
+            (!type || g_str_equal(type, "SUBSCRIPTION")) && kimi_number(balance, "amountUsedRatio", &ratio)) {
+            CodexBarQuotaWindow *monthly = codexbar_quota_window_new("kimi-monthly", "Total usage");
+            monthly->usage_known = TRUE;
+            monthly->used_percent = CLAMP(ratio * 100.0, 0.0, 100.0);
+            monthly->has_window_minutes = TRUE;
+            monthly->window_minutes = 43200;
+            monthly->has_resets_at = iso_timestamp_ms(balance, &monthly->resets_at_ms);
+            codexbar_provider_add_quota_window(provider, monthly);
+        }
+    }
+    json_object *weekly_limit = NULL;
+    if (json_object_object_get_ex(root, "ratelimitCode7d", &weekly_limit) &&
+        json_object_is_type(weekly_limit, json_type_object)) {
+        gboolean enabled = TRUE;
+        gboolean parsed_enabled = kimi_boolean(weekly_limit, "enabled", &enabled);
+        double ratio = 0;
+        gint64 reset_ms = 0;
+        gboolean has_reset = iso_timestamp_ms(weekly_limit, &reset_ms);
+        if ((!parsed_enabled || enabled) && kimi_number(weekly_limit, "ratio", &ratio)) {
+            double percent = CLAMP(ratio * 100.0, 0.0, 100.0);
+            CodexBarQuotaWindow *weekly = codexbar_provider_quota_window(provider, 0);
+            if (!kimi_equivalent_weekly(weekly, percent, reset_ms, has_reset)) {
+                CodexBarQuotaWindow *window = codexbar_quota_window_new("kimi-code-7d", "Code 7-day");
+                window->usage_known = TRUE;
+                window->used_percent = percent;
+                window->has_window_minutes = TRUE;
+                window->window_minutes = 7 * 24 * 60;
+                window->has_resets_at = has_reset;
+                window->resets_at_ms = reset_ms;
+                codexbar_provider_add_quota_window(provider, window);
+            }
+        }
+    }
+    json_object_put(root);
+    return TRUE;
 }
 
 CodexBarProvider *codexbar_kimi_parse_usage(const char *json, gint64 now_ms, GError **error) {
@@ -444,8 +538,10 @@ static CodexBarProvider *kimi_fetch_web(const CodexBarProviderConfig *config,
     const char *body = "{\"scope\":[\"FEATURE_CODING\"]}";
     CodexBarHttpResponse *response = kimi_request(
         KIMI_WEB_USAGE_URL, "POST", token, body, TRUE, transport, cancellable, error);
-    g_free(token);
-    if (!response) return NULL;
+    if (!response) {
+        g_free(token);
+        return NULL;
+    }
     if (response->status != 200) {
         long status = response->status;
         codexbar_http_response_free(response);
@@ -454,11 +550,53 @@ static CodexBarProvider *kimi_fetch_web(const CodexBarProviderConfig *config,
         } else {
             g_set_error(error, kimi_error_quark(), 3, "Kimi web API returned HTTP %ld", status);
         }
+        g_free(token);
         return NULL;
     }
     CodexBarProvider *provider = codexbar_kimi_parse_web_usage(response->body, now_ms, error);
     codexbar_http_response_free(response);
+    if (provider) {
+        GError *stats_error = NULL;
+        CodexBarHttpResponse *stats = kimi_request(
+            KIMI_SUBSCRIPTION_STATS_URL, "POST", token, "{}", TRUE, transport, cancellable, &stats_error);
+        if (stats && stats->status == 200) kimi_enrich_subscription(provider, stats->body, NULL);
+        codexbar_http_response_free(stats);
+        if (stats_error && g_error_matches(stats_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            codexbar_provider_free(provider);
+            provider = NULL;
+            if (error) *error = stats_error;
+            else g_clear_error(&stats_error);
+        } else {
+            g_clear_error(&stats_error);
+        }
+    }
+    g_free(token);
     return provider;
+}
+
+static gboolean kimi_enrich_api(CodexBarProvider *provider,
+                                const CodexBarProviderConfig *config,
+                                CodexBarKimiTransport transport,
+                                GCancellable *cancellable,
+                                GError **error) {
+    char *web_token = kimi_web_token(config);
+    if (!provider || !web_token) {
+        g_free(web_token);
+        return TRUE;
+    }
+    GError *stats_error = NULL;
+    CodexBarHttpResponse *stats = kimi_request(
+        KIMI_SUBSCRIPTION_STATS_URL, "POST", web_token, "{}", TRUE, transport, cancellable, &stats_error);
+    if (stats && stats->status == 200) kimi_enrich_subscription(provider, stats->body, NULL);
+    codexbar_http_response_free(stats);
+    g_free(web_token);
+    if (stats_error && g_error_matches(stats_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        if (error) *error = stats_error;
+        else g_clear_error(&stats_error);
+        return FALSE;
+    }
+    g_clear_error(&stats_error);
+    return TRUE;
 }
 
 CodexBarProvider *codexbar_kimi_fetch_with_transport_and_cancellable(
@@ -482,6 +620,10 @@ CodexBarProvider *codexbar_kimi_fetch_with_transport_and_cancellable(
         CodexBarProvider *provider = kimi_fetch_api_token(
             config, token, transport, cancellable, now_ms, error);
         g_free(token);
+        if (!kimi_enrich_api(provider, config, transport, cancellable, error)) {
+            codexbar_provider_free(provider);
+            return NULL;
+        }
         return provider;
     }
     if (!g_str_equal(mode, "auto")) {
@@ -494,7 +636,15 @@ CodexBarProvider *codexbar_kimi_fetch_with_transport_and_cancellable(
         CodexBarProvider *provider = kimi_fetch_api_token(
             config, token, transport, cancellable, now_ms, &api_error);
         g_free(token);
-        if (provider) return provider;
+        if (provider) {
+            if (!kimi_enrich_api(provider, config, transport, cancellable, &api_error)) {
+                codexbar_provider_free(provider);
+                if (error) *error = api_error;
+                else g_clear_error(&api_error);
+                return NULL;
+            }
+            return provider;
+        }
         if (api_error && g_error_matches(api_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
             if (error) *error = api_error;
             else g_clear_error(&api_error);
@@ -511,6 +661,12 @@ CodexBarProvider *codexbar_kimi_fetch_with_transport_and_cancellable(
         if (provider) {
             g_free(provider->source);
             provider->source = g_strdup("oauth");
+            if (!kimi_enrich_api(provider, config, transport, cancellable, &cli_error)) {
+                codexbar_provider_free(provider);
+                if (error) *error = cli_error;
+                else g_clear_error(&cli_error);
+                return NULL;
+            }
             return provider;
         }
         if (cli_error && g_error_matches(cli_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {

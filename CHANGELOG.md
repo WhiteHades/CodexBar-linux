@@ -15,6 +15,10 @@
 
 - Compact Codex subagents exclude parent-confirmed copied prefixes, and priority traces use API Fast USD pricing.
 - Parse Command Code five-hour and weekly rolling limits and include the Goat plan's monthly allowance.
+- Show Doubao Coding Plan and Agent Plan windows together for AK/SK accounts subscribed to both products.
+- Support Alibaba Token Plan Personal/Solo rolling windows with account-safe authentication and regional hosts.
+- Enrich Kimi API and web usage with subscription statistics while hiding duplicate Code 7-day lanes.
+- Report z.ai credit-plan peak and off-peak burn-rate metadata from the fixed UTC schedule.
 
 ## 0.4.2.2 - 2026-08-10
 

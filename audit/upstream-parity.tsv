@@ -670,7 +670,7 @@ cf16f25aac111370087201dbd77eed99b0f26057	pending	unreviewed	-
 f4b3978f580e72982be8cac1cf991588aa47c9b3	pending	unreviewed	-
 cf09db56c8106df0a267c5a86472ab14caf39db5	pending	unreviewed	-
 83a7fd38a1f58e392c31e51ec0b66fc7fc190e17	pending	unreviewed	-
-20d54c0094a3cf6768e85af7d88b56e1e131cfc6	pending	range3: Alibaba Personal	-
+20d54c0094a3cf6768e85af7d88b56e1e131cfc6	ported	range3: Alibaba Personal	linux/src/web_providers5.c; linux/src/config.c; linux/tests/test_web_providers5.c; linux/tests/test_model.c
 2fd53db948b9795a58e351cf2dd89955e1c0c1f7	pending	unreviewed	-
 bc8f33e5950c78acc6f425b621da6b2c1b88e4a1	pending	unreviewed	-
 19a1be9ed99e051c13e4bf5175f2f93a9c6f8141	pending	unreviewed	-
@@ -867,7 +867,7 @@ f13ef61c49bd0be19096bea50b1873ae3f5b7fbe	pending	range4: hooks watch	-
 f70006301a175a45246f3ec1d276535c0843b9c1	pending	unreviewed	-
 9c8c0644ec36060aead7eb54861238f2ee3e429d	pending	unreviewed	-
 016646bc09a1d1f5c1dbe4a6d389e52e39adfea0	pending	unreviewed	-
-328ea286e4a5fe9c8a3261d6c5829d159be7002b	pending	range4: Doubao dual plans	-
+328ea286e4a5fe9c8a3261d6c5829d159be7002b	ported	range4: Doubao dual plans	linux/src/api_providers3.c; linux/tests/test_api_providers3.c
 0c5255c1838ec395441dbdf2b0e734074e6528fb	pending	unreviewed	-
 fd7857a065b35b470cdf25f10d8ca62f1f22a3ac	pending	unreviewed	-
 fd23f63db9a0dd376bf0c41fb73fe3ee605eb975	pending	unreviewed	-
@@ -879,7 +879,7 @@ b52d309da032ceffa5741e98eca590c72cd99966	pending	unreviewed	-
 61feb25b2ffe41f021f3b28548e47e884a1e0d7c	pending	unreviewed	-
 a557d0229f9060fe2ea792e671c258427f661874	pending	unreviewed	-
 eddf0b4a18090633d3dced6f32a219147beedf86	pending	unreviewed	-
-4482118b7a5ff4af79b1e234ceb6151b2c3ac514	pending	range4: Alibaba personal auth	-
+4482118b7a5ff4af79b1e234ceb6151b2c3ac514	ported	range4: Alibaba personal auth	linux/src/web_providers5.c; linux/tests/test_web_providers5.c
 8393fc89bd01565d2cc06b46548fb26445232d63	pending	unreviewed	-
 e59539db730b7c080b616689d1b2a6e4eecd3cf4	pending	unreviewed	-
 cafb2094dd3c85852b39f8ff2549360d480632cc	pending	unreviewed	-
@@ -892,7 +892,7 @@ e12a824fdb49b2ec7dacec34b2065264231ad91a	pending	range4: dashboard command	-
 a6722f39bc839b0c7858d2fc99c3b2444239e963	pending	unreviewed	-
 70125a5ec10257f8f92280af2c8664e5e6474b3a	pending	unreviewed	-
 7002b5782053744b4cdb497b5fc3b744ef2986d1	pending	unreviewed	-
-6afa6728f3c42b090e1b3e1a0733ecf37c55399c	pending	range4: Kimi enrichment	-
+6afa6728f3c42b090e1b3e1a0733ecf37c55399c	ported	range4: Kimi enrichment	linux/src/kimi.c; linux/tests/test_model.c
 00ef23cdc9e4c73ddc193c1bb09b8aa1623952cc	pending	unreviewed	-
 8eb867c0c5ebba86a5b055fb990f7d35e6fc916d	ported	range4: Pi/OMP sessions	linux/src/sessions.c; linux/src/cli_sessions.c; linux/tests/test_sessions_cli.sh; fixtures/native/local-parity
 47e1d0426236e9ffb4d8664568a896299e42464f	pending	unreviewed	-
@@ -990,7 +990,7 @@ ce55c65c8474fb3a6b7030cd925859665d1828bb	pending	unreviewed	-
 f33095395e19fce2cb5f64c13df10cf6b51c454d	pending	unreviewed	-
 6d19a437b29254c7e21731a482fb119329de803d	pending	unreviewed	-
 2161b06500d76510c1c51ef9612fe5ea75a4de05	pending	unreviewed	-
-14ee6a83e90c461177b3847fea575f6edbcef285	pending	unreviewed	-
+14ee6a83e90c461177b3847fea575f6edbcef285	ported	range4: Kimi duplicate lane suppression	linux/src/kimi.c; linux/tests/test_model.c
 7219c88a60bde58cdfbdd89244ff005e52b00bcb	pending	unreviewed	-
 b39714de36561aee67d2b53894f2e7d9379d2d38	pending	unreviewed	-
 8fc67d7f04adc2fac717ad35f66da82563968aec	pending	unreviewed	-
@@ -1017,7 +1017,7 @@ d75d818bc71ad2232f3e9dfda14f25325ec3649e	pending	unreviewed	-
 b4741e505dbad18cfc28fa9dc7e70faf512fde29	pending	unreviewed	-
 4c615ea1d5a16fc6857aa2be2724b706da24c2f3	pending	unreviewed	-
 b772c66b741b0416accdf7877642ed3c216e5bcc	pending	unreviewed	-
-d427c2d94994bb670d04e6abc481d30f99407717	pending	range4: z.ai burn	-
+d427c2d94994bb670d04e6abc481d30f99407717	ported	range4: z.ai burn	linux/src/zai.c; linux/src/zai.h; linux/tests/test_zai.c
 30396f13aa41b29ffa241b5e4e0a307a06c588ed	pending	unreviewed	-
 617c292f650aa19525d85a0a10e0ff9216913a45	pending	unreviewed	-
 5e8797b14b6cb7aef11f44e253e851d961408880	pending	unreviewed	-
