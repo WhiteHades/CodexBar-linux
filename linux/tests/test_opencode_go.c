@@ -27,6 +27,12 @@ static Fixture fixture_new(void) {
 }
 
 static void fixture_free(Fixture *fixture) {
+    char *wal_path = g_strconcat(fixture->database_path, "-wal", NULL);
+    char *shm_path = g_strconcat(fixture->database_path, "-shm", NULL);
+    g_remove(wal_path);
+    g_remove(shm_path);
+    g_free(shm_path);
+    g_free(wal_path);
     g_remove(fixture->database_path);
     g_remove(fixture->auth_path);
     g_rmdir(fixture->directory);
@@ -219,6 +225,62 @@ static void test_part_costs_and_message_precedence(void) {
     fixture_free(&fixture);
 }
 
+static void test_idle_wal_immutable_fallback(void) {
+    Fixture fixture = fixture_new();
+    sqlite3 *database = open_database(&fixture);
+    create_message_table(database);
+    gint64 now_ms = 1800000000000LL;
+    insert_message(database, "idle-wal", now_ms - 60000, "opencode-go", "assistant", "3");
+    execute(database, "PRAGMA journal_mode = WAL");
+    execute(database, "PRAGMA wal_checkpoint(TRUNCATE)");
+    g_assert_cmpint(sqlite3_close(database), ==, SQLITE_OK);
+    char *wal_path = g_strconcat(fixture.database_path, "-wal", NULL);
+    char *shm_path = g_strconcat(fixture.database_path, "-shm", NULL);
+    g_remove(wal_path);
+    g_remove(shm_path);
+    g_assert_false(g_file_test(wal_path, G_FILE_TEST_EXISTS));
+    g_assert_false(g_file_test(shm_path, G_FILE_TEST_EXISTS));
+    g_assert_cmpint(g_chmod(fixture.directory, 0500), ==, 0);
+
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_opencode_go_fetch_from_home(fixture.home, now_ms, &error);
+    g_assert_cmpint(g_chmod(fixture.directory, 0700), ==, 0);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpfloat(window(provider, 0, "primary")->used_percent, ==, 25);
+    g_assert_false(g_file_test(wal_path, G_FILE_TEST_EXISTS));
+    g_assert_false(g_file_test(shm_path, G_FILE_TEST_EXISTS));
+    codexbar_provider_free(provider);
+    g_free(shm_path);
+    g_free(wal_path);
+    fixture_free(&fixture);
+}
+
+static void test_active_wal_uses_ordinary_readonly(void) {
+    Fixture fixture = fixture_new();
+    sqlite3 *database = open_database(&fixture);
+    create_message_table(database);
+    execute(database, "PRAGMA journal_mode = WAL");
+    execute(database, "PRAGMA wal_autocheckpoint = 0");
+    gint64 now_ms = 1800000000000LL;
+    insert_message(database, "active-wal", now_ms - 60000, "opencode-go", "assistant", "3");
+    char *wal_path = g_strconcat(fixture.database_path, "-wal", NULL);
+    char *shm_path = g_strconcat(fixture.database_path, "-shm", NULL);
+    g_assert_true(g_file_test(wal_path, G_FILE_TEST_EXISTS));
+    g_assert_true(g_file_test(shm_path, G_FILE_TEST_EXISTS));
+
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_opencode_go_fetch_from_home(fixture.home, now_ms, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpfloat(window(provider, 0, "primary")->used_percent, ==, 25);
+    codexbar_provider_free(provider);
+    g_assert_cmpint(sqlite3_close(database), ==, SQLITE_OK);
+    g_free(shm_path);
+    g_free(wal_path);
+    fixture_free(&fixture);
+}
+
 static void test_web_usage_parser(void) {
     const char *page =
         "rollingUsage:{usagePercent:25.5,resetInSec:3600},"
@@ -407,6 +469,8 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/opencode-go/local-database", test_local_database_contract);
     g_test_add_func("/opencode-go/part-costs", test_part_costs_and_message_precedence);
+    g_test_add_func("/opencode-go/idle-wal", test_idle_wal_immutable_fallback);
+    g_test_add_func("/opencode-go/active-wal", test_active_wal_uses_ordinary_readonly);
     g_test_add_func("/opencode-go/web-usage", test_web_usage_parser);
     g_test_add_func("/opencode-go/web-fallback-balance", test_web_discovery_fallback_and_zen_balance);
     g_test_add_func("/opencode-go/detection-errors", test_detection_errors);

@@ -627,6 +627,21 @@ opencode_go_test = executable(
 )
 test('codexbar-linux-opencode-go', opencode_go_test, env: normalized_test_env)
 
+billing_parity_test = executable(
+  'codexbar-linux-billing-parity-tests',
+  files(
+    'tests/test_billing_parity.c',
+    'src/codex.c',
+    'src/openrouter.c',
+    'src/http.c',
+    'src/model.c',
+    'src/token_accounts.c',
+  ),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-billing-parity', billing_parity_test, env: normalized_test_env)
+
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(
   'codexbar-linux-diagnose-cli',
