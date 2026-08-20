@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Parse both legacy and current Amp subscription lines, including calendar-month renewal windows.
 - Compact Codex subagents exclude parent-confirmed copied prefixes, and priority traces use API Fast USD pricing.
 - Parse Command Code five-hour and weekly rolling limits and include the Goat plan's monthly allowance.
 - Show Doubao Coding Plan and Agent Plan windows together for AK/SK accounts subscribed to both products.
