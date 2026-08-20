@@ -1,0 +1,160 @@
++}
++
++gboolean codexbar_codex_pat_is_available(const CodexBarProviderConfig *config) {
++    char *token = NULL;
++    GError *error = NULL;
++    gboolean available = load_pat_credentials(config, &token, &error);
++    g_clear_pointer(&token, g_free);
++    g_clear_error(&error);
++    return available;
++}
++
+ static gboolean load_oauth_credentials(const CodexBarProviderConfig *config,
+                                        char **access_token,
+                                        char **account_id,
+@@ -428,13 +637,13 @@ static gboolean load_oauth_credentials(const CodexBarProviderConfig *config,
+         return FALSE;
+     }
+     g_free(path);
+-    if (length == 0 || length > 1024 * 1024) {
++    if (length == 0 || length > CODEX_MAXIMUM_AUTH_BYTES) {
+         g_free(contents);
+         g_set_error_literal(error, codex_error_quark(), CODEX_ERROR_CREDENTIALS_INVALID,
+                             "Codex auth.json is invalid");
+         return FALSE;
+     }
+-    json_object *root = json_tokener_parse(contents);
++    json_object *root = parse_json_document(contents, length);
+     g_free(contents);
+     if (!root || !json_object_is_type(root, json_type_object)) {
+         if (root) json_object_put(root);
+@@ -492,6 +701,224 @@ static char *manual_cookie(const CodexBarProviderConfig *config, GError **error)
+     return NULL;
+ }
+ 
++typedef struct {
++    char *account_id;
++    char *email;
++    char *plan_type;
++} CodexPatWhoami;
++
++static void pat_whoami_clear(CodexPatWhoami *whoami) {
++    g_clear_pointer(&whoami->account_id, g_free);
++    g_clear_pointer(&whoami->email, g_free);
++    g_clear_pointer(&whoami->plan_type, g_free);
++}
++
++static gboolean optional_clean_json_string(json_object *root, const char *key, char **result) {
++    *result = NULL;
++    json_object *value = NULL;
++    if (!json_object_object_get_ex(root, key, &value) || json_object_is_type(value, json_type_null)) {
++        return TRUE;
++    }
++    if (!json_object_is_type(value, json_type_string)) return FALSE;
++    gboolean invalid = FALSE;
++    *result = clean_json_header_value(value, &invalid);
++    return !invalid;
++}
++
++static gboolean parse_pat_whoami(const char *json,
++                                 size_t length,
++                                 CodexPatWhoami *whoami,
++                                 GError **error) {
++    json_object *root = parse_json_document(json, length);
++    gboolean valid = root && json_object_is_type(root, json_type_object) &&
++                     optional_clean_json_string(root, "chatgpt_account_id", &whoami->account_id) &&
++                     optional_clean_json_string(root, "email", &whoami->email) &&
++                     optional_clean_json_string(root, "chatgpt_plan_type", &whoami->plan_type);
++    if (root) json_object_put(root);
++    if (valid) return TRUE;
++    pat_whoami_clear(whoami);
++    g_set_error_literal(error,
++                        codex_error_quark(),
++                        CODEX_ERROR_MALFORMED,
++                        "Codex personal-access-token whoami response is malformed");
++    return FALSE;
++}
++
++static char *normalized_cli_version(const char *raw) {
++    if (!raw || !g_utf8_validate(raw, -1, NULL)) return NULL;
++    char *copy = g_strstrip(g_strdup(raw));
++    if (copy[0] == '\0') {
++        g_free(copy);
++        return NULL;
++    }
++    char **parts = g_strsplit_set(copy, " \t\r\n", -1);
++    const char *first = NULL;
++    const char *second = NULL;
++    for (guint index = 0; parts[index]; index++) {
++        if (parts[index][0] == '\0') continue;
++        if (!first) {
++            first = parts[index];
++        } else {
++            second = parts[index];
++            break;
++        }
++    }
++    const char *candidate = first && second && g_ascii_strcasecmp(first, "codex-cli") == 0
++                                ? second
++                                : first;
++    char *version = candidate ? g_strdup(candidate) : NULL;
++    for (const unsigned char *cursor = (const unsigned char *)version; version && *cursor; cursor++) {
++        if (*cursor < 33 || *cursor == 127) {
++            g_clear_pointer(&version, g_free);
++            break;
++        }
++    }
++    g_strfreev(parts);
++    g_free(copy);
++    return version;
++}
++
++static char *resolved_cli_version(const CodexBarProviderConfig *config) {
++    char *raw = config_string(config, "cliVersion");
++    if (!raw) raw = clean_environment("CODEXBAR_CODEX_CLI_VERSION");
++    char *version = normalized_cli_version(raw);
++    g_free(raw);
++    return version;
++}
++
++static char *codex_cli_user_agent(const CodexBarProviderConfig *config) {
++    struct utsname system = {0};
++    const char *release = "unknown";
++    const char *machine = "unknown";
++    if (uname(&system) == 0) {
++        if (system.release[0] != '\0') release = system.release;
++        if (system.machine[0] != '\0') machine = system.machine;
++    }
++    char *version = resolved_cli_version(config);
++    char *user_agent = version
++                           ? g_strdup_printf("codex_cli_rs/%s (Linux %s; %s)", version, release, machine)
++                           : g_strdup_printf("codex_cli_rs (Linux %s; %s)", release, machine);
++    g_free(version);
++    return user_agent;
++}
++
++static CodexBarHttpResponse *pat_request(const char *url,
++                                         const char *endpoint,
++                                         const char *token,
++                                         const char *account_id,
++                                         const char *user_agent,
++                                         CodexBarCodexTransport transport,
++                                         GCancellable *cancellable,
++                                         GError **error) {
++    char *authorization = g_strdup_printf("Bearer %s", token);
++    CodexBarHttpRequestHeader headers[5] = {
++        {"Authorization", authorization},
++        {"User-Agent", user_agent},
++        {"Accept", "application/json"},
++        {"originator", "codex_cli_rs"},
++        {"ChatGPT-Account-Id", account_id},
++    };
++    const CodexBarHttpRequest request = {
++        .url = url,
++        .method = "GET",
++        .headers = headers,
++        .header_count = account_id ? G_N_ELEMENTS(headers) : G_N_ELEMENTS(headers) - 1,
++        .timeout_seconds = 30,
++        .maximum_response_bytes = CODEX_MAXIMUM_RESPONSE_BYTES,
++        .protocol_policy = g_str_has_prefix(url, "http://") ? CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP
++                                                            : CODEXBAR_HTTP_HTTPS_ONLY,
