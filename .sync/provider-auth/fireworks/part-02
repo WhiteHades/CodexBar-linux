@@ -1,0 +1,140 @@
++    g_string_free(joined, TRUE);
++    return NULL;
++}
++
++static void set_account_not_found_error(const char *slug, GError **error) {
++    g_set_error(error,
++                G_IO_ERROR,
++                G_IO_ERROR_NOT_FOUND,
++                "Fireworks account slug '%s' was not found for this API key. Leave accountSlug blank to "
++                "auto-discover it.",
++                slug);
++}
++
++static CodexBarProvider *fireworks_fetch_summary(const char *slug,
++                                                 const char *authorization,
++                                                 CodexBarFireworksTransport transport,
++                                                 GCancellable *cancellable,
++                                                 gint64 now_ms,
++                                                 long *status,
++                                                 GError **error) {
++    char *url = summary_url(slug, now_ms, error);
++    if (!url) return NULL;
++    CodexBarHttpResponse *response = fireworks_send_get(url, authorization, transport, cancellable, error);
++    g_free(url);
++    if (!response) return NULL;
++    *status = response->status;
+     if (response->status != 200) {
+-        if (response->status == 401 || response->status == 403) {
+-            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "Fireworks rejected the API key.");
+-        } else if (response->status == 429) {
+-            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "Fireworks rate limit exceeded.");
+-        } else {
+-            g_set_error(error,
+-                        G_IO_ERROR,
+-                        G_IO_ERROR_FAILED,
+-                        "Fireworks billing API returned HTTP %ld.",
+-                        response->status);
+-        }
++        if (response->status != 404) fireworks_set_http_error("billing", response->status, error);
+         codexbar_http_response_free(response);
+         return NULL;
+     }
+@@ -283,6 +455,104 @@ CodexBarProvider *codexbar_fireworks_fetch_with_transport_and_cancellable(const
+     return provider;
+ }
+ 
++static void fireworks_attach_account(CodexBarProvider *provider, const char *slug, gboolean discovered) {
++    provider->identity = g_new0(CodexBarProviderIdentity, 1);
++    provider->identity->account_id = g_strdup(slug);
++    provider->identity->login_method = g_strdup(discovered ? "API key (discovered)" : "API key");
++    provider->usage_extensions = json_object_new_object();
++    json_object_object_add(provider->usage_extensions, "dataConfidence", json_object_new_string("exact"));
++    json_object_object_add(provider->usage_extensions, "fireworksAccountSlug", json_object_new_string(slug));
++    json_object_object_add(provider->usage_extensions,
++                           "fireworksAccountSlugWasDiscovered",
++                           json_object_new_boolean(discovered));
++}
++
++CodexBarProvider *codexbar_fireworks_fetch_with_transport_and_cancellable(const CodexBarProviderConfig *config,
++                                                                          CodexBarFireworksTransport transport,
++                                                                          GCancellable *cancellable,
++                                                                          gint64 now_ms,
++                                                                          GError **error) {
++    g_return_val_if_fail(transport != NULL, NULL);
++    if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
++    char *api_key = resolve_api_key(config);
++    if (!api_key) {
++        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Missing Fireworks API key.");
++        return NULL;
++    }
++    char *authorization = g_strdup_printf("Bearer %s", api_key);
++    g_free(api_key);
++    char *slug = resolve_account_slug(config);
++    gboolean discovered = FALSE;
++    if (!slug) {
++        GPtrArray *slugs = fireworks_list_account_slugs(authorization, transport, cancellable, error);
++        if (!slugs) {
++            g_free(authorization);
++            return NULL;
++        }
++        slug = single_discovered_slug(slugs, error);
++        g_ptr_array_unref(slugs);
++        if (!slug) {
++            g_free(authorization);
++            return NULL;
++        }
++        discovered = TRUE;
++    }
++
++    long status = 0;
++    CodexBarProvider *provider = fireworks_fetch_summary(
++        slug, authorization, transport, cancellable, now_ms, &status, error);
++    if (!provider && status == 404 && discovered) {
++        fireworks_set_http_error("billing", status, error);
++    } else if (!provider && status == 404) {
++        GPtrArray *slugs = fireworks_list_account_slugs(authorization, transport, cancellable, error);
++        if (!slugs) goto finished;
++        if (slugs->len == 1) {
++            char *replacement = g_strdup(g_ptr_array_index(slugs, 0));
++            g_ptr_array_unref(slugs);
++            discovered = !g_str_equal(replacement, slug);
++            g_free(slug);
++            slug = replacement;
++            status = 0;
++            provider = fireworks_fetch_summary(
++                slug, authorization, transport, cancellable, now_ms, &status, error);
++            if (!provider && status == 404) fireworks_set_http_error("billing", status, error);
++        } else if (slugs->len == 0) {
++            g_ptr_array_unref(slugs);
++            set_account_not_found_error(slug, error);
++        } else {
++            char *unused = single_discovered_slug(slugs, error);
++            g_free(unused);
++            g_ptr_array_unref(slugs);
++        }
++    } else if (provider && !provider->provider_cost && !discovered) {
++        GPtrArray *slugs = fireworks_list_account_slugs(authorization, transport, cancellable, error);
++        if (!slugs) {
++            codexbar_provider_free(provider);
++            provider = NULL;
++            goto finished;
++        }
++        gboolean found = FALSE;
++        for (guint index = 0; index < slugs->len; index++) {
++            if (g_str_equal(slug, g_ptr_array_index(slugs, index))) {
++                found = TRUE;
++                break;
++            }
++        }
++        g_ptr_array_unref(slugs);
++        if (!found) {
++            codexbar_provider_free(provider);
++            provider = NULL;
++            set_account_not_found_error(slug, error);
++        }
++    }
++    if (provider) fireworks_attach_account(provider, slug, discovered);
++
++finished:
++    g_free(slug);
