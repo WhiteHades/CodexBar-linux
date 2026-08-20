@@ -1,0 +1,160 @@
+From 18bc89cfdc3369b8a098b6a7f4018a7665bb064e Mon Sep 17 00:00:00 2001
+From: "OpenAI GPT-5.6 Pro" <noreply@openai.com>
+Date: Thu, 20 Aug 2026 20:03:59 +0000
+Subject: [PATCH] feat: add codex pat usage
+
+---
+ CHANGELOG.md                  |   2 +
+ linux/meson.build             |   8 +
+ linux/src/backend.c           |  10 +
+ linux/src/codex.c             | 477 ++++++++++++++++++++++++++++++++--
+ linux/src/codex.h             |   1 +
+ linux/src/provider_registry.c |   3 +-
+ linux/tests/test_codex_pat.c  | 422 ++++++++++++++++++++++++++++++
+ linux/tests/test_model.c      |  35 ++-
+ 8 files changed, 934 insertions(+), 24 deletions(-)
+ create mode 100644 linux/tests/test_codex_pat.c
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index bc65a3677bd8a1bb3a81929a383eeccad16cf0ac..a95480952d74980174c310dc47e27133fb783882 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,8 @@
+ 
+ ### Added
+ 
++- Native Codex personal-access-token usage through the Codex CLI auth file, including whoami identity and scoped-home
++  resolution.
+ - Local Pi/OMP cost and live-session discovery, with compatible-root deduplication and descriptive labels.
+ - Native Fireworks billing usage with strict account-slug validation and 30-day spend reporting.
+ - Native IBM Bob monthly Bobcoin usage with regional team aggregation, API-key and JWT authentication, and strict
+diff --git a/linux/meson.build b/linux/meson.build
+index e4dc9b7b7ab1cbe38dc7e43777611e7db68237fa..30fa98d271e4658dcf5585487c19a58002bd237a 100644
+--- a/linux/meson.build
++++ b/linux/meson.build
+@@ -364,6 +364,14 @@ fireworks_test = executable(
+ )
+ test('codexbar-linux-fireworks', fireworks_test, env: normalized_test_env)
+ 
++codex_pat_test = executable(
++  'codexbar-linux-codex-pat-tests',
++  files('tests/test_codex_pat.c', 'src/codex.c', 'src/http.c', 'src/model.c'),
++  include_directories: source_includes,
++  dependencies: core_deps,
++)
++test('codexbar-linux-codex-pat', codex_pat_test, env: normalized_test_env)
++
+ ibmbob_test = executable(
+   'codexbar-linux-ibmbob-tests',
+   files('tests/test_ibmbob.c', 'src/ibmbob.c', 'src/http.c', 'src/model.c'),
+diff --git a/linux/src/backend.c b/linux/src/backend.c
+index e2b6902ac6fc2902fd2d5ab3f59c9a1a4f48b389..ace9f8cd402d18535b75cf644d5d0b83f89f20b1 100644
+--- a/linux/src/backend.c
++++ b/linux/src/backend.c
+@@ -481,6 +481,16 @@ static gboolean append_codex_accounts(CodexBarSnapshot *snapshot,
+                                       GCancellable *cancellable,
+                                       gboolean cli_runtime,
+                                       GError **fatal_error) {
++    const char *configured_source = config->source ? config->source : "auto";
++    gboolean pat_source = g_str_equal(configured_source, "api") ||
++                          (g_str_equal(configured_source, "auto") &&
++                           codexbar_codex_pat_is_available(config));
++    if (pat_source) {
++        /* A PAT identifies one account through whoami; visible-account fan-out would duplicate it. */
++        append_unique_codex(snapshot, fetch_provider(config, cancellable, cli_runtime));
++        return !(cancellable && g_cancellable_set_error_if_cancelled(cancellable, fatal_error));
++    }
++
+     GError *store_error = NULL;
+     CodexBarManagedCodexStore *store = codexbar_managed_codex_store_load(FALSE, &store_error);
+     CodexBarCodexActiveSourceKind active = config->has_codex_active_source
+diff --git a/linux/src/codex.c b/linux/src/codex.c
+index 8e7a78b938fb3ac27ed65e0436fae4af3dc7ff83..dfe622b37cd0f06a7eba799d05dc1ff7a602dfd4 100644
+--- a/linux/src/codex.c
++++ b/linux/src/codex.c
+@@ -1,12 +1,19 @@
+ #include "codex.h"
+ 
+ #include "http.h"
++#include "managed_codex.h"
+ #include "version.h"
+ 
+ #include <gio/gio.h>
+ #include <json-c/json.h>
+ #include <math.h>
+ #include <string.h>
++#include <sys/utsname.h>
++
++#define CODEX_MAXIMUM_AUTH_BYTES (1024U * 1024U)
++#define CODEX_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
++#define CODEX_PAT_WHOAMI_URL "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami"
++#define CODEX_USAGE_URL "https://chatgpt.com/backend-api/wham/usage"
+ 
+ enum {
+     CODEX_ERROR_MALFORMED = 1,
+@@ -20,6 +27,28 @@ static GQuark codex_error_quark(void) {
+     return g_quark_from_static_string("codexbar-codex-error");
+ }
+ 
++static gboolean json_whitespace(char character) {
++    return character == ' ' || character == '\t' || character == '\n' || character == '\r';
++}
++
++static json_object *parse_json_document(const char *json, size_t length) {
++    if (!json || length > G_MAXINT || !g_utf8_validate(json, (gssize)length, NULL) ||
++        memchr(json, '\0', length)) {
++        return NULL;
++    }
++    json_tokener *tokener = json_tokener_new();
++    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
++    json_object *root = json_tokener_parse_ex(tokener, json, (int)length);
++    enum json_tokener_error parse_error = json_tokener_get_error(tokener);
++    size_t consumed = json_tokener_get_parse_end(tokener);
++    while (consumed < length && json_whitespace(json[consumed])) consumed++;
++    gboolean valid = parse_error == json_tokener_success && root && consumed == length;
++    json_tokener_free(tokener);
++    if (valid) return root;
++    if (root) json_object_put(root);
++    return NULL;
++}
++
+ static char *normalized_plan(const char *plan) {
+     if (g_str_equal(plan, "prolite")) return g_strdup("Pro 5x");
+     if (g_str_equal(plan, "pro")) return g_strdup("Pro");
+@@ -206,11 +235,12 @@ static void parse_individual_limit(json_object *root,
+     codexbar_provider_add_balance(provider, balance);
+ }
+ 
+-CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
+-                                                  const char *source,
+-                                                  gint64 updated_at_ms,
+-                                                  GError **error) {
+-    json_object *root = json_tokener_parse(json);
++static CodexBarProvider *parse_http_usage_document(const char *json,
++                                                   size_t length,
++                                                   const char *source,
++                                                   gint64 updated_at_ms,
++                                                   GError **error) {
++    json_object *root = parse_json_document(json, length);
+     if (!root || !json_object_is_type(root, json_type_object)) {
+         if (root) json_object_put(root);
+         g_set_error_literal(error, codex_error_quark(), CODEX_ERROR_MALFORMED,
+@@ -251,6 +281,14 @@ CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
+     return provider;
+ }
+ 
++CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
++                                                  const char *source,
++                                                  gint64 updated_at_ms,
++                                                  GError **error) {
++    return parse_http_usage_document(
++        json, json ? strlen(json) : 0, source, updated_at_ms, error);
++}
++
+ gboolean codexbar_codex_apply_account(CodexBarProvider *provider, const char *json, GError **error) {
+     json_object *root = json_tokener_parse(json);
+     json_object *result = NULL;
+@@ -401,6 +439,177 @@ static char *clean_environment(const char *name) {
+     return NULL;
+ }
+ 
