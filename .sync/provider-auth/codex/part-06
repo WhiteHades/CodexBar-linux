@@ -1,0 +1,160 @@
++}
++
++static void test_scoped_home_resolution(PatFixture *fixture, gconstpointer user_data) {
++    (void)user_data;
++    char *ambient = ambient_home(fixture);
++    char *profile = g_build_filename(fixture->root, "profile", NULL);
++    write_auth(ambient, "{\"personal_access_token\":\"ambient-token\"}");
++    write_auth(profile, "{\"personalAccessToken\":\"profile-token\"}");
++    configure_profile(fixture, profile);
++
++    expect_successful_pat("profile-token");
++    g_assert_true(codexbar_codex_pat_is_available(&fixture->config));
++    fetch_and_assert_api(fixture);
++
++    write_auth(profile, "{not-json");
++    expect_successful_pat("ambient-token");
++    g_assert_true(codexbar_codex_pat_is_available(&fixture->config));
++    fetch_and_assert_api(fixture);
++
++    fixture->config.codex_active_source = CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT;
++    expect_successful_pat("ambient-token");
++    g_assert_true(codexbar_codex_pat_is_available(&fixture->config));
++    fetch_and_assert_api(fixture);
++
++    g_free(profile);
++    g_free(ambient);
++}
++
++static void test_auto_fallbacks(PatFixture *fixture, gconstpointer user_data) {
++    (void)user_data;
++    char *home = ambient_home(fixture);
++    write_auth(home, "{\"personal_access_token\":\"pat-token\"}");
++    g_free(home);
++    json_object_object_add(fixture->config.raw, "oauthToken", json_object_new_string("oauth-token"));
++
++    const ExpectedRequest oauth_requests[] = {
++        {PAT_WHOAMI_URL, "Bearer pat-token", NULL, 401, "{}", TRUE},
++        {USAGE_URL, "Bearer oauth-token", NULL, 200, usage_json, FALSE},
++    };
++    expect_requests(oauth_requests, G_N_ELEMENTS(oauth_requests));
++    GError *error = NULL;
++    CodexBarProvider *provider = codexbar_codex_fetch_with_adapters(
++        &fixture->config, "auto", pat_transport, fake_cli, NULL, &error);
++    g_assert_no_error(error);
++    g_assert_nonnull(provider);
++    g_assert_cmpstr(provider->source, ==, "oauth");
++    g_assert_cmpuint(cli_calls, ==, 0);
++    codexbar_provider_free(provider);
++    assert_requests_consumed();
++
++    const ExpectedRequest cli_requests[] = {
++        {PAT_WHOAMI_URL, "Bearer pat-token", NULL, 403, "{}", TRUE},
++        {USAGE_URL, "Bearer oauth-token", NULL, 401, "{}", FALSE},
++    };
++    expect_requests(cli_requests, G_N_ELEMENTS(cli_requests));
++    provider = codexbar_codex_fetch_with_adapters(
++        &fixture->config, "auto", pat_transport, fake_cli, NULL, &error);
++    g_assert_no_error(error);
++    g_assert_nonnull(provider);
++    g_assert_cmpstr(provider->source, ==, "cli");
++    g_assert_cmpuint(cli_calls, ==, 1);
++    codexbar_provider_free(provider);
++    assert_requests_consumed();
++}
++
++static void test_missing_pat_falls_back(PatFixture *fixture, gconstpointer user_data) {
++    (void)user_data;
++    json_object_object_add(fixture->config.raw, "oauthToken", json_object_new_string("oauth-token"));
++    const ExpectedRequest requests[] = {
++        {USAGE_URL, "Bearer oauth-token", NULL, 200, usage_json, FALSE},
++    };
++    expect_requests(requests, G_N_ELEMENTS(requests));
++    GError *error = NULL;
++    CodexBarProvider *provider = codexbar_codex_fetch_with_adapters(
++        &fixture->config, "auto", pat_transport, fake_cli, NULL, &error);
++    g_assert_no_error(error);
++    g_assert_nonnull(provider);
++    g_assert_cmpstr(provider->source, ==, "oauth");
++    codexbar_provider_free(provider);
++    assert_requests_consumed();
++
++    expect_requests(NULL, 0);
++    provider = codexbar_codex_fetch_with_adapters(
++        &fixture->config, "api", pat_transport, fake_cli, NULL, &error);
++    g_assert_null(provider);
++    g_assert_nonnull(error);
++    g_assert_nonnull(strstr(error->message, "not found"));
++    g_clear_error(&error);
++    g_assert_cmpuint(cli_calls, ==, 0);
++    assert_requests_consumed();
++}
++
++static void test_malformed_auth_is_terminal(PatFixture *fixture, gconstpointer user_data) {
++    (void)user_data;
++    char *home = ambient_home(fixture);
++    write_auth(home, "{not-json");
++    g_free(home);
++    json_object_object_add(fixture->config.raw, "oauthToken", json_object_new_string("oauth-token"));
++    expect_requests(NULL, 0);
++
++    GError *error = NULL;
++    CodexBarProvider *provider = codexbar_codex_fetch_with_adapters(
++        &fixture->config, "auto", pat_transport, fake_cli, NULL, &error);
++    g_assert_null(provider);
++    g_assert_nonnull(error);
++    g_assert_nonnull(strstr(error->message, "invalid JSON"));
++    g_clear_error(&error);
++    g_assert_false(codexbar_codex_pat_is_available(&fixture->config));
++    g_assert_cmpuint(cli_calls, ==, 0);
++    assert_requests_consumed();
++}
++
++static void test_pat_endpoint_errors_are_terminal(PatFixture *fixture, gconstpointer user_data) {
++    (void)user_data;
++    char *home = ambient_home(fixture);
++    write_auth(home, "{\"personal_access_token\":\"pat-token\"}");
++    g_free(home);
++    json_object_object_add(fixture->config.raw, "oauthToken", json_object_new_string("oauth-token"));
++
++    const ExpectedRequest server_requests[] = {
++        {PAT_WHOAMI_URL, "Bearer pat-token", NULL, 500, "server failure", TRUE},
++    };
++    expect_requests(server_requests, G_N_ELEMENTS(server_requests));
++    GError *error = NULL;
++    CodexBarProvider *provider = codexbar_codex_fetch_with_adapters(
++        &fixture->config, "auto", pat_transport, fake_cli, NULL, &error);
++    g_assert_null(provider);
++    g_assert_nonnull(error);
++    g_assert_nonnull(strstr(error->message, "HTTP 500"));
++    g_clear_error(&error);
++    g_assert_cmpuint(cli_calls, ==, 0);
++    assert_requests_consumed();
++
++    const ExpectedRequest malformed_requests[] = {
++        {PAT_WHOAMI_URL, "Bearer pat-token", NULL, 200, "{\"chatgpt_account_id\":17}", TRUE},
++    };
++    expect_requests(malformed_requests, G_N_ELEMENTS(malformed_requests));
++    provider = codexbar_codex_fetch_with_adapters(
++        &fixture->config, "auto", pat_transport, fake_cli, NULL, &error);
++    g_assert_null(provider);
++    g_assert_nonnull(error);
++    g_assert_nonnull(strstr(error->message, "whoami response is malformed"));
++    g_clear_error(&error);
++    g_assert_cmpuint(cli_calls, ==, 0);
++    assert_requests_consumed();
++}
++
++int main(int argc, char **argv) {
++    g_test_init(&argc, &argv, NULL);
++    g_test_add("/codex/pat/explicit", PatFixture, NULL, fixture_setup, test_explicit_pat, fixture_teardown);
++    g_test_add("/codex/pat/scoped-home", PatFixture, NULL, fixture_setup, test_scoped_home_resolution, fixture_teardown);
++    g_test_add("/codex/pat/auto-fallbacks", PatFixture, NULL, fixture_setup, test_auto_fallbacks, fixture_teardown);
++    g_test_add("/codex/pat/missing-fallback", PatFixture, NULL, fixture_setup, test_missing_pat_falls_back, fixture_teardown);
++    g_test_add("/codex/pat/malformed-auth-terminal", PatFixture, NULL, fixture_setup, test_malformed_auth_is_terminal, fixture_teardown);
++    g_test_add("/codex/pat/endpoint-errors-terminal", PatFixture, NULL, fixture_setup, test_pat_endpoint_errors_are_terminal, fixture_teardown);
++    return g_test_run();
++}
+diff --git a/linux/tests/test_model.c b/linux/tests/test_model.c
+index 1e97f33ba8e7d070d7f24a322f01fa1e30528e2f..8e9715854a772cfb22b6a670c5d5e7c26443a50a 100644
+--- a/linux/tests/test_model.c
