@@ -1,0 +1,47 @@
+name: export sync workspace
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/steipete/CodexBar.git
+          git fetch --prune --tags upstream main
+          git status --short --branch
+          git log -1 --oneline origin/main
+          git log -1 --oneline upstream/main
+
+      - name: Package repository and Git history
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude='./codexbar-sync-workspace.tar.gz' \
+              -czf codexbar-sync-workspace.tar.gz .
+          sha256sum codexbar-sync-workspace.tar.gz > codexbar-sync-workspace.tar.gz.sha256
+
+      - name: Upload workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexbar-sync-workspace
+          path: |
+            codexbar-sync-workspace.tar.gz
+            codexbar-sync-workspace.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 3
