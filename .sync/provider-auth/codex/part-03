@@ -1,0 +1,160 @@
++        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
++        .cancellable = cancellable,
++    };
++    CodexBarHttpResponse *response = transport(&request, error);
++    g_free(authorization);
++    if (!response) return NULL;
++    if (response->status == 401 || response->status == 403) {
++        g_set_error(error,
++                    codex_error_quark(),
++                    CODEX_ERROR_UNAUTHORIZED,
++                    "Codex personal access token was unauthorized by the %s endpoint",
++                    endpoint);
++        codexbar_http_response_free(response);
++        return NULL;
++    }
++    if (response->status < 200 || response->status >= 300) {
++        g_set_error(error,
++                    codex_error_quark(),
++                    CODEX_ERROR_HTTP,
++                    "Codex personal-access-token %s request failed with HTTP %ld",
++                    endpoint,
++                    response->status);
++        codexbar_http_response_free(response);
++        return NULL;
++    }
++    return response;
++}
++
++static CodexBarProvider *fetch_pat_usage(const CodexBarProviderConfig *config,
++                                         CodexBarCodexTransport transport,
++                                         GCancellable *cancellable,
++                                         GError **error) {
++    char *token = NULL;
++    if (!load_pat_credentials(config, &token, error)) return NULL;
++    char *user_agent = codex_cli_user_agent(config);
++    CodexPatWhoami whoami = {0};
++    CodexBarProvider *provider = NULL;
++
++    CodexBarHttpResponse *response = pat_request(CODEX_PAT_WHOAMI_URL,
++                                                 "whoami",
++                                                 token,
++                                                 NULL,
++                                                 user_agent,
++                                                 transport,
++                                                 cancellable,
++                                                 error);
++    if (!response) goto cleanup;
++    gboolean parsed = parse_pat_whoami(response->body, response->body_length, &whoami, error);
++    codexbar_http_response_free(response);
++    if (!parsed) goto cleanup;
++
++    const char *override = g_getenv("CODEXBAR_CODEX_USAGE_URL");
++    const char *usage_url = override && override[0] != '\0' ? override : CODEX_USAGE_URL;
++    response = pat_request(usage_url,
++                           "usage",
++                           token,
++                           whoami.account_id,
++                           user_agent,
++                           transport,
++                           cancellable,
++                           error);
++    if (!response) goto cleanup;
++    provider = parse_http_usage_document(
++        response->body, response->body_length, "api", g_get_real_time() / 1000, error);
++    codexbar_http_response_free(response);
++    if (!provider) goto cleanup;
++
++    char *whoami_plan = whoami.plan_type ? normalized_plan(whoami.plan_type) : NULL;
++    if (!provider->plan && whoami_plan) provider->plan = g_strdup(whoami_plan);
++    if (whoami.email) {
++        g_free(provider->account);
++        provider->account = g_strdup(whoami.email);
++    }
++    if (whoami.account_id || provider->plan || whoami_plan) {
++        if (!provider->identity) provider->identity = g_new0(CodexBarProviderIdentity, 1);
++        if (whoami.account_id) provider->identity->account_id = g_strdup(whoami.account_id);
++        provider->identity->login_method = g_strdup(provider->plan ? provider->plan : whoami_plan);
++    }
++    g_free(whoami_plan);
++    if (!provider->usage_extensions) provider->usage_extensions = json_object_new_object();
++    json_object_object_add(
++        provider->usage_extensions, "dataConfidence", json_object_new_string("exact"));
++    json_object_object_add(
++        provider->usage_extensions, "codexCredentialKind", json_object_new_string("pat"));
++
++cleanup:
++    pat_whoami_clear(&whoami);
++    g_free(user_agent);
++    g_free(token);
++    return provider;
++}
++
+ static CodexBarProvider *fetch_http_usage(const CodexBarProviderConfig *config,
+                                           const char *source,
+                                           CodexBarCodexTransport transport,
+@@ -510,22 +937,22 @@ static CodexBarProvider *fetch_http_usage(const CodexBarProviderConfig *config,
+     const char *override = g_getenv("CODEXBAR_CODEX_USAGE_URL");
+     const char *url = override && override[0] != '\0'
+                           ? override
+-                          : "https://chatgpt.com/backend-api/wham/usage";
++                          : CODEX_USAGE_URL;
+     CodexBarHttpRequestHeader headers[5] = {
+         {g_str_equal(source, "oauth") ? "Authorization" : "Cookie",
+          g_str_equal(source, "oauth") ? authorization : credential},
+         {"Accept", "application/json"},
+         {"User-Agent", "CodexBar"},
+-        {"ChatGPT-Account-Id", account_id},
+         {"OpenAI-Beta", "codex-1"},
++        {"ChatGPT-Account-Id", account_id},
+     };
+     const CodexBarHttpRequest request = {
+         .url = url,
+         .method = "GET",
+         .headers = headers,
+-        .header_count = account_id ? G_N_ELEMENTS(headers) : G_N_ELEMENTS(headers) - 2,
++        .header_count = account_id ? G_N_ELEMENTS(headers) : G_N_ELEMENTS(headers) - 1,
+         .timeout_seconds = 30,
+-        .maximum_response_bytes = 1024 * 1024,
++        .maximum_response_bytes = CODEX_MAXIMUM_RESPONSE_BYTES,
+         .protocol_policy = g_str_has_prefix(url, "http://") ? CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP
+                                                            : CODEXBAR_HTTP_HTTPS_ONLY,
+         .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+@@ -548,12 +975,18 @@ static CodexBarProvider *fetch_http_usage(const CodexBarProviderConfig *config,
+         codexbar_http_response_free(response);
+         return NULL;
+     }
+-    CodexBarProvider *provider = codexbar_codex_parse_http_usage(
+-        response->body, source, g_get_real_time() / 1000, error);
++    CodexBarProvider *provider = parse_http_usage_document(
++        response->body, response->body_length, source, g_get_real_time() / 1000, error);
+     codexbar_http_response_free(response);
+     return provider;
+ }
+ 
++static gboolean source_error_allows_fallback(const GError *error) {
++    return error && error->domain == codex_error_quark() &&
++           (error->code == CODEX_ERROR_CREDENTIALS_MISSING ||
++            error->code == CODEX_ERROR_UNAUTHORIZED);
++}
++
+ CodexBarProvider *codexbar_codex_fetch_with_adapters(const CodexBarProviderConfig *config,
+                                                      const char *source,
+                                                      CodexBarCodexTransport transport,
+@@ -562,19 +995,27 @@ CodexBarProvider *codexbar_codex_fetch_with_adapters(const CodexBarProviderConfi
+                                                      GError **error) {
+     const char *selected = source ? source : "auto";
+     if (g_str_equal(selected, "cli")) return cli_fetcher(error);
++    if (g_str_equal(selected, "api")) return fetch_pat_usage(config, transport, cancellable, error);
+     if (g_str_equal(selected, "oauth")) return fetch_http_usage(config, "oauth", transport, cancellable, error);
+     if (g_str_equal(selected, "web")) return fetch_http_usage(config, "web", transport, cancellable, error);
+     if (!g_str_equal(selected, "auto")) {
+         g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Unsupported Codex source: %s", selected);
+         return NULL;
+     }
++
++    GError *pat_error = NULL;
++    CodexBarProvider *provider = fetch_pat_usage(config, transport, cancellable, &pat_error);
++    if (provider) return provider;
++    if (!source_error_allows_fallback(pat_error)) {
++        g_propagate_error(error, pat_error);
