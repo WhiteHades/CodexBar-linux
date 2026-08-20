@@ -14,6 +14,7 @@
 ### Changed
 
 - Parse both legacy and current Amp subscription lines, including calendar-month renewal windows.
+- Auto-discover a sole Fireworks account, paginate account lookup, and report stale or ambiguous slugs explicitly.
 - Compact Codex subagents exclude parent-confirmed copied prefixes, and priority traces use API Fast USD pricing.
 - Parse Command Code five-hour and weekly rolling limits and include the Goat plan's monthly allowance.
 - Show Doubao Coding Plan and Agent Plan windows together for AK/SK accounts subscribed to both products.
