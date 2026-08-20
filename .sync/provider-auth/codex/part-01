@@ -1,0 +1,160 @@
++static char *clean_json_header_value(json_object *value, gboolean *invalid) {
++    *invalid = FALSE;
++    if (!value || !json_object_is_type(value, json_type_string)) return NULL;
++    const char *raw = json_object_get_string(value);
++    size_t length = (size_t)json_object_get_string_len(value);
++    if (!raw || memchr(raw, '\0', length) || !g_utf8_validate(raw, (gssize)length, NULL)) {
++        *invalid = TRUE;
++        return NULL;
++    }
++    char *clean = g_strstrip(g_strndup(raw, length));
++    for (const unsigned char *cursor = (const unsigned char *)clean; *cursor; cursor++) {
++        if (*cursor < 32 || *cursor == 127) {
++            *invalid = TRUE;
++            g_free(clean);
++            return NULL;
++        }
++    }
++    if (clean[0] != '\0') return clean;
++    g_free(clean);
++    return NULL;
++}
++
++static char *ambient_codex_home(void) {
++    char *home = clean_environment("HOME");
++    if (!home) home = g_strdup(g_get_home_dir());
++    char *codex_home = g_build_filename(home, ".codex", NULL);
++    g_free(home);
++    return codex_home;
++}
++
++static gboolean canonical_paths_equal(const char *left, const char *right) {
++    if (!left || !right) return FALSE;
++    char *canonical_left = g_canonicalize_filename(left, NULL);
++    char *canonical_right = g_canonicalize_filename(right, NULL);
++    gboolean equal = g_str_equal(canonical_left, canonical_right);
++    g_free(canonical_left);
++    g_free(canonical_right);
++    return equal;
++}
++
++static gboolean managed_or_fail_closed_home(const char *path) {
++    if (!path || path[0] == '\0') return FALSE;
++    char *canonical = g_canonicalize_filename(path, NULL);
++    char *basename = g_path_get_basename(canonical);
++    char *fail_closed_basename = g_path_get_basename(CODEXBAR_MANAGED_CODEX_UNREADABLE_HOME);
++    gboolean fail_closed = g_str_equal(basename, fail_closed_basename);
++    gboolean managed = FALSE;
++    char **parts = g_strsplit(canonical, G_DIR_SEPARATOR_S, -1);
++    for (guint index = 0; parts[index]; index++) {
++        if (g_str_equal(parts[index], "managed-codex-homes")) {
++            managed = TRUE;
++            break;
++        }
++    }
++    g_strfreev(parts);
++    g_free(fail_closed_basename);
++    g_free(basename);
++    g_free(canonical);
++    return fail_closed || managed;
++}
++
++static const char *configured_pat_scope_home(const CodexBarProviderConfig *config) {
++    if (config && config->has_codex_active_source) {
++        if (config->codex_active_source == CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT) {
++            return CODEXBAR_MANAGED_CODEX_UNREADABLE_HOME;
++        }
++        if (config->codex_active_source == CODEXBAR_CODEX_SOURCE_PROFILE_HOME &&
++            config->codex_active_home_path && config->codex_active_home_path[0] != '\0') {
++            return config->codex_active_home_path;
++        }
++    }
++    const char *environment_home = g_getenv("CODEX_HOME");
++    return environment_home && environment_home[0] != '\0' ? environment_home : NULL;
++}
++
++static gboolean load_pat_from_home(const char *codex_home, char **token, GError **error) {
++    *token = NULL;
++    char *path = g_build_filename(codex_home, "auth.json", NULL);
++    char *contents = NULL;
++    gsize length = 0;
++    GError *read_error = NULL;
++    if (!g_file_get_contents(path, &contents, &length, &read_error)) {
++        if (read_error && read_error->domain == G_FILE_ERROR && read_error->code == G_FILE_ERROR_NOENT) {
++            g_set_error(error,
++                        codex_error_quark(),
++                        CODEX_ERROR_CREDENTIALS_MISSING,
++                        "Codex auth.json was not found at %s. Run `codex login` to sign in.",
++                        path);
++        } else {
++            g_set_error(error,
++                        codex_error_quark(),
++                        CODEX_ERROR_CREDENTIALS_MISSING,
++                        "Codex auth.json at %s could not be read. Check its permissions or run `codex login`.",
++                        path);
++        }
++        g_clear_error(&read_error);
++        g_free(path);
++        return FALSE;
++    }
++    g_free(path);
++    if (length == 0 || length > CODEX_MAXIMUM_AUTH_BYTES) {
++        g_free(contents);
++        g_set_error_literal(error,
++                            codex_error_quark(),
++                            CODEX_ERROR_CREDENTIALS_INVALID,
++                            "Codex auth.json is empty or exceeds the 1 MiB safety limit");
++        return FALSE;
++    }
++    json_object *root = parse_json_document(contents, length);
++    g_free(contents);
++    if (!root || !json_object_is_type(root, json_type_object)) {
++        if (root) json_object_put(root);
++        g_set_error_literal(error,
++                            codex_error_quark(),
++                            CODEX_ERROR_CREDENTIALS_INVALID,
++                            "Codex auth.json contains invalid JSON");
++        return FALSE;
++    }
++
++    json_object *snake = NULL;
++    json_object *camel = NULL;
++    json_object_object_get_ex(root, "personal_access_token", &snake);
++    json_object_object_get_ex(root, "personalAccessToken", &camel);
++    gboolean invalid = FALSE;
++    *token = clean_json_header_value(snake, &invalid);
++    if (!*token && !invalid) *token = clean_json_header_value(camel, &invalid);
++    json_object_put(root);
++    if (invalid) {
++        g_clear_pointer(token, g_free);
++        g_set_error_literal(error,
++                            codex_error_quark(),
++                            CODEX_ERROR_CREDENTIALS_INVALID,
++                            "Codex personal access token contains invalid characters");
++        return FALSE;
++    }
++    if (*token) return TRUE;
++    g_set_error_literal(error,
++                        codex_error_quark(),
++                        CODEX_ERROR_CREDENTIALS_MISSING,
++                        "Codex auth.json contains no personal access token");
++    return FALSE;
++}
++
++static gboolean load_pat_credentials(const CodexBarProviderConfig *config, char **token, GError **error) {
++    char *ambient_home = ambient_codex_home();
++    const char *scoped_home = configured_pat_scope_home(config);
++    if (scoped_home && !managed_or_fail_closed_home(scoped_home) &&
++        !canonical_paths_equal(scoped_home, ambient_home)) {
++        GError *scoped_error = NULL;
++        if (load_pat_from_home(scoped_home, token, &scoped_error)) {
++            g_clear_error(&scoped_error);
++            g_free(ambient_home);
++            return TRUE;
++        }
++        /* Profile homes keep a local PAT when present and otherwise use ambient ~/.codex. */
++        g_clear_error(&scoped_error);
++    }
++    gboolean loaded = load_pat_from_home(ambient_home, token, error);
++    g_free(ambient_home);
++    return loaded;
