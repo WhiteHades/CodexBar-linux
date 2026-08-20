@@ -1,12 +1,19 @@
 #include "codex.h"
 
 #include "http.h"
+#include "managed_codex.h"
 #include "version.h"
 
 #include <gio/gio.h>
 #include <json-c/json.h>
 #include <math.h>
 #include <string.h>
+#include <sys/utsname.h>
+
+#define CODEX_MAXIMUM_AUTH_BYTES (1024U * 1024U)
+#define CODEX_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
+#define CODEX_PAT_WHOAMI_URL "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami"
+#define CODEX_USAGE_URL "https://chatgpt.com/backend-api/wham/usage"
 
 enum {
     CODEX_ERROR_MALFORMED = 1,
@@ -18,6 +25,28 @@ enum {
 
 static GQuark codex_error_quark(void) {
     return g_quark_from_static_string("codexbar-codex-error");
+}
+
+static gboolean json_whitespace(char character) {
+    return character == ' ' || character == '\t' || character == '\n' || character == '\r';
+}
+
+static json_object *parse_json_document(const char *json, size_t length) {
+    if (!json || length > G_MAXINT || !g_utf8_validate(json, (gssize)length, NULL) ||
+        memchr(json, '\0', length)) {
+        return NULL;
+    }
+    json_tokener *tokener = json_tokener_new();
+    json_tokener_set_flags(tokener, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    json_object *root = json_tokener_parse_ex(tokener, json, (int)length);
+    enum json_tokener_error parse_error = json_tokener_get_error(tokener);
+    size_t consumed = json_tokener_get_parse_end(tokener);
+    while (consumed < length && json_whitespace(json[consumed])) consumed++;
+    gboolean valid = parse_error == json_tokener_success && root && consumed == length;
+    json_tokener_free(tokener);
+    if (valid) return root;
+    if (root) json_object_put(root);
+    return NULL;
 }
 
 static char *normalized_plan(const char *plan) {
@@ -206,11 +235,12 @@ static void parse_individual_limit(json_object *root,
     codexbar_provider_add_balance(provider, balance);
 }
 
-CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
-                                                  const char *source,
-                                                  gint64 updated_at_ms,
-                                                  GError **error) {
-    json_object *root = json_tokener_parse(json);
+static CodexBarProvider *parse_http_usage_document(const char *json,
+                                                   size_t length,
+                                                   const char *source,
+                                                   gint64 updated_at_ms,
+                                                   GError **error) {
+    json_object *root = parse_json_document(json, length);
     if (!root || !json_object_is_type(root, json_type_object)) {
         if (root) json_object_put(root);
         g_set_error_literal(error, codex_error_quark(), CODEX_ERROR_MALFORMED,
@@ -249,6 +279,14 @@ CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
         return NULL;
     }
     return provider;
+}
+
+CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
+                                                  const char *source,
+                                                  gint64 updated_at_ms,
+                                                  GError **error) {
+    return parse_http_usage_document(
+        json, json ? strlen(json) : 0, source, updated_at_ms, error);
 }
 
 gboolean codexbar_codex_apply_account(CodexBarProvider *provider, const char *json, GError **error) {
@@ -401,6 +439,177 @@ static char *clean_environment(const char *name) {
     return NULL;
 }
 
+static char *clean_json_header_value(json_object *value, gboolean *invalid) {
+    *invalid = FALSE;
+    if (!value || !json_object_is_type(value, json_type_string)) return NULL;
+    const char *raw = json_object_get_string(value);
+    size_t length = (size_t)json_object_get_string_len(value);
+    if (!raw || memchr(raw, '\0', length) || !g_utf8_validate(raw, (gssize)length, NULL)) {
+        *invalid = TRUE;
+        return NULL;
+    }
+    char *clean = g_strstrip(g_strndup(raw, length));
+    for (const unsigned char *cursor = (const unsigned char *)clean; *cursor; cursor++) {
+        if (*cursor < 32 || *cursor == 127) {
+            *invalid = TRUE;
+            g_free(clean);
+            return NULL;
+        }
+    }
+    if (clean[0] != '\0') return clean;
+    g_free(clean);
+    return NULL;
+}
+
+static char *ambient_codex_home(void) {
+    char *home = clean_environment("HOME");
+    if (!home) home = g_strdup(g_get_home_dir());
+    char *codex_home = g_build_filename(home, ".codex", NULL);
+    g_free(home);
+    return codex_home;
+}
+
+static gboolean canonical_paths_equal(const char *left, const char *right) {
+    if (!left || !right) return FALSE;
+    char *canonical_left = g_canonicalize_filename(left, NULL);
+    char *canonical_right = g_canonicalize_filename(right, NULL);
+    gboolean equal = g_str_equal(canonical_left, canonical_right);
+    g_free(canonical_left);
+    g_free(canonical_right);
+    return equal;
+}
+
+static gboolean managed_or_fail_closed_home(const char *path) {
+    if (!path || path[0] == '\0') return FALSE;
+    char *canonical = g_canonicalize_filename(path, NULL);
+    char *basename = g_path_get_basename(canonical);
+    char *fail_closed_basename = g_path_get_basename(CODEXBAR_MANAGED_CODEX_UNREADABLE_HOME);
+    gboolean fail_closed = g_str_equal(basename, fail_closed_basename);
+    gboolean managed = FALSE;
+    char **parts = g_strsplit(canonical, G_DIR_SEPARATOR_S, -1);
+    for (guint index = 0; parts[index]; index++) {
+        if (g_str_equal(parts[index], "managed-codex-homes")) {
+            managed = TRUE;
+            break;
+        }
+    }
+    g_strfreev(parts);
+    g_free(fail_closed_basename);
+    g_free(basename);
+    g_free(canonical);
+    return fail_closed || managed;
+}
+
+static const char *configured_pat_scope_home(const CodexBarProviderConfig *config) {
+    if (config && config->has_codex_active_source) {
+        if (config->codex_active_source == CODEXBAR_CODEX_SOURCE_MANAGED_ACCOUNT) {
+            return CODEXBAR_MANAGED_CODEX_UNREADABLE_HOME;
+        }
+        if (config->codex_active_source == CODEXBAR_CODEX_SOURCE_PROFILE_HOME &&
+            config->codex_active_home_path && config->codex_active_home_path[0] != '\0') {
+            return config->codex_active_home_path;
+        }
+    }
+    const char *environment_home = g_getenv("CODEX_HOME");
+    return environment_home && environment_home[0] != '\0' ? environment_home : NULL;
+}
+
+static gboolean load_pat_from_home(const char *codex_home, char **token, GError **error) {
+    *token = NULL;
+    char *path = g_build_filename(codex_home, "auth.json", NULL);
+    char *contents = NULL;
+    gsize length = 0;
+    GError *read_error = NULL;
+    if (!g_file_get_contents(path, &contents, &length, &read_error)) {
+        if (read_error && read_error->domain == G_FILE_ERROR && read_error->code == G_FILE_ERROR_NOENT) {
+            g_set_error(error,
+                        codex_error_quark(),
+                        CODEX_ERROR_CREDENTIALS_MISSING,
+                        "Codex auth.json was not found at %s. Run `codex login` to sign in.",
+                        path);
+        } else {
+            g_set_error(error,
+                        codex_error_quark(),
+                        CODEX_ERROR_CREDENTIALS_MISSING,
+                        "Codex auth.json at %s could not be read. Check its permissions or run `codex login`.",
+                        path);
+        }
+        g_clear_error(&read_error);
+        g_free(path);
+        return FALSE;
+    }
+    g_free(path);
+    if (length == 0 || length > CODEX_MAXIMUM_AUTH_BYTES) {
+        g_free(contents);
+        g_set_error_literal(error,
+                            codex_error_quark(),
+                            CODEX_ERROR_CREDENTIALS_INVALID,
+                            "Codex auth.json is empty or exceeds the 1 MiB safety limit");
+        return FALSE;
+    }
+    json_object *root = parse_json_document(contents, length);
+    g_free(contents);
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root) json_object_put(root);
+        g_set_error_literal(error,
+                            codex_error_quark(),
+                            CODEX_ERROR_CREDENTIALS_INVALID,
+                            "Codex auth.json contains invalid JSON");
+        return FALSE;
+    }
+
+    json_object *snake = NULL;
+    json_object *camel = NULL;
+    json_object_object_get_ex(root, "personal_access_token", &snake);
+    json_object_object_get_ex(root, "personalAccessToken", &camel);
+    gboolean invalid = FALSE;
+    *token = clean_json_header_value(snake, &invalid);
+    if (!*token && !invalid) *token = clean_json_header_value(camel, &invalid);
+    json_object_put(root);
+    if (invalid) {
+        g_clear_pointer(token, g_free);
+        g_set_error_literal(error,
+                            codex_error_quark(),
+                            CODEX_ERROR_CREDENTIALS_INVALID,
+                            "Codex personal access token contains invalid characters");
+        return FALSE;
+    }
+    if (*token) return TRUE;
+    g_set_error_literal(error,
+                        codex_error_quark(),
+                        CODEX_ERROR_CREDENTIALS_MISSING,
+                        "Codex auth.json contains no personal access token");
+    return FALSE;
+}
+
+static gboolean load_pat_credentials(const CodexBarProviderConfig *config, char **token, GError **error) {
+    char *ambient_home = ambient_codex_home();
+    const char *scoped_home = configured_pat_scope_home(config);
+    if (scoped_home && !managed_or_fail_closed_home(scoped_home) &&
+        !canonical_paths_equal(scoped_home, ambient_home)) {
+        GError *scoped_error = NULL;
+        if (load_pat_from_home(scoped_home, token, &scoped_error)) {
+            g_clear_error(&scoped_error);
+            g_free(ambient_home);
+            return TRUE;
+        }
+        /* Profile homes keep a local PAT when present and otherwise use ambient ~/.codex. */
+        g_clear_error(&scoped_error);
+    }
+    gboolean loaded = load_pat_from_home(ambient_home, token, error);
+    g_free(ambient_home);
+    return loaded;
+}
+
+gboolean codexbar_codex_pat_is_available(const CodexBarProviderConfig *config) {
+    char *token = NULL;
+    GError *error = NULL;
+    gboolean available = load_pat_credentials(config, &token, &error);
+    g_clear_pointer(&token, g_free);
+    g_clear_error(&error);
+    return available;
+}
+
 static gboolean load_oauth_credentials(const CodexBarProviderConfig *config,
                                        char **access_token,
                                        char **account_id,
@@ -428,13 +637,13 @@ static gboolean load_oauth_credentials(const CodexBarProviderConfig *config,
         return FALSE;
     }
     g_free(path);
-    if (length == 0 || length > 1024 * 1024) {
+    if (length == 0 || length > CODEX_MAXIMUM_AUTH_BYTES) {
         g_free(contents);
         g_set_error_literal(error, codex_error_quark(), CODEX_ERROR_CREDENTIALS_INVALID,
                             "Codex auth.json is invalid");
         return FALSE;
     }
-    json_object *root = json_tokener_parse(contents);
+    json_object *root = parse_json_document(contents, length);
     g_free(contents);
     if (!root || !json_object_is_type(root, json_type_object)) {
         if (root) json_object_put(root);
@@ -492,6 +701,224 @@ static char *manual_cookie(const CodexBarProviderConfig *config, GError **error)
     return NULL;
 }
 
+typedef struct {
+    char *account_id;
+    char *email;
+    char *plan_type;
+} CodexPatWhoami;
+
+static void pat_whoami_clear(CodexPatWhoami *whoami) {
+    g_clear_pointer(&whoami->account_id, g_free);
+    g_clear_pointer(&whoami->email, g_free);
+    g_clear_pointer(&whoami->plan_type, g_free);
+}
+
+static gboolean optional_clean_json_string(json_object *root, const char *key, char **result) {
+    *result = NULL;
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(root, key, &value) || json_object_is_type(value, json_type_null)) {
+        return TRUE;
+    }
+    if (!json_object_is_type(value, json_type_string)) return FALSE;
+    gboolean invalid = FALSE;
+    *result = clean_json_header_value(value, &invalid);
+    return !invalid;
+}
+
+static gboolean parse_pat_whoami(const char *json,
+                                 size_t length,
+                                 CodexPatWhoami *whoami,
+                                 GError **error) {
+    json_object *root = parse_json_document(json, length);
+    gboolean valid = root && json_object_is_type(root, json_type_object) &&
+                     optional_clean_json_string(root, "chatgpt_account_id", &whoami->account_id) &&
+                     optional_clean_json_string(root, "email", &whoami->email) &&
+                     optional_clean_json_string(root, "chatgpt_plan_type", &whoami->plan_type);
+    if (root) json_object_put(root);
+    if (valid) return TRUE;
+    pat_whoami_clear(whoami);
+    g_set_error_literal(error,
+                        codex_error_quark(),
+                        CODEX_ERROR_MALFORMED,
+                        "Codex personal-access-token whoami response is malformed");
+    return FALSE;
+}
+
+static char *normalized_cli_version(const char *raw) {
+    if (!raw || !g_utf8_validate(raw, -1, NULL)) return NULL;
+    char *copy = g_strstrip(g_strdup(raw));
+    if (copy[0] == '\0') {
+        g_free(copy);
+        return NULL;
+    }
+    char **parts = g_strsplit_set(copy, " \t\r\n", -1);
+    const char *first = NULL;
+    const char *second = NULL;
+    for (guint index = 0; parts[index]; index++) {
+        if (parts[index][0] == '\0') continue;
+        if (!first) {
+            first = parts[index];
+        } else {
+            second = parts[index];
+            break;
+        }
+    }
+    const char *candidate = first && second && g_ascii_strcasecmp(first, "codex-cli") == 0
+                                ? second
+                                : first;
+    char *version = candidate ? g_strdup(candidate) : NULL;
+    for (const unsigned char *cursor = (const unsigned char *)version; version && *cursor; cursor++) {
+        if (*cursor < 33 || *cursor == 127) {
+            g_clear_pointer(&version, g_free);
+            break;
+        }
+    }
+    g_strfreev(parts);
+    g_free(copy);
+    return version;
+}
+
+static char *resolved_cli_version(const CodexBarProviderConfig *config) {
+    char *raw = config_string(config, "cliVersion");
+    if (!raw) raw = clean_environment("CODEXBAR_CODEX_CLI_VERSION");
+    char *version = normalized_cli_version(raw);
+    g_free(raw);
+    return version;
+}
+
+static char *codex_cli_user_agent(const CodexBarProviderConfig *config) {
+    struct utsname system = {0};
+    const char *release = "unknown";
+    const char *machine = "unknown";
+    if (uname(&system) == 0) {
+        if (system.release[0] != '\0') release = system.release;
+        if (system.machine[0] != '\0') machine = system.machine;
+    }
+    char *version = resolved_cli_version(config);
+    char *user_agent = version
+                           ? g_strdup_printf("codex_cli_rs/%s (Linux %s; %s)", version, release, machine)
+                           : g_strdup_printf("codex_cli_rs (Linux %s; %s)", release, machine);
+    g_free(version);
+    return user_agent;
+}
+
+static CodexBarHttpResponse *pat_request(const char *url,
+                                         const char *endpoint,
+                                         const char *token,
+                                         const char *account_id,
+                                         const char *user_agent,
+                                         CodexBarCodexTransport transport,
+                                         GCancellable *cancellable,
+                                         GError **error) {
+    char *authorization = g_strdup_printf("Bearer %s", token);
+    CodexBarHttpRequestHeader headers[5] = {
+        {"Authorization", authorization},
+        {"User-Agent", user_agent},
+        {"Accept", "application/json"},
+        {"originator", "codex_cli_rs"},
+        {"ChatGPT-Account-Id", account_id},
+    };
+    const CodexBarHttpRequest request = {
+        .url = url,
+        .method = "GET",
+        .headers = headers,
+        .header_count = account_id ? G_N_ELEMENTS(headers) : G_N_ELEMENTS(headers) - 1,
+        .timeout_seconds = 30,
+        .maximum_response_bytes = CODEX_MAXIMUM_RESPONSE_BYTES,
+        .protocol_policy = g_str_has_prefix(url, "http://") ? CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP
+                                                            : CODEXBAR_HTTP_HTTPS_ONLY,
+        .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
+        .cancellable = cancellable,
+    };
+    CodexBarHttpResponse *response = transport(&request, error);
+    g_free(authorization);
+    if (!response) return NULL;
+    if (response->status == 401 || response->status == 403) {
+        g_set_error(error,
+                    codex_error_quark(),
+                    CODEX_ERROR_UNAUTHORIZED,
+                    "Codex personal access token was unauthorized by the %s endpoint",
+                    endpoint);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    if (response->status < 200 || response->status >= 300) {
+        g_set_error(error,
+                    codex_error_quark(),
+                    CODEX_ERROR_HTTP,
+                    "Codex personal-access-token %s request failed with HTTP %ld",
+                    endpoint,
+                    response->status);
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    return response;
+}
+
+static CodexBarProvider *fetch_pat_usage(const CodexBarProviderConfig *config,
+                                         CodexBarCodexTransport transport,
+                                         GCancellable *cancellable,
+                                         GError **error) {
+    char *token = NULL;
+    if (!load_pat_credentials(config, &token, error)) return NULL;
+    char *user_agent = codex_cli_user_agent(config);
+    CodexPatWhoami whoami = {0};
+    CodexBarProvider *provider = NULL;
+
+    CodexBarHttpResponse *response = pat_request(CODEX_PAT_WHOAMI_URL,
+                                                 "whoami",
+                                                 token,
+                                                 NULL,
+                                                 user_agent,
+                                                 transport,
+                                                 cancellable,
+                                                 error);
+    if (!response) goto cleanup;
+    gboolean parsed = parse_pat_whoami(response->body, response->body_length, &whoami, error);
+    codexbar_http_response_free(response);
+    if (!parsed) goto cleanup;
+
+    const char *override = g_getenv("CODEXBAR_CODEX_USAGE_URL");
+    const char *usage_url = override && override[0] != '\0' ? override : CODEX_USAGE_URL;
+    response = pat_request(usage_url,
+                           "usage",
+                           token,
+                           whoami.account_id,
+                           user_agent,
+                           transport,
+                           cancellable,
+                           error);
+    if (!response) goto cleanup;
+    provider = parse_http_usage_document(
+        response->body, response->body_length, "api", g_get_real_time() / 1000, error);
+    codexbar_http_response_free(response);
+    if (!provider) goto cleanup;
+
+    char *whoami_plan = whoami.plan_type ? normalized_plan(whoami.plan_type) : NULL;
+    if (!provider->plan && whoami_plan) provider->plan = g_strdup(whoami_plan);
+    if (whoami.email) {
+        g_free(provider->account);
+        provider->account = g_strdup(whoami.email);
+    }
+    if (whoami.account_id || provider->plan || whoami_plan) {
+        if (!provider->identity) provider->identity = g_new0(CodexBarProviderIdentity, 1);
+        if (whoami.account_id) provider->identity->account_id = g_strdup(whoami.account_id);
+        provider->identity->login_method = g_strdup(provider->plan ? provider->plan : whoami_plan);
+    }
+    g_free(whoami_plan);
+    if (!provider->usage_extensions) provider->usage_extensions = json_object_new_object();
+    json_object_object_add(
+        provider->usage_extensions, "dataConfidence", json_object_new_string("exact"));
+    json_object_object_add(
+        provider->usage_extensions, "codexCredentialKind", json_object_new_string("pat"));
+
+cleanup:
+    pat_whoami_clear(&whoami);
+    g_free(user_agent);
+    g_free(token);
+    return provider;
+}
+
 static CodexBarProvider *fetch_http_usage(const CodexBarProviderConfig *config,
                                           const char *source,
                                           CodexBarCodexTransport transport,
@@ -510,22 +937,22 @@ static CodexBarProvider *fetch_http_usage(const CodexBarProviderConfig *config,
     const char *override = g_getenv("CODEXBAR_CODEX_USAGE_URL");
     const char *url = override && override[0] != '\0'
                           ? override
-                          : "https://chatgpt.com/backend-api/wham/usage";
+                          : CODEX_USAGE_URL;
     CodexBarHttpRequestHeader headers[5] = {
         {g_str_equal(source, "oauth") ? "Authorization" : "Cookie",
          g_str_equal(source, "oauth") ? authorization : credential},
         {"Accept", "application/json"},
         {"User-Agent", "CodexBar"},
-        {"ChatGPT-Account-Id", account_id},
         {"OpenAI-Beta", "codex-1"},
+        {"ChatGPT-Account-Id", account_id},
     };
     const CodexBarHttpRequest request = {
         .url = url,
         .method = "GET",
         .headers = headers,
-        .header_count = account_id ? G_N_ELEMENTS(headers) : G_N_ELEMENTS(headers) - 2,
+        .header_count = account_id ? G_N_ELEMENTS(headers) : G_N_ELEMENTS(headers) - 1,
         .timeout_seconds = 30,
-        .maximum_response_bytes = 1024 * 1024,
+        .maximum_response_bytes = CODEX_MAXIMUM_RESPONSE_BYTES,
         .protocol_policy = g_str_has_prefix(url, "http://") ? CODEXBAR_HTTP_ALLOW_LOOPBACK_HTTP
                                                            : CODEXBAR_HTTP_HTTPS_ONLY,
         .redirect_policy = CODEXBAR_HTTP_REDIRECT_DENY,
@@ -548,10 +975,16 @@ static CodexBarProvider *fetch_http_usage(const CodexBarProviderConfig *config,
         codexbar_http_response_free(response);
         return NULL;
     }
-    CodexBarProvider *provider = codexbar_codex_parse_http_usage(
-        response->body, source, g_get_real_time() / 1000, error);
+    CodexBarProvider *provider = parse_http_usage_document(
+        response->body, response->body_length, source, g_get_real_time() / 1000, error);
     codexbar_http_response_free(response);
     return provider;
+}
+
+static gboolean source_error_allows_fallback(const GError *error) {
+    return error && error->domain == codex_error_quark() &&
+           (error->code == CODEX_ERROR_CREDENTIALS_MISSING ||
+            error->code == CODEX_ERROR_UNAUTHORIZED);
 }
 
 CodexBarProvider *codexbar_codex_fetch_with_adapters(const CodexBarProviderConfig *config,
@@ -562,19 +995,27 @@ CodexBarProvider *codexbar_codex_fetch_with_adapters(const CodexBarProviderConfi
                                                      GError **error) {
     const char *selected = source ? source : "auto";
     if (g_str_equal(selected, "cli")) return cli_fetcher(error);
+    if (g_str_equal(selected, "api")) return fetch_pat_usage(config, transport, cancellable, error);
     if (g_str_equal(selected, "oauth")) return fetch_http_usage(config, "oauth", transport, cancellable, error);
     if (g_str_equal(selected, "web")) return fetch_http_usage(config, "web", transport, cancellable, error);
     if (!g_str_equal(selected, "auto")) {
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Unsupported Codex source: %s", selected);
         return NULL;
     }
-    GError *oauth_error = NULL;
-    CodexBarProvider *provider = fetch_http_usage(config, "oauth", transport, cancellable, &oauth_error);
+
+    GError *pat_error = NULL;
+    CodexBarProvider *provider = fetch_pat_usage(config, transport, cancellable, &pat_error);
     if (provider) return provider;
-    gboolean fallback = oauth_error && oauth_error->domain == codex_error_quark() &&
-                        (oauth_error->code == CODEX_ERROR_CREDENTIALS_MISSING ||
-                         oauth_error->code == CODEX_ERROR_UNAUTHORIZED);
-    if (!fallback) {
+    if (!source_error_allows_fallback(pat_error)) {
+        g_propagate_error(error, pat_error);
+        return NULL;
+    }
+    g_clear_error(&pat_error);
+
+    GError *oauth_error = NULL;
+    provider = fetch_http_usage(config, "oauth", transport, cancellable, &oauth_error);
+    if (provider) return provider;
+    if (!source_error_allows_fallback(oauth_error)) {
         g_propagate_error(error, oauth_error);
         return NULL;
     }

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Native Codex personal-access-token usage through the Codex CLI auth file, including whoami identity and scoped-home
+  resolution.
 - Local Pi/OMP cost and live-session discovery, with compatible-root deduplication and descriptive labels.
 - Native Fireworks billing usage with strict account-slug validation and 30-day spend reporting.
 - Native IBM Bob monthly Bobcoin usage with regional team aggregation, API-key and JWT authentication, and strict
