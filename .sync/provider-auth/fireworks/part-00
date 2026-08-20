@@ -1,0 +1,140 @@
+From 3c84f5fa26ca056dc832f6c12bf677237d5d4669 Mon Sep 17 00:00:00 2001
+From: "OpenAI GPT-5.6 Pro" <noreply@openai.com>
+Date: Thu, 20 Aug 2026 19:44:40 +0000
+Subject: [PATCH] fix: discover fireworks account slugs
+
+---
+ CHANGELOG.md                 |   1 +
+ linux/src/fireworks.c        | 362 ++++++++++++++++++++++++++++++-----
+ linux/tests/test_fireworks.c | 164 ++++++++++++++--
+ 3 files changed, 466 insertions(+), 61 deletions(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a1fb90bd957d621bee3ab930e2892f46c12000ab..bc65a3677bd8a1bb3a81929a383eeccad16cf0ac 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -14,6 +14,7 @@
+ ### Changed
+ 
+ - Parse both legacy and current Amp subscription lines, including calendar-month renewal windows.
++- Auto-discover a sole Fireworks account, paginate account lookup, and report stale or ambiguous slugs explicitly.
+ - Compact Codex subagents exclude parent-confirmed copied prefixes, and priority traces use API Fast USD pricing.
+ - Parse Command Code five-hour and weekly rolling limits and include the Goat plan's monthly allowance.
+ - Show Doubao Coding Plan and Agent Plan windows together for AK/SK accounts subscribed to both products.
+diff --git a/linux/src/fireworks.c b/linux/src/fireworks.c
+index a4fdf302945f949a3a0f844a7604ec3febe7e049..93d7fdca295818ff42514d35ea5ea928d2bc468a 100644
+--- a/linux/src/fireworks.c
++++ b/linux/src/fireworks.c
+@@ -6,6 +6,7 @@
+ #include <string.h>
+ 
+ #define FIREWORKS_MAXIMUM_RESPONSE_BYTES (1024U * 1024U)
++#define FIREWORKS_MAXIMUM_ACCOUNT_PAGES 100U
+ 
+ static char *clean_value(const char *raw) {
+     if (!raw) return NULL;
+@@ -201,32 +202,19 @@ static char *summary_url(const char *slug, gint64 now_ms, GError **error) {
+     return url;
+ }
+ 
+-CodexBarProvider *codexbar_fireworks_fetch_with_transport_and_cancellable(const CodexBarProviderConfig *config,
+-                                                                          CodexBarFireworksTransport transport,
+-                                                                          GCancellable *cancellable,
+-                                                                          gint64 now_ms,
+-                                                                          GError **error) {
+-    g_return_val_if_fail(transport != NULL, NULL);
+-    if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
+-    char *api_key = resolve_api_key(config);
+-    if (!api_key) {
+-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Missing Fireworks API key.");
+-        return NULL;
+-    }
+-    char *slug = resolve_account_slug(config);
+-    if (!slug) {
+-        g_free(api_key);
+-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Missing Fireworks account slug.");
+-        return NULL;
+-    }
+-    char *url = summary_url(slug, now_ms, error);
+-    g_free(slug);
+-    if (!url) {
+-        g_free(api_key);
+-        return NULL;
+-    }
+-    char *authorization = g_strdup_printf("Bearer %s", api_key);
+-    g_free(api_key);
++static char *accounts_url(const char *page_token) {
++    if (!page_token) return g_strdup("https://api.fireworks.ai/v1/accounts");
++    char *escaped = g_uri_escape_string(page_token, NULL, TRUE);
++    char *url = g_strdup_printf("https://api.fireworks.ai/v1/accounts?pageToken=%s", escaped);
++    g_free(escaped);
++    return url;
++}
++
++static CodexBarHttpResponse *fireworks_send_get(const char *url,
++                                                const char *authorization,
++                                                CodexBarFireworksTransport transport,
++                                                GCancellable *cancellable,
++                                                GError **error) {
+     const CodexBarHttpRequestHeader headers[] = {
+         {"Authorization", authorization},
+         {"Accept", "application/json"},
+@@ -244,36 +232,220 @@ CodexBarProvider *codexbar_fireworks_fetch_with_transport_and_cancellable(const
+     };
+     GError *request_error = NULL;
+     CodexBarHttpResponse *response = transport(&request, &request_error);
+-    g_free(authorization);
+-    g_free(url);
+     if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+         codexbar_http_response_free(response);
+         g_clear_error(&request_error);
+         g_cancellable_set_error_if_cancelled(cancellable, error);
+         return NULL;
+     }
+-    if (!response) {
+-        if (request_error && request_error->domain == G_IO_ERROR && request_error->code == G_IO_ERROR_CANCELLED) {
+-            g_propagate_error(error, request_error);
+-        } else {
+-            g_clear_error(&request_error);
+-            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Fireworks network request failed.");
++    if (response) {
++        g_clear_error(&request_error);
++        return response;
++    }
++    if (request_error && request_error->domain == G_IO_ERROR && request_error->code == G_IO_ERROR_CANCELLED) {
++        g_propagate_error(error, request_error);
++    } else {
++        g_clear_error(&request_error);
++        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Fireworks network request failed.");
++    }
++    return NULL;
++}
++
++static void fireworks_set_http_error(const char *surface, long status, GError **error) {
++    if (status == 401 || status == 403) {
++        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "Fireworks rejected the API key.");
++    } else if (status == 429) {
++        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "Fireworks rate limit exceeded.");
++    } else {
++        g_set_error(error,
++                    G_IO_ERROR,
++                    G_IO_ERROR_FAILED,
++                    "Fireworks %s API returned HTTP %ld.",
++                    surface,
++                    status);
++    }
++}
++
++static char *json_clean_string_member(json_object *object, const char *key, gboolean *malformed) {
++    json_object *value = NULL;
++    if (!json_object_object_get_ex(object, key, &value) || json_object_is_type(value, json_type_null)) return NULL;
++    if (!json_object_is_type(value, json_type_string)) {
++        *malformed = TRUE;
++        return NULL;
++    }
++    const char *text = json_object_get_string(value);
++    size_t length = (size_t)json_object_get_string_len(value);
++    if (memchr(text, '\0', length)) {
++        *malformed = TRUE;
++        return NULL;
++    }
