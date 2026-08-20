@@ -1,0 +1,151 @@
+From 657ef66c4267dea9ed70ba9318323bf832ce5701 Mon Sep 17 00:00:00 2001
+From: "OpenAI GPT-5.6 Pro" <noreply@openai.com>
+Date: Thu, 20 Aug 2026 19:38:41 +0000
+Subject: [PATCH] fix: parse current amp subscriptions
+
+---
+ CHANGELOG.md                      |  1 +
+ linux/src/web_providers2.c        | 40 +++++++++++++++++++++++--------
+ linux/tests/test_web_providers2.c | 31 +++++++++++++++++++++++-
+ 3 files changed, 61 insertions(+), 11 deletions(-)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 1038460085dfc86c2a7873db49a573b0507fccb1..a1fb90bd957d621bee3ab930e2892f46c12000ab 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -13,6 +13,7 @@
+ 
+ ### Changed
+ 
++- Parse both legacy and current Amp subscription lines, including calendar-month renewal windows.
+ - Compact Codex subagents exclude parent-confirmed copied prefixes, and priority traces use API Fast USD pricing.
+ - Parse Command Code five-hour and weekly rolling limits and include the Goat plan's monthly allowance.
+ - Show Doubao Coding Plan and Agent Plan windows together for AK/SK accounts subscribed to both products.
+diff --git a/linux/src/web_providers2.c b/linux/src/web_providers2.c
+index abba44435891b6a21eefa90ef69626ae0017a4a6..1af043cacb50aba53828690194a73d8e8bfec6fa 100644
+--- a/linux/src/web_providers2.c
++++ b/linux/src/web_providers2.c
+@@ -622,13 +622,20 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+     static const char percent_pattern[] =
+         "^\\s*Amp Free:\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+remaining(?:\\s+today)?"
+         "(?:\\s*\\(resets\\s+daily\\))?\\s*$";
+-    static const char subscription_pattern[] =
++    static const char legacy_subscription_pattern[] =
+         "^\\s*Subscription\\s+(.+?):\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+other\\s+usage"
+         "\\s+and\\s+([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+orb\\s+usage\\s+remaining\\s*-"
+-        "\\s*resets\\s+upon\\s+renewal\\s+in\\s+([0-9][0-9,]*)\\s+days?(?:\\s*-\\s*https?://\\S+)?\\s*$";
++        "\\s*resets\\s+upon\\s+renewal\\s+in\\s+([0-9][0-9,]*)\\s+(days?|months?)"
++        "(?:\\s*-\\s*https?://\\S+)?\\s*$";
++    static const char current_subscription_pattern[] =
++        "^\\s*Amp\\s+(.+?)\\s+Subscription:\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+other\\s+usage"
++        "\\s+and\\s+([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+orb\\s+usage\\s+remaining\\s*-"
++        "\\s*resets\\s+upon\\s+renewal\\s+in\\s+([0-9][0-9,]*)\\s+(days?|months?)"
++        "(?:\\s*-\\s*https?://\\S+)?\\s*$";
+     char **absolute = regex_captures(clean, absolute_pattern, 3);
+     char **percent = absolute ? NULL : regex_captures(clean, percent_pattern, 1);
+-    char **subscription = regex_captures(clean, subscription_pattern, 4);
++    char **subscription = regex_captures(clean, legacy_subscription_pattern, 5);
++    if (!subscription) subscription = regex_captures(clean, current_subscription_pattern, 5);
+     char **identity = regex_captures(clean,
+         "^\\s*Signed in as\\s+([^\\s(]+)(?:\\s+\\(([^\\r\\n)]+)\\))?\\s*$", 2);
+     char **individual = regex_captures(clean,
+@@ -648,10 +655,11 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+         free_detail = "resets daily";
+     }
+     gboolean has_subscription = FALSE;
+-    double other_remaining = 0, orb_remaining = 0, renewal_days = 0;
++    double other_remaining = 0, orb_remaining = 0, renewal_value = 0;
+     if (subscription && parse_display_number(subscription[1], &other_remaining) &&
+         parse_display_number(subscription[2], &orb_remaining) &&
+-        parse_display_number(subscription[3], &renewal_days) && subscription[0][0] != '\0') {
++        parse_display_number(subscription[3], &renewal_value) && subscription[0][0] != '\0' &&
++        subscription[4] && subscription[4][0] != '\0') {
+         has_subscription = TRUE;
+     }
+     double individual_remaining = 0;
+@@ -671,17 +679,29 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+     provider->dashboard_url = g_strdup("https://ampcode.com/settings/usage");
+     provider->explicit_quota_slots = TRUE;
+     if (has_subscription) {
+-        gint64 resets_at_ms = now_ms + (gint64)llround(renewal_days * 86400000.0);
+-        char *detail = g_strdup_printf(renewal_days == 1 ? "renews in 1 day" : "renews in %.0f days",
+-                                       renewal_days);
++        gboolean uses_months = g_ascii_strncasecmp(subscription[4], "month", 5) == 0;
++        gint64 resets_at_ms = 0;
++        if (uses_months) {
++            GDateTime *now = g_date_time_new_from_unix_utc(now_ms / 1000);
++            GDateTime *reset = now ? g_date_time_add_months(now, (gint)llround(renewal_value)) : NULL;
++            if (reset) resets_at_ms = g_date_time_to_unix(reset) * 1000;
++            if (reset) g_date_time_unref(reset);
++            if (now) g_date_time_unref(now);
++        } else {
++            resets_at_ms = now_ms + (gint64)llround(renewal_value * 86400000.0);
++        }
++        const char *unit = uses_months ? "month" : "day";
++        char *detail = renewal_value == 1
++                           ? g_strdup_printf("renews in 1 %s", unit)
++                           : g_strdup_printf("renews in %.0f %ss", renewal_value, unit);
+         codexbar_provider_add_quota_window(
+             provider,
+             new_window("primary", "Other usage", 100 - CLAMP(other_remaining, 0, 100),
+-                       30 * 24 * 60, TRUE, resets_at_ms, TRUE, detail));
++                       30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, detail));
+         codexbar_provider_add_quota_window(
+             provider,
+             new_window("secondary", "Orb usage", 100 - CLAMP(orb_remaining, 0, 100),
+-                       30 * 24 * 60, TRUE, resets_at_ms, TRUE, detail));
++                       30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, detail));
+         provider->plan = g_strdup(subscription[0]);
+         g_free(detail);
+     } else if (has_free) {
+diff --git a/linux/tests/test_web_providers2.c b/linux/tests/test_web_providers2.c
+index 17214d89e7214b1c54aabbaca2345a7a6cdce5b3..75237094ddc79c1663a1b4e81941a8d0e2c45f54 100644
+--- a/linux/tests/test_web_providers2.c
++++ b/linux/tests/test_web_providers2.c
+@@ -221,7 +221,7 @@ static void test_amp_parsers(void) {
+     const char *api =
+         "{\"ok\":true,\"result\":{\"displayText\":"
+         "\"Signed in as user@example.com (Acme)\\n"
+-        "Subscription Pro: 80% other usage and 60% orb usage remaining - resets upon renewal in 2 days\\n"
++        "Amp Pro Subscription: 80% other usage and 60% orb usage remaining - resets upon renewal in 2 days\\n"
+         "Individual credits: $12.50 remaining\\nWorkspace Team: $7 remaining\"}}";
+     GError *error = NULL;
+     CodexBarProvider *provider = codexbar_amp_parse_usage_api(api, strlen(api), 1000, &error);
+@@ -236,6 +236,35 @@ static void test_amp_parsers(void) {
+     g_assert_cmpuint(provider->balances->len, ==, 2);
+     codexbar_provider_free(provider);
+ 
++    const char *monthly =
++        "Signed in as you@example.com (username)\n"
++        "Amp Megawatt Subscription: 100% other usage and 100% orb usage remaining - "
++        "resets upon renewal in 1 month\n"
++        "Individual credits: $4.35 remaining (set up auto-reload to avoid running out) - "
++        "https://ampcode.com/settings";
++    provider = codexbar_amp_parse_display_text(monthly, strlen(monthly), 1787054400000LL, &error);
++    g_assert_no_error(error);
++    g_assert_cmpstr(provider->plan, ==, "Megawatt");
++    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 0);
++    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 0);
++    g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->window_minutes, ==, 43200);
++    g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->resets_at_ms, ==, 1789732800000LL);
++    g_assert_cmpstr(codexbar_provider_quota_window(provider, 0)->reset_description, ==,
++                    "renews in 1 month");
++    g_assert_cmpfloat(((CodexBarBalance *)g_ptr_array_index(provider->balances, 0))->remaining,
++                      ==, 4.35);
++    codexbar_provider_free(provider);
++
++    const char *legacy =
++        "Subscription Megawatt: 97% other usage and 100% orb usage remaining - "
++        "resets upon renewal in 29 days - https://ampcode.com/settings#subscription";
++    provider = codexbar_amp_parse_display_text(legacy, strlen(legacy), 1000, &error);
++    g_assert_no_error(error);
++    g_assert_cmpstr(provider->plan, ==, "Megawatt");
++    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 3);
++    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 0);
++    codexbar_provider_free(provider);
++
+     const char *html =
+         "<script>getFreeTierUsage = {quota:100, used:25, hourlyReplenishment:5, windowHours:20}</script>";
+     provider = codexbar_amp_parse_settings_html(html, strlen(html), 1000, &error);
+-- 
+2.47.3
