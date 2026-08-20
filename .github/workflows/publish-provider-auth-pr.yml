@@ -34,28 +34,52 @@ jobs:
           cat .sync/provider-auth/fireworks/part-* > "$work/02-fireworks.patch"
           cat .sync/provider-auth/codex/part-* > "$work/03-codex-pat.patch"
 
-          cat > "$work/checksums" <<'SUMS'
-          cfb0b58af0c1f292dceaaeaf2e1cf0319214b5d96e9fbe19e71f601a12a93d2e  01-amp.patch
-          0c37f9566d1842553c146688e47cbbda3abc3a83d94a9b2b2c45f83a0bd65211  02-fireworks.patch
-          8fd10ea4a9ab63a8c8687cd3880408975d8fda59d4331e3c80d8f374dcea0dfb  03-codex-pat.patch
-          SUMS
-          (cd "$work" && sha256sum --check checksums)
-
           if git ls-remote --exit-code --heads origin "refs/heads/$target" >/dev/null 2>&1; then
             echo "Refusing to overwrite existing branch $target" >&2
             exit 1
           fi
+
+          verify_blob() {
+            local path="$1"
+            local expected="$2"
+            local actual
+            actual="$(git rev-parse "HEAD:$path")"
+            test "$actual" = "$expected" || {
+              echo "Blob mismatch for $path: expected $expected, got $actual" >&2
+              exit 1
+            }
+          }
 
           git config user.name 'OpenAI GPT-5.6 Pro'
           git config user.email 'noreply@openai.com'
           git switch --detach "$base"
           git switch -c "$target"
 
-          for patch in "$work/01-amp.patch" "$work/02-fireworks.patch" "$work/03-codex-pat.patch"; do
-            git am "$patch"
-            git diff --check HEAD^
-            git push origin "HEAD:refs/heads/$target"
-          done
+          git am "$work/01-amp.patch"
+          git diff --check HEAD^ HEAD
+          verify_blob CHANGELOG.md a1fb90bd957d621bee3ab930e2892f46c12000ab
+          verify_blob linux/src/web_providers2.c 1af043cacb50aba53828690194a73d8e8bfec6fa
+          verify_blob linux/tests/test_web_providers2.c 75237094ddc79c1663a1b4e81941a8d0e2c45f54
+          git push origin "HEAD:refs/heads/$target"
+
+          git am "$work/02-fireworks.patch"
+          git diff --check HEAD^ HEAD
+          verify_blob CHANGELOG.md bc65a3677bd8a1bb3a81929a383eeccad16cf0ac
+          verify_blob linux/src/fireworks.c 93d7fdca295818ff42514d35ea5ea928d2bc468a
+          verify_blob linux/tests/test_fireworks.c f834e1896258c780117977c1fe195b8c23d0c144
+          git push origin "HEAD:refs/heads/$target"
+
+          git am "$work/03-codex-pat.patch"
+          git diff --check HEAD^ HEAD
+          verify_blob CHANGELOG.md a95480952d74980174c310dc47e27133fb783882
+          verify_blob linux/meson.build 30fa98d271e4658dcf5585487c19a58002bd237a
+          verify_blob linux/src/backend.c ace9f8cd402d18535b75cf644d5d0b83f89f20b1
+          verify_blob linux/src/codex.c dfe622b37cd0f06a7eba799d05dc1ff7a602dfd4
+          verify_blob linux/src/codex.h 3c91d1b5bd9bd31813d961a03a662458026f9c5f
+          verify_blob linux/src/provider_registry.c 6697882a1ca44af75f0db6c6ae09c5fc791df56d
+          verify_blob linux/tests/test_codex_pat.c 4136085099b1af560aab52dfae7d81acfceadb98
+          verify_blob linux/tests/test_model.c 8e9715854a772cfb22b6a670c5d5e7c26443a50a
+          git push origin "HEAD:refs/heads/$target"
 
           test "$(git rev-list --count "$base..HEAD")" -eq 3
           git log --oneline --decorate "$base..HEAD"
