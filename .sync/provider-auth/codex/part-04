@@ -1,0 +1,160 @@
++        return NULL;
++    }
++    g_clear_error(&pat_error);
++
+     GError *oauth_error = NULL;
+-    CodexBarProvider *provider = fetch_http_usage(config, "oauth", transport, cancellable, &oauth_error);
++    provider = fetch_http_usage(config, "oauth", transport, cancellable, &oauth_error);
+     if (provider) return provider;
+-    gboolean fallback = oauth_error && oauth_error->domain == codex_error_quark() &&
+-                        (oauth_error->code == CODEX_ERROR_CREDENTIALS_MISSING ||
+-                         oauth_error->code == CODEX_ERROR_UNAUTHORIZED);
+-    if (!fallback) {
++    if (!source_error_allows_fallback(oauth_error)) {
+         g_propagate_error(error, oauth_error);
+         return NULL;
+     }
+diff --git a/linux/src/codex.h b/linux/src/codex.h
+index 013cb7d6c16aa1620dc18070c6de728a6dd6fc7f..3c91d1b5bd9bd31813d961a03a662458026f9c5f 100644
+--- a/linux/src/codex.h
++++ b/linux/src/codex.h
+@@ -18,6 +18,7 @@ CodexBarProvider *codexbar_codex_fetch_with_adapters(const CodexBarProviderConfi
+                                                      GCancellable *cancellable,
+                                                      GError **error);
+ CodexBarProvider *codexbar_codex_fetch_with_home(const char *home_path, GError **error);
++gboolean codexbar_codex_pat_is_available(const CodexBarProviderConfig *config);
+ CodexBarProvider *codexbar_codex_parse_rate_limits(const char *json, GError **error);
+ CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
+                                                  const char *source,
+diff --git a/linux/src/provider_registry.c b/linux/src/provider_registry.c
+index e1bc8765bc8fb84535d2cce61d17baad260b30dc..6697882a1ca44af75f0db6c6ae09c5fc791df56d 100644
+--- a/linux/src/provider_registry.c
++++ b/linux/src/provider_registry.c
+@@ -9,7 +9,7 @@
+ #define P (CODEXBAR_SOURCE_API)
+ 
+ static const CodexBarProviderDescriptor providers[] = {
+-    {"codex", "Codex", "codex", NULL, A | W | C | O, TRUE, "https://chatgpt.com/codex/settings/usage", "https://status.openai.com/", CODEXBAR_NATIVE_CODEX},
++    {"codex", "Codex", "codex", NULL, A | W | C | O | P, TRUE, "https://chatgpt.com/codex/settings/usage", "https://status.openai.com/", CODEXBAR_NATIVE_CODEX},
+     {"openai", "OpenAI", "openai", "openai-api", A | P, FALSE, "https://platform.openai.com/usage", "https://status.openai.com", CODEXBAR_NATIVE_OPENAI},
+     {"azureopenai", "Azure OpenAI", "azure-openai", "azureopenai,aoai", A | P, FALSE, "https://ai.azure.com", "https://azure.status.microsoft/en-us/status", CODEXBAR_NATIVE_AZURE_OPENAI},
+     {"claude", "Claude", "claude", NULL, A | P | W | C | O, FALSE, "https://console.anthropic.com/settings/billing", "https://status.claude.com/", CODEXBAR_NATIVE_CLAUDE},
+@@ -142,6 +142,7 @@ guint codexbar_provider_auto_source_plan(const CodexBarProviderDescriptor *provi
+     if (!provider || !codexbar_provider_supports_source(provider, "auto")) return 0;
+     guint count = 0;
+     if (g_str_equal(provider->id, "codex")) {
++        append_source("api", sources, capacity, &count);
+         append_source("oauth", sources, capacity, &count);
+         append_source("cli", sources, capacity, &count);
+         return count;
+diff --git a/linux/tests/test_codex_pat.c b/linux/tests/test_codex_pat.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..4136085099b1af560aab52dfae7d81acfceadb98
+--- /dev/null
++++ b/linux/tests/test_codex_pat.c
+@@ -0,0 +1,422 @@
++#include "codex.h"
++#include "http.h"
++#include "model.h"
++
++#include <glib.h>
++#include <glib/gstdio.h>
++#include <json-c/json.h>
++#include <string.h>
++
++#define PAT_WHOAMI_URL "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami"
++#define USAGE_URL "https://chatgpt.com/backend-api/wham/usage"
++
++typedef struct {
++    const char *url;
++    const char *authorization;
++    const char *account_id;
++    long status;
++    const char *body;
++    gboolean pat_headers;
++} ExpectedRequest;
++
++typedef struct {
++    char *root;
++    char *previous_home;
++    char *previous_codex_home;
++    char *previous_usage_url;
++    char *previous_cli_version;
++    CodexBarProviderConfig config;
++} PatFixture;
++
++static ExpectedRequest expected_requests[8];
++static guint expected_request_count;
++static guint expected_request_index;
++static guint cli_calls;
++static char expected_authorization[256];
++
++static const char usage_json[] =
++    "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{"
++    "\"used_percent\":25,\"reset_at\":1776216359,\"limit_window_seconds\":18000}}}";
++
++static const char *request_header(const CodexBarHttpRequest *request, const char *name) {
++    for (size_t index = 0; index < request->header_count; index++) {
++        if (g_ascii_strcasecmp(request->headers[index].name, name) == 0) {
++            return request->headers[index].value;
++        }
++    }
++    return NULL;
++}
++
++static void expect_requests(const ExpectedRequest *requests, guint count) {
++    g_assert_cmpuint(count, <=, G_N_ELEMENTS(expected_requests));
++    memset(expected_requests, 0, sizeof(expected_requests));
++    if (count > 0) memcpy(expected_requests, requests, count * sizeof(*requests));
++    expected_request_count = count;
++    expected_request_index = 0;
++}
++
++static void assert_requests_consumed(void) {
++    g_assert_cmpuint(expected_request_index, ==, expected_request_count);
++}
++
++static CodexBarHttpResponse *pat_transport(const CodexBarHttpRequest *request, GError **error) {
++    (void)error;
++    g_assert_cmpuint(expected_request_index, <, expected_request_count);
++    const ExpectedRequest *expected = &expected_requests[expected_request_index++];
++    g_assert_cmpstr(request->url, ==, expected->url);
++    g_assert_cmpstr(request->method, ==, "GET");
++    g_assert_cmpint(request->timeout_seconds, ==, 30);
++    g_assert_cmpuint(request->maximum_response_bytes, ==, 1024U * 1024U);
++    g_assert_cmpstr(request_header(request, "Authorization"), ==, expected->authorization);
++    if (expected->account_id) {
++        g_assert_cmpstr(request_header(request, "ChatGPT-Account-Id"), ==, expected->account_id);
++    } else {
++        g_assert_null(request_header(request, "ChatGPT-Account-Id"));
++    }
++    g_assert_cmpstr(request_header(request, "Accept"), ==, "application/json");
++    const char *user_agent = request_header(request, "User-Agent");
++    g_assert_nonnull(user_agent);
++    if (expected->pat_headers) {
++        g_assert_cmpstr(request_header(request, "originator"), ==, "codex_cli_rs");
++        g_assert_null(request_header(request, "OpenAI-Beta"));
++        g_assert_true(g_str_has_prefix(user_agent, "codex_cli_rs/1.2.3 (Linux "));
++        g_assert_nonnull(strstr(user_agent, "; "));
++        g_assert_true(g_str_has_suffix(user_agent, ")"));
++    } else {
++        g_assert_null(request_header(request, "originator"));
++        g_assert_cmpstr(request_header(request, "OpenAI-Beta"), ==, "codex-1");
++        g_assert_cmpstr(user_agent, ==, "CodexBar");
++    }
++
++    CodexBarHttpResponse *response = g_new0(CodexBarHttpResponse, 1);
++    response->status = expected->status;
++    response->body = g_strdup(expected->body ? expected->body : "");
++    response->body_length = strlen(response->body);
++    return response;
++}
++
++static CodexBarProvider *fake_cli(GError **error) {
++    (void)error;
++    cli_calls++;
++    CodexBarProvider *provider = codexbar_provider_new();
++    provider->provider = g_strdup("codex");
++    provider->source = g_strdup("cli");
++    return provider;
++}
