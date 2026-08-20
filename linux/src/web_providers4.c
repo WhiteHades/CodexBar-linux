@@ -407,6 +407,9 @@ CodexBarProvider *codexbar_commandcode_fetch_with_transport_and_cancellable(
         credits->body, credits->body_length,
         subscription ? subscription->body : NULL, subscription ? subscription->body_length : 0,
         now_ms, error);
+    if (provider) {
+        provider->runtime_scope = g_compute_checksum_for_string(G_CHECKSUM_SHA256, cookie, -1);
+    }
     codexbar_http_response_free(subscription);
     codexbar_http_response_free(credits);
     g_free(cookie);

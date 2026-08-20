@@ -18,6 +18,9 @@ typedef struct {
 } Fixture;
 
 static Fixture fixture;
+static guint alibaba_personal_count;
+static gboolean alibaba_personal_china;
+static gboolean alibaba_personal_user_info;
 
 static CodexBarHttpResponse *response(long status, const char *body, const char *url) {
     CodexBarHttpResponse *value = g_new0(CodexBarHttpResponse, 1);
@@ -98,6 +101,82 @@ static CodexBarHttpResponse *stub_transport(const CodexBarHttpRequest *request, 
                     request->url);
 }
 
+static CodexBarHttpResponse *alibaba_personal_transport(const CodexBarHttpRequest *request, GError **error) {
+    (void)error;
+    assert_policy(request);
+    guint index = alibaba_personal_count++;
+    g_assert_cmpstr(header(request, "Cookie"), ==,
+                    "login_aliyunid_ticket=ticket; sec_token=cookie-sec; cna=anon; csrf=csrf-value");
+    if (index == 0) {
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_cmpstr(request->url,
+                        ==,
+                        alibaba_personal_china
+                            ? "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan/personal"
+                            : "https://modelstudio.console.alibabacloud.com/ap-southeast-1/"
+                              "?tab=plan#/efm/subscription/token-plan/personal");
+        return response(200,
+                        alibaba_personal_user_info
+                            ? "<html></html>"
+                            : "<script>window.config={SEC_TOKEN: \"personal-sec-token\"}</script>",
+                        request->url);
+    }
+    if (alibaba_personal_user_info && index == 1) {
+        g_assert_cmpstr(request->method, ==, "GET");
+        g_assert_cmpstr(request->url, ==,
+                        alibaba_personal_china
+                            ? "https://bailian.console.aliyun.com/tool/user/info.json"
+                            : "https://modelstudio.console.alibabacloud.com/tool/user/info.json");
+        return response(200, "{\"code\":\"200\",\"data\":{\"secToken\":\"personal-sec-token\"}}", request->url);
+    }
+
+    guint api_index = index - (alibaba_personal_user_info ? 1 : 0);
+    g_assert_cmpstr(request->method, ==, "POST");
+    g_assert_true(g_str_has_prefix(
+        request->url,
+        alibaba_personal_china
+            ? "https://bailian-cs.console.aliyun.com/data/api.json?action=BroadScopeAspnGateway&"
+              "product=sfm_bailian&api=zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/"
+            : "https://bailian-singapore-cs.alibabacloud.com/data/api.json?"
+              "action=IntlBroadScopeAspnGateway&product=sfm_bailian&"
+              "api=zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/"));
+    g_assert_cmpstr(header(request, "Origin"), ==,
+                    alibaba_personal_china ? "https://bailian.console.aliyun.com"
+                                           : "https://modelstudio.console.alibabacloud.com");
+    g_assert_cmpstr(header(request, "x-xsrf-token"), ==, "csrf-value");
+    g_assert_nonnull(strstr(request->body, "sec_token=personal-sec-token"));
+    g_assert_null(strstr(request->body, "switchAgent"));
+    g_assert_nonnull(strstr(request->body, "switchUserType"));
+
+    if (api_index == 1) {
+        g_assert_nonnull(strstr(request->url, "/usage&_v=undefined"));
+        return response(200,
+                        "{\"code\":\"200\",\"data\":{\"DataV2\":{\"data\":{"
+                        "\"success\":true,\"data\":{\"per5HourPercentage\":0.25,"
+                        "\"per5HourResetTime\":1784813220000,\"per1WeekPercentage\":0.1,"
+                        "\"per1WeekResetTime\":1785234900000}}}},\"successResponse\":true}",
+                        request->url);
+    }
+    if (api_index == 2) {
+        g_assert_nonnull(strstr(request->url, "/subscription&_v=undefined"));
+        g_assert_nonnull(strstr(request->body,
+                                alibaba_personal_china ? "sfm_tokenplansolo_public_cn"
+                                                       : "sfm_tokenplansolo_public_intl"));
+        return response(200,
+                        "{\"code\":\"200\",\"data\":{\"DataV2\":{\"data\":{"
+                        "\"success\":true,\"data\":{\"specCode\":\"pro\"}}}},"
+                        "\"successResponse\":true}",
+                        request->url);
+    }
+    g_assert_cmpuint(api_index, ==, 3);
+    g_assert_nonnull(strstr(request->url, "/quota-config&_v=undefined"));
+    return response(200,
+                    "{\"code\":\"200\",\"data\":{\"DataV2\":{\"data\":{"
+                    "\"success\":true,\"data\":{\"pro\":{\"five_hour\":12000,"
+                    "\"weekly\":40000}}}}},\"successResponse\":true}",
+                    request->url);
+}
+
 static CodexBarProviderConfig config_with_cookie(const char *cookie) {
     CodexBarProviderConfig config = {0};
     config.raw = json_object_new_object();
@@ -144,6 +223,17 @@ static void test_alibaba_parsers(void) {
     g_assert_null(provider);
     g_assert_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
     g_clear_error(&error);
+
+    const char *workspace =
+        "{\"code\":\"200\",\"data\":{\"success\":false,"
+        "\"errorCode\":\"BailianGateway.Workspace.NotAuthorised\","
+        "\"errorMsg\":\"BailianGateway.Workspace.NotAuthorised\"},"
+        "\"successResponse\":true}";
+    provider = codexbar_alibaba_token_plan_parse(workspace, strlen(workspace), 1000, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_nonnull(strstr(error->message, "Workspace.NotAuthorised"));
+    g_clear_error(&error);
 }
 
 static void test_alibaba_transport(void) {
@@ -158,6 +248,31 @@ static void test_alibaba_transport(void) {
     g_assert_cmpuint(fixture.count, ==, 1);
     codexbar_provider_free(provider);
     clear_config(&config);
+
+    const char *regions[] = {"cn-personal", "intl-personal"};
+    for (guint index = 0; index < G_N_ELEMENTS(regions); index++) {
+        config = config_with_cookie(
+            "login_aliyunid_ticket=ticket; sec_token=cookie-sec; cna=anon; csrf=csrf-value");
+        config.region = g_strdup(regions[index]);
+        alibaba_personal_china = index == 0;
+        alibaba_personal_user_info = index == 1;
+        alibaba_personal_count = 0;
+        provider = codexbar_alibaba_token_plan_fetch_with_transport_and_cancellable(
+            &config, alibaba_personal_transport, NULL, 1000, &error);
+        g_assert_no_error(error);
+        g_assert_nonnull(provider);
+        g_assert_cmpuint(alibaba_personal_count, ==, alibaba_personal_user_info ? 5 : 4);
+        g_assert_cmpstr(provider->plan, ==, "Pro");
+        g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+        g_assert_cmpstr(codexbar_provider_quota_window(provider, 0)->id, ==, "primary");
+        g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->window_minutes, ==, 300);
+        g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 25.0);
+        g_assert_cmpstr(codexbar_provider_quota_window(provider, 1)->id, ==, "secondary");
+        g_assert_cmpint(codexbar_provider_quota_window(provider, 1)->window_minutes, ==, 10080);
+        g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 10.0);
+        codexbar_provider_free(provider);
+        clear_config(&config);
+    }
 }
 
 static void test_mimo_parser(void) {
@@ -181,6 +296,17 @@ static void test_mimo_parser(void) {
     g_assert_cmpfloat_with_epsilon(
         codexbar_provider_quota_window(provider, 0)->used_percent, 5.05, 0.0001);
     g_assert_true(codexbar_provider_quota_window(provider, 0)->has_resets_at);
+    g_assert_true(codexbar_provider_quota_window(provider, 0)->has_window_minutes);
+    g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->window_minutes, ==, 43200);
+    codexbar_provider_free(provider);
+
+    const char *detail_without_reset = "{\"code\":0,\"data\":{\"planCode\":\"standard\"}}";
+    provider = codexbar_mimo_parse(balance, strlen(balance),
+                                   detail_without_reset, strlen(detail_without_reset),
+                                   usage, strlen(usage), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_false(codexbar_provider_quota_window(provider, 0)->has_resets_at);
+    g_assert_false(codexbar_provider_quota_window(provider, 0)->has_window_minutes);
     codexbar_provider_free(provider);
 
     provider = codexbar_mimo_parse("{}", 2, NULL, 0, NULL, 0, 1000, &error);
@@ -248,6 +374,17 @@ static void test_security_and_cancellation(void) {
     g_assert_null(provider);
     g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
     g_clear_error(&error);
+    clear_config(&config);
+
+    config = config_with_cookie("sec_token=sec");
+    config.region = g_strdup("intl-personal");
+    g_setenv("ALIBABA_TOKEN_PLAN_QUOTA_URL", "https://quota.example/path?leak=1", TRUE);
+    provider = codexbar_alibaba_token_plan_fetch_with_transport_and_cancellable(
+        &config, stub_transport, NULL, 1000, &error);
+    g_assert_null(provider);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error(&error);
+    g_unsetenv("ALIBABA_TOKEN_PLAN_QUOTA_URL");
     clear_config(&config);
 }
 

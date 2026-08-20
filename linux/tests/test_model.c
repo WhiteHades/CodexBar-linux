@@ -231,6 +231,152 @@ static void test_raw_usage_overage_has_clamped_waybar_projection(void) {
     codexbar_snapshot_free(snapshot);
 }
 
+static CodexBarQuotaWindow *projection_window(const char *id,
+                                              const char *title,
+                                              double used_percent,
+                                              gint64 minutes,
+                                              gint64 reset_ms,
+                                              const char *reset_description) {
+    CodexBarQuotaWindow *window = codexbar_quota_window_new(id, title);
+    window->usage_known = TRUE;
+    window->used_percent = used_percent;
+    if (minutes > 0) {
+        window->has_window_minutes = TRUE;
+        window->window_minutes = minutes;
+    }
+    if (reset_ms > 0) {
+        window->has_resets_at = TRUE;
+        window->resets_at_ms = reset_ms;
+    }
+    window->reset_description = g_strdup(reset_description);
+    return window;
+}
+
+static CodexBarProvider *projection_provider(const char *id,
+                                             double primary_used,
+                                             gint64 primary_reset,
+                                             double secondary_used,
+                                             gint64 secondary_reset,
+                                             const char *secondary_description,
+                                             gboolean tertiary,
+                                             gint64 tertiary_reset,
+                                             const char *tertiary_description) {
+    CodexBarProvider *provider = codexbar_provider_new();
+    provider->provider = g_strdup(id);
+    codexbar_provider_add_quota_window(
+        provider,
+        projection_window("primary", "Session", primary_used, 300, primary_reset, "primary reset"));
+    codexbar_provider_add_quota_window(
+        provider,
+        projection_window("secondary", "Weekly", secondary_used, 10080, secondary_reset, secondary_description));
+    if (tertiary) {
+        codexbar_provider_add_quota_window(
+            provider,
+            projection_window("tertiary", "Monthly", 100, 43200, tertiary_reset, tertiary_description));
+    }
+    return provider;
+}
+
+static char *render_one_provider(CodexBarProvider *provider) {
+    CodexBarSnapshot snapshot = {.providers = g_ptr_array_new()};
+    g_ptr_array_add(snapshot.providers, provider);
+    char *rendered = codexbar_render_waybar(&snapshot);
+    g_ptr_array_unref(snapshot.providers);
+    return rendered;
+}
+
+static void test_binding_quota_projection(void) {
+    const gint64 now = g_get_real_time() / 1000;
+    const gint64 primary_reset = now + 5 * 24 * 60 * 60 * 1000LL;
+    const gint64 weekly_reset = now + 3 * 24 * 60 * 60 * 1000LL;
+    const gint64 monthly_reset = now + 7 * 24 * 60 * 60 * 1000LL;
+    CodexBarQuotaWindowProjection projection = {0};
+
+    CodexBarProvider *provider = projection_provider(
+        "claude", 40, primary_reset, 100, weekly_reset, "weekly reset", FALSE, 0, NULL);
+    CodexBarQuotaWindow *raw_primary = codexbar_provider_quota_window(provider, 0);
+    const CodexBarQuotaWindow *projected = codexbar_provider_projected_quota_window(
+        provider, 0, now, &projection);
+    g_assert_cmpfloat(projected->used_percent, ==, 100);
+    g_assert_true(projected->has_resets_at);
+    g_assert_cmpint(projected->resets_at_ms, ==, weekly_reset);
+    g_assert_cmpstr(projected->detail, ==, raw_primary->detail);
+    g_assert_null(projected->pace);
+    char *rendered = render_one_provider(provider);
+    g_assert_nonnull(strstr(rendered, "100% used"));
+    g_free(rendered);
+    g_assert_cmpfloat(raw_primary->used_percent, ==, 40);
+    g_assert_cmpint(raw_primary->resets_at_ms, ==, primary_reset);
+    codexbar_quota_window_projection_clear(&projection);
+    codexbar_provider_free(provider);
+
+    provider = projection_provider(
+        "claude", 40, primary_reset, 100, now - 1, "expired", FALSE, 0, NULL);
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_true(projected == codexbar_provider_quota_window(provider, 0));
+    g_assert_cmpfloat(projected->used_percent, ==, 40);
+    codexbar_provider_free(provider);
+
+    provider = projection_provider(
+        "alibaba", 40, primary_reset, 100, weekly_reset, NULL, TRUE, monthly_reset, NULL);
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_true(projected->has_resets_at);
+    g_assert_cmpint(projected->resets_at_ms, ==, monthly_reset);
+    codexbar_quota_window_projection_clear(&projection);
+    codexbar_provider_free(provider);
+
+    provider = projection_provider(
+        "alibaba", 40, primary_reset, 100, weekly_reset, NULL, TRUE, 0, "monthly reset pending");
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_cmpfloat(projected->used_percent, ==, 100);
+    g_assert_false(projected->has_resets_at);
+    g_assert_null(projected->reset_description);
+    codexbar_quota_window_projection_clear(&projection);
+    codexbar_provider_free(provider);
+
+    provider = projection_provider(
+        "claude", 40, primary_reset, 100, 0, "  resets in 6 hours  ", FALSE, 0, NULL);
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_false(projected->has_resets_at);
+    g_assert_cmpstr(projected->reset_description, ==, "resets in 6 hours");
+    codexbar_quota_window_projection_clear(&projection);
+    codexbar_provider_free(provider);
+
+    provider = projection_provider(
+        "claude", 100, primary_reset, 100, weekly_reset, NULL, FALSE, 0, NULL);
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_true(projected->has_resets_at);
+    g_assert_cmpint(projected->resets_at_ms, ==, primary_reset);
+    codexbar_quota_window_projection_clear(&projection);
+    codexbar_provider_free(provider);
+
+    provider = projection_provider(
+        "copilot", 40, primary_reset, 100, weekly_reset, NULL, FALSE, 0, NULL);
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_true(projected == codexbar_provider_quota_window(provider, 0));
+    g_assert_cmpfloat(projected->used_percent, ==, 40);
+    codexbar_provider_free(provider);
+
+    provider = projection_provider(
+        "commandcode", 40, primary_reset, 30, weekly_reset, NULL, TRUE, monthly_reset, NULL);
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_true(projected == codexbar_provider_quota_window(provider, 0));
+    g_assert_cmpfloat(projected->used_percent, ==, 40);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_provider_new();
+    provider->provider = g_strdup("stepfun");
+    codexbar_provider_add_quota_window(
+        provider, projection_window("stepfun.five-hour", "5h Window", 40, 300, primary_reset, NULL));
+    codexbar_provider_add_quota_window(
+        provider, projection_window("stepfun.weekly", "Weekly Window", 100, 10080, weekly_reset, NULL));
+    projected = codexbar_provider_projected_quota_window(provider, 0, now, &projection);
+    g_assert_cmpfloat(projected->used_percent, ==, 100);
+    g_assert_cmpint(projected->resets_at_ms, ==, weekly_reset);
+    codexbar_quota_window_projection_clear(&projection);
+    codexbar_provider_free(provider);
+}
+
 static void test_parse_snapshot(void) {
     GError *error = NULL;
     CodexBarSnapshot *snapshot = codexbar_snapshot_parse(fixture, &error);
@@ -676,7 +822,8 @@ static void test_extended_provider_config(void) {
         "\"enterpriseHost\":\"api.example.com\",\"awsProfile\":\"prod\","
         "\"awsAuthMode\":\"profile\"},{\"id\":\"notion\",\"enabled\":true,\"source\":\"web\","
         "\"workspaceID\":\"11111111222233334444555555555555\",\"cookieSource\":\"manual\","
-        "\"cookieHeader\":\"token_v2=abc\"},{\"id\":\"poe\",\"enabled\":true},"
+        "\"cookieHeader\":\"token_v2=abc\"},{\"id\":\"alibabatokenplan\",\"enabled\":true,"
+        "\"region\":\"intl-personal\"},{\"id\":\"poe\",\"enabled\":true},"
         "{\"id\":\"deepinfra\",\"enabled\":true,\"apiKey\":\"valid\\u0000bad\"}]}";
     g_assert_true(g_file_set_contents(path, json, -1, &error));
     g_assert_no_error(error);
@@ -703,7 +850,10 @@ static void test_extended_provider_config(void) {
     g_assert_false(config_has_issue(issues, "notion", "workspace_unused"));
     g_assert_false(config_has_issue(issues, "notion", "unsupported_source"));
     g_assert_false(config_has_issue(issues, "notion", "cookie_header_missing"));
+    g_assert_false(config_has_issue(issues, "alibabatokenplan", "invalid_region"));
     g_ptr_array_unref(issues);
+    provider = codexbar_config_provider(config, "alibabatokenplan");
+    g_assert_cmpstr(provider->region, ==, "intl-personal");
     provider = codexbar_config_provider(config, "poe");
     g_assert_false(provider->has_extras_enabled);
     provider = codexbar_config_provider(config, "deepinfra");
@@ -1315,6 +1465,7 @@ static void test_kimi_usage(void) {
 }
 
 static gboolean kimi_test_web;
+static guint kimi_test_requests;
 
 static const char *kimi_test_header(const CodexBarHttpRequest *request, const char *name) {
     for (size_t index = 0; index < request->header_count; index++) {
@@ -1327,7 +1478,17 @@ static CodexBarHttpResponse *kimi_test_transport(const CodexBarHttpRequest *requ
     (void)error;
     CodexBarHttpResponse *response = g_new0(CodexBarHttpResponse, 1);
     response->status = 200;
-    if (kimi_test_web) {
+    kimi_test_requests++;
+    if (strstr(request->url, "GetSubscriptionStats")) {
+        g_assert_cmpstr(request->method, ==, "POST");
+        g_assert_cmpstr(kimi_test_header(request, "Authorization"), ==, "Bearer eyJtest.payload.signature");
+        g_assert_cmpstr(kimi_test_header(request, "Cookie"), ==, "kimi-auth=eyJtest.payload.signature");
+        response->body = g_strdup(
+            "{\"subscriptionBalance\":{\"feature\":\"FEATURE_OMNI\",\"type\":\"SUBSCRIPTION\","
+            "\"amountUsedRatio\":0.42,\"expireTime\":\"2026-09-01T00:00:00Z\"},"
+            "\"ratelimitCode7d\":{\"ratio\":0.2935,\"enabled\":true,"
+            "\"resetTime\":\"2026-08-13T17:02:43Z\"}}" );
+    } else if (kimi_test_web) {
         g_assert_cmpstr(request->url,
                         ==,
                         "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages");
@@ -1340,7 +1501,8 @@ static CodexBarHttpResponse *kimi_test_transport(const CodexBarHttpRequest *requ
                         strlen("{\"scope\":[\"FEATURE_CODING\"]}"));
         response->body = g_strdup(
             "{\"usages\":[{\"scope\":\"OTHER\",\"detail\":{\"limit\":1}},"
-            "{\"scope\":\"FEATURE_CODING\",\"detail\":{\"limit\":100,\"remaining\":40},"
+            "{\"scope\":\"FEATURE_CODING\",\"detail\":{\"limit\":100,\"used\":29,"
+            "\"remaining\":71,\"resetTime\":\"2026-08-13T17:02:44Z\"},"
             "\"limits\":[{\"window\":{\"duration\":5,\"timeUnit\":\"TIME_UNIT_HOUR\"},"
             "\"detail\":{\"limit\":20,\"used\":5}}]}]}");
     } else {
@@ -1348,7 +1510,9 @@ static CodexBarHttpResponse *kimi_test_transport(const CodexBarHttpRequest *requ
         g_assert_cmpstr(request->method, ==, "GET");
         g_assert_cmpstr(kimi_test_header(request, "Authorization"), ==, "Bearer kimi-api-key");
         g_assert_null(kimi_test_header(request, "Cookie"));
-        response->body = g_strdup("{\"usage\":{\"limit\":100,\"used\":10}}");
+        response->body = g_strdup(
+            "{\"usage\":{\"limit\":100,\"used\":29,"
+            "\"resetTime\":\"2026-08-13T17:02:44Z\"}}");
     }
     response->body_length = strlen(response->body);
     response->headers = g_ptr_array_new();
@@ -1361,14 +1525,18 @@ static void test_kimi_sources(void) {
                            "cookieHeader",
                            json_object_new_string("kimi-auth=eyJtest.payload.signature; other=value"));
     kimi_test_web = TRUE;
+    kimi_test_requests = 0;
     GError *error = NULL;
     CodexBarProvider *provider = codexbar_kimi_fetch_with_transport_and_cancellable(
         &config, "web", kimi_test_transport, NULL, 1, &error);
     g_assert_no_error(error);
     g_assert_nonnull(provider);
     g_assert_cmpstr(provider->source, ==, "web");
-    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
-    g_assert_cmpfloat(window_at(provider, 0)->used_percent, ==, 60);
+    g_assert_cmpuint(kimi_test_requests, ==, 2);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 0)->used_percent, 29.0, 0.0001);
+    g_assert_cmpstr(window_at(provider, 2)->id, ==, "kimi-monthly");
+    g_assert_cmpfloat_with_epsilon(window_at(provider, 2)->used_percent, 42.0, 0.0001);
     codexbar_provider_free(provider);
 
     provider = codexbar_kimi_fetch_with_transport_and_cancellable(
@@ -1380,11 +1548,15 @@ static void test_kimi_sources(void) {
 
     config.api_key = "kimi-api-key";
     kimi_test_web = FALSE;
+    kimi_test_requests = 0;
     provider = codexbar_kimi_fetch_with_transport_and_cancellable(
         &config, "api", kimi_test_transport, NULL, 1, &error);
     g_assert_no_error(error);
     g_assert_nonnull(provider);
     g_assert_cmpstr(provider->source, ==, "api");
+    g_assert_cmpuint(kimi_test_requests, ==, 2);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    g_assert_cmpstr(window_at(provider, 1)->id, ==, "kimi-monthly");
     codexbar_provider_free(provider);
     json_object_put(config.raw);
 }
@@ -2116,6 +2288,7 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/model/usage-percent-display-normalization", test_usage_percent_display_normalization);
     g_test_add_func("/model/raw-overage-waybar-projection", test_raw_usage_overage_has_clamped_waybar_projection);
+    g_test_add_func("/model/binding-quota-projection", test_binding_quota_projection);
     g_test_add_func("/model/parse-snapshot", test_parse_snapshot);
     g_test_add_func("/model/data-confidence-values", test_data_confidence_values);
     g_test_add_func("/model/parse-canonical-collections", test_parse_canonical_collections);

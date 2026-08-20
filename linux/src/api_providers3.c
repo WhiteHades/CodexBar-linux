@@ -1671,6 +1671,7 @@ static gboolean doubao_add_named_quota(CodexBarProvider *provider,
     if (!level || !isfinite(percent)) return FALSE;
     char *lower = g_ascii_strdown(level, -1);
     const char *title = level;
+    const char *id = NULL;
     gint64 minutes = 0;
     if (g_str_equal(lower, "session") || g_str_equal(lower, "5-hour") ||
         g_str_equal(lower, "five_hour") || g_str_equal(lower, "5h") || g_str_has_suffix(lower, "_session") ||
@@ -1687,9 +1688,40 @@ static gboolean doubao_add_named_quota(CodexBarProvider *provider,
         title = "monthly";
         minutes = 43200;
     }
-    char *id = g_strdup_printf("doubao-%s", lower);
+    if (g_str_equal(lower, "session") || g_str_equal(lower, "5-hour") ||
+        g_str_equal(lower, "five_hour") || g_str_equal(lower, "5h")) {
+        id = "primary";
+    } else if (g_str_equal(lower, "weekly") || g_str_equal(lower, "week")) {
+        id = "secondary";
+    } else if (g_str_equal(lower, "monthly") || g_str_equal(lower, "month")) {
+        id = "tertiary";
+    }
+    const struct {
+        const char *prefix;
+        const char *output_prefix;
+    } families[] = {
+        {"agent_", "doubao-agent-"},
+        {"coding_team_", "doubao-coding-team-"},
+        {"agent_team_", "doubao-agent-team-"},
+    };
+    char *owned_id = NULL;
+    for (size_t index = 0; !id && index < G_N_ELEMENTS(families); index++) {
+        if (!g_str_has_prefix(lower, families[index].prefix)) continue;
+        const char *suffix = lower + strlen(families[index].prefix);
+        const char *lane = (g_str_equal(suffix, "session") || g_str_equal(suffix, "5-hour") ||
+                            g_str_equal(suffix, "five_hour") || g_str_equal(suffix, "5h"))
+                               ? "session"
+                           : (g_str_equal(suffix, "weekly") || g_str_equal(suffix, "week"))
+                               ? "weekly"
+                           : (g_str_equal(suffix, "monthly") || g_str_equal(suffix, "month"))
+                               ? "monthly"
+                               : suffix;
+        owned_id = g_strconcat(families[index].output_prefix, lane, NULL);
+        id = owned_id;
+    }
+    if (!id) owned_id = g_strdup_printf("doubao-%s", lower), id = owned_id;
     add_window(provider, id, title, percent, minutes, reset_ms, NULL);
-    g_free(id);
+    g_free(owned_id);
     g_free(lower);
     return TRUE;
 }
@@ -1707,6 +1739,7 @@ CodexBarProvider *codexbar_doubao_parse_coding_plan(const char *json,
         return NULL;
     }
     CodexBarProvider *provider = provider_new("doubao", now_ms);
+    provider->explicit_quota_slots = TRUE;
     char *status = object_string(result, "Status");
     add_identity(provider, status);
     g_free(status);
@@ -1751,6 +1784,7 @@ CodexBarProvider *codexbar_doubao_parse_agent_plan(const char *json,
         return NULL;
     }
     CodexBarProvider *provider = provider_new("doubao", now_ms);
+    provider->explicit_quota_slots = TRUE;
     provider->plan = g_strdup("Agent Plan");
     const struct {
         const char *key;
@@ -1806,6 +1840,7 @@ CodexBarProvider *codexbar_doubao_parse_cli_usage(const char *json,
     }
 
     CodexBarProvider *provider = provider_new("doubao", now_ms);
+    provider->explicit_quota_slots = TRUE;
     g_free(provider->source);
     provider->source = g_strdup("cli");
     add_identity(provider, auth_method);
@@ -2033,27 +2068,60 @@ static CodexBarProvider *doubao_fetch_signed(const char *access,
                                              gint64 now_ms,
                                              GError **error) {
     CodexBarProvider *provider = doubao_signed_request(DOUBAO_CODING_PLAN_URL,
-                                                      "GetCodingPlanUsage",
-                                                      access,
-                                                      secret,
-                                                      region,
-                                                      transport,
-                                                      cancellable,
-                                                      now_ms,
-                                                      FALSE,
-                                                      error);
-    if (!provider || provider->quota_windows->len > 0) return provider;
+                                                       "GetCodingPlanUsage",
+                                                       access,
+                                                       secret,
+                                                       region,
+                                                       transport,
+                                                       cancellable,
+                                                       now_ms,
+                                                       FALSE,
+                                                       error);
+    if (!provider) return NULL;
+
+    GError *agent_error = NULL;
+    CodexBarProvider *agent = doubao_signed_request(DOUBAO_AGENT_PLAN_URL,
+                                                    "GetAFPUsage",
+                                                    access,
+                                                    secret,
+                                                    region,
+                                                    transport,
+                                                    cancellable,
+                                                    now_ms,
+                                                    TRUE,
+                                                    &agent_error);
+    if (agent) {
+        gboolean agent_only = provider->quota_windows->len == 0 && agent->quota_windows->len > 0;
+        while (agent->quota_windows->len > 0) {
+            CodexBarQuotaWindow *window = g_ptr_array_steal_index(agent->quota_windows, 0);
+            codexbar_provider_add_quota_window(provider, window);
+        }
+        if (agent_only) {
+            g_free(provider->plan);
+            provider->plan = g_strdup("Agent Plan");
+            if (!provider->identity) provider->identity = g_new0(CodexBarProviderIdentity, 1);
+            g_free(provider->identity->login_method);
+            provider->identity->login_method = g_strdup("Agent Plan");
+        }
+        codexbar_provider_free(agent);
+        return provider;
+    }
+    if (agent_error && g_error_matches(agent_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        codexbar_provider_free(provider);
+        if (error) *error = agent_error;
+        else g_clear_error(&agent_error);
+        return NULL;
+    }
+    gboolean absent = agent_error &&
+                      (strstr(agent_error->message, "HTTP 403") || strstr(agent_error->message, "HTTP 404"));
+    if (provider->quota_windows->len > 0 || absent) {
+        g_clear_error(&agent_error);
+        return provider;
+    }
     codexbar_provider_free(provider);
-    return doubao_signed_request(DOUBAO_AGENT_PLAN_URL,
-                                 "GetAFPUsage",
-                                 access,
-                                 secret,
-                                 region,
-                                 transport,
-                                 cancellable,
-                                 now_ms,
-                                 TRUE,
-                                 error);
+    if (error) *error = agent_error;
+    else g_clear_error(&agent_error);
+    return NULL;
 }
 
 static CodexBarProvider *doubao_probe(const char *key,

@@ -33,6 +33,21 @@ case "$output" in
     ;;
 esac
 
+binding_backend=$work/binding-backend.sh
+cat >"$binding_backend" <<'EOF'
+#!/bin/sh
+printf '%s\n' '[{"provider":"claude","source":"oauth","usage":{"primary":{"label":"Session","usedPercent":40,"windowMinutes":300,"resetsAt":"2030-01-01T00:00:00Z"},"secondary":{"label":"Weekly","usedPercent":100,"windowMinutes":10080,"resetsAt":"2030-02-01T00:00:00Z"}}}]'
+EOF
+chmod +x "$binding_backend"
+output=$(CODEXBAR_BACKEND="$binding_backend" "$binary" cards --provider claude)
+case "$output" in
+  *Session*'0% left'*Weekly*'0% left'*) ;;
+  *)
+    printf 'binding quota was not projected in card output: %s\n' "$output" >&2
+    exit 1
+    ;;
+esac
+
 aiand_backend=$work/aiand-backend.sh
 cat >"$aiand_backend" <<'EOF'
 #!/bin/sh

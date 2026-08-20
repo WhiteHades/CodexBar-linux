@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -180,6 +181,7 @@ static void signal_owned_tree(pid_t target, bool target_exited, int signal_numbe
         struct timespec no_wait = {0};
         sigtimedwait(&own_signal, NULL, &no_wait);
     }
+    if (!target_exited) kill(-target, signal_number);
     signal_direct_children(signal_number);
 }
 
@@ -226,14 +228,14 @@ static int return_target_status(int status) {
 
 static int print_usage(const char *program) {
     fprintf(stderr,
-            "Usage: %s <parent-pid> <--session|--group> <grace-ms> -- <program> [arguments...]\n",
+            "Usage: %s <parent-pid> <--session|--group> <--pty|--pipes> <grace-ms> -- <program> [arguments...]\n",
             program);
     return 125;
 }
 
 int main(int argc, char **argv) {
-    if (argc < 6 || (strcmp(argv[2], "--session") != 0 && strcmp(argv[2], "--group") != 0) ||
-        strcmp(argv[4], "--") != 0) {
+    if (argc < 7 || (strcmp(argv[2], "--session") != 0 && strcmp(argv[2], "--group") != 0) ||
+        (strcmp(argv[3], "--pty") != 0 && strcmp(argv[3], "--pipes") != 0) || strcmp(argv[5], "--") != 0) {
         return print_usage(argv[0]);
     }
     char *end = NULL;
@@ -245,7 +247,8 @@ int main(int argc, char **argv) {
     pid_t expected_parent = (pid_t)parsed_parent;
     end = NULL;
     errno = 0;
-    unsigned long parsed_grace = strtoul(argv[3], &end, 10);
+    bool pseudo_terminal = strcmp(argv[3], "--pty") == 0;
+    unsigned long parsed_grace = strtoul(argv[4], &end, 10);
     if (errno != 0 || !end || *end != '\0' || parsed_grace > 60000) return print_usage(argv[0]);
     unsigned int grace_milliseconds = (unsigned int)parsed_grace;
 
@@ -315,6 +318,11 @@ int main(int argc, char **argv) {
         if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0 || getppid() != supervisor_pid) {
             target_setup_failed(CONFIGURATION_FD, ESRCH);
         }
+        if (pseudo_terminal) {
+            if (setsid() < 0 || ioctl(STDIN_FILENO, TIOCSCTTY, 0) < 0) {
+                target_setup_failed(CONFIGURATION_FD, errno);
+            }
+        }
         sigset_t empty_mask;
         sigemptyset(&empty_mask);
         if (sigprocmask(SIG_SETMASK, &empty_mask, NULL) < 0) target_setup_failed(CONFIGURATION_FD, errno);
@@ -329,7 +337,7 @@ int main(int argc, char **argv) {
         close_target_descriptors();
         raise(SIGSTOP);
         char **target_environment = inherit_environment ? environ : configured_environment;
-        execvpe(argv[5], argv + 5, target_environment);
+        execvpe(argv[6], argv + 6, target_environment);
         target_setup_failed(CONFIGURATION_FD, errno);
     }
     close(STDIN_FILENO);

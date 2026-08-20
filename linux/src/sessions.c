@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <json-c/json.h>
 #include <limits.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -14,12 +15,15 @@ enum {
     SESSION_ACTIVE_SECONDS = 120,
     FILE_ONLY_SECONDS = 30 * 60,
     MAX_METADATA_LINE = 256 * 1024,
+    MAX_PI_METADATA_LINE = 16 * 1024,
+    MAX_PI_NAME_LINES = 512,
 };
 
 typedef struct {
     gint64 pid;
     CodexBarSessionProvider provider;
     CodexBarSessionSource source;
+    CodexBarSessionDialect dialect;
     char *cwd;
     gboolean has_started_at;
     gint64 started_at;
@@ -28,6 +32,7 @@ typedef struct {
 typedef struct {
     char *id;
     char *cwd;
+    char *session_name;
     CodexBarSessionSource source;
     char *path;
     gint64 modified_at;
@@ -51,6 +56,7 @@ static void rollout_free(gpointer data) {
     if (!rollout) return;
     g_free(rollout->id);
     g_free(rollout->cwd);
+    g_free(rollout->session_name);
     g_free(rollout->path);
     g_free(rollout);
 }
@@ -82,7 +88,9 @@ void codexbar_remote_session_host_result_free(CodexBarRemoteSessionHostResult *r
 }
 
 const char *codexbar_session_provider_name(CodexBarSessionProvider provider) {
-    return provider == CODEXBAR_SESSION_CODEX ? "codex" : "claude";
+    if (provider == CODEXBAR_SESSION_CODEX) return "codex";
+    if (provider == CODEXBAR_SESSION_CLAUDE) return "claude";
+    return "pi";
 }
 
 const char *codexbar_session_source_name(CodexBarSessionSource source) {
@@ -93,6 +101,16 @@ const char *codexbar_session_source_name(CodexBarSessionSource source) {
     case CODEXBAR_SESSION_UNKNOWN: return "unknown";
     }
     return "unknown";
+}
+
+static json_object *object_field(json_object *object, const char *name) {
+    json_object *value = NULL;
+    return object && json_object_object_get_ex(object, name, &value) ? value : NULL;
+}
+
+static const char *string_field(json_object *object, const char *name) {
+    json_object *value = object_field(object, name);
+    return value && json_object_is_type(value, json_type_string) ? json_object_get_string(value) : NULL;
 }
 
 static char *clean_text(const char *text) {
@@ -170,11 +188,13 @@ static gboolean contains_argument(const char *command, const char *argument) {
 }
 
 static gboolean classify_process(const char *command,
-                                 CodexBarSessionProvider *provider,
-                                 CodexBarSessionSource *source) {
+                                  CodexBarSessionProvider *provider,
+                                  CodexBarSessionSource *source,
+                                  CodexBarSessionDialect *dialect) {
     char *base = command_basename(command);
     char *lower = g_ascii_strdown(base, -1);
     gboolean result = FALSE;
+    *dialect = CODEXBAR_SESSION_DIALECT_NONE;
     if (g_str_equal(lower, "codex")) {
         if (!contains_argument(command, "app-server") && !contains_argument(command, "--help") &&
             !contains_argument(command, "--version")) {
@@ -190,6 +210,19 @@ static gboolean classify_process(const char *command,
             *source = strstr(command_lower, "application support/claude/claude-code")
                 ? CODEXBAR_SESSION_DESKTOP
                 : CODEXBAR_SESSION_CLI;
+            result = TRUE;
+        }
+        g_free(command_lower);
+    } else if (g_str_equal(lower, "pi") || g_str_equal(lower, "omp") || g_str_equal(lower, "bun")) {
+        char *command_lower = g_ascii_strdown(command, -1);
+        gboolean pi = g_str_equal(lower, "pi");
+        gboolean omp = g_str_equal(lower, "omp") ||
+            (g_str_equal(lower, "bun") && strstr(command_lower, "/omp") != NULL);
+        if ((pi || omp) && !strstr(command_lower, "--help") && !strstr(command_lower, "--version") &&
+            !strstr(command_lower, "--smoke-test") && !strstr(command_lower, "__omp_worker_")) {
+            *provider = CODEXBAR_SESSION_PI;
+            *source = CODEXBAR_SESSION_CLI;
+            *dialect = pi ? CODEXBAR_SESSION_DIALECT_PI : CODEXBAR_SESSION_DIALECT_OMP;
             result = TRUE;
         }
         g_free(command_lower);
@@ -282,13 +315,15 @@ static GPtrArray *scan_processes(const char *proc_root, GError **error) {
         if (!numeric_name(name)) continue;
         char *command = read_cmdline(proc_root, name);
         if (!command) continue;
-        CodexBarSessionProvider provider;
-        CodexBarSessionSource source;
-        if (classify_process(command, &provider, &source)) {
+            CodexBarSessionProvider provider;
+            CodexBarSessionSource source;
+        CodexBarSessionDialect dialect;
+        if (classify_process(command, &provider, &source, &dialect)) {
             AgentProcess *process = g_new0(AgentProcess, 1);
             process->pid = g_ascii_strtoll(name, NULL, 10);
             process->provider = provider;
             process->source = source;
+            process->dialect = dialect;
             process->cwd = read_cwd(proc_root, name);
             process->has_started_at = process_start_time(proc_root, name, boot, &process->started_at);
             g_ptr_array_add(processes, process);
@@ -315,6 +350,91 @@ static CodexBarSessionSource rollout_source(const char *originator, const char *
     g_free(lower);
     g_free(joined);
     return result;
+}
+
+static char *session_label(json_object *object) {
+    const char *value = object && json_object_is_type(object, json_type_string) ? json_object_get_string(object) : NULL;
+    if (!value) return NULL;
+    char *clean = clean_text(value);
+    g_strstrip(clean);
+    if (clean[0] == '\0') {
+        g_free(clean);
+        return NULL;
+    }
+    const char *newline = strchr(clean, '\n');
+    if (newline) clean[newline - clean] = '\0';
+    if (g_utf8_strlen(clean, -1) > 64) {
+        char *end = g_utf8_offset_to_pointer(clean, 64);
+        *end = '\0';
+    }
+    return clean;
+}
+
+static char *latest_pi_name(const char *path) {
+    FILE *file = fopen(path, "r");
+    if (!file) return NULL;
+    char *line = g_malloc(MAX_PI_METADATA_LINE + 2);
+    char *name = NULL;
+    guint count = 0;
+    while (count++ < MAX_PI_NAME_LINES && fgets(line, MAX_PI_METADATA_LINE + 2, file)) {
+        json_object *object = json_tokener_parse(line);
+        if (object && json_object_is_type(object, json_type_object) &&
+            g_strcmp0(string_field(object, "type"), "session_info") == 0) {
+            json_object *value = object_field(object, "name");
+            char *candidate = session_label(value);
+            if (candidate) {
+                g_free(name);
+                name = candidate;
+            }
+        }
+        if (object) json_object_put(object);
+    }
+    g_free(line);
+    fclose(file);
+    return name;
+}
+
+static Rollout *read_pi_rollout(const char *path,
+                                gint64 modified_at,
+                                CodexBarSessionDialect dialect) {
+    FILE *file = fopen(path, "r");
+    if (!file) return NULL;
+    char *line = g_malloc(MAX_PI_METADATA_LINE + 2);
+    json_object *title = NULL;
+    json_object *header = NULL;
+    for (guint index = 0; index < 2 && fgets(line, MAX_PI_METADATA_LINE + 2, file); index++) {
+        json_object *object = json_tokener_parse(line);
+        if (!object || !json_object_is_type(object, json_type_object)) {
+            if (object) json_object_put(object);
+            break;
+        }
+        if (g_strcmp0(string_field(object, "type"), "title") == 0) {
+            title = object;
+            continue;
+        }
+        header = object;
+        break;
+    }
+    fclose(file);
+    g_free(line);
+    if (!header || g_strcmp0(string_field(header, "type"), "session") != 0 ||
+        !string_field(header, "id")) {
+        if (title) json_object_put(title);
+        if (header) json_object_put(header);
+        return NULL;
+    }
+    Rollout *rollout = g_new0(Rollout, 1);
+    rollout->id = clean_text(string_field(header, "id"));
+    const char *cwd = string_field(header, "cwd");
+    rollout->cwd = cwd && cwd[0] != '\0' ? g_canonicalize_filename(cwd, NULL) : NULL;
+    rollout->source = CODEXBAR_SESSION_CLI;
+    rollout->path = g_strdup(path);
+    rollout->modified_at = modified_at;
+    json_object *label = title ? object_field(title, "title") : object_field(header, "title");
+    rollout->session_name = dialect == CODEXBAR_SESSION_DIALECT_PI ? latest_pi_name(path) : session_label(label);
+    if (title) json_object_put(title);
+    json_object_put(header);
+    return rollout;
 }
 
 static Rollout *read_rollout(const char *path, gint64 modified_at) {
@@ -361,6 +481,17 @@ static Rollout *read_rollout(const char *path, gint64 modified_at) {
     rollout->source = rollout_source(originator, source);
     rollout->path = g_strdup(path);
     rollout->modified_at = modified_at;
+    json_object *source_object = object_field(payload, "source");
+    if (source_object && json_object_is_type(source_object, json_type_object)) {
+        json_object *subagent = object_field(source_object, "subagent");
+        json_object *spawn = object_field(subagent, "thread_spawn");
+        const char *agent_path = string_field(spawn, "agent_path");
+        if (agent_path) {
+            char *base = g_path_get_basename(agent_path);
+            for (char *cursor = base; *cursor; cursor++) if (*cursor == '_' || *cursor == '-') *cursor = ' ';
+            rollout->session_name = base;
+        }
+    }
     json_object_put(object);
     return rollout;
 }
@@ -391,6 +522,8 @@ static gint compare_rollout(gconstpointer left, gconstpointer right) {
 
 static GPtrArray *scan_rollouts(gint64 now) {
     const char *codex_home = g_getenv("CODEX_HOME");
+    char *home = codex_home && codex_home[0] != '\0' ? g_strdup(codex_home)
+                                                       : g_build_filename(g_get_home_dir(), ".codex", NULL);
     char *base = codex_home && codex_home[0] != '\0'
         ? g_build_filename(codex_home, "sessions", NULL)
         : g_build_filename(g_get_home_dir(), ".codex", "sessions", NULL);
@@ -405,7 +538,89 @@ static GPtrArray *scan_rollouts(gint64 now) {
         g_date_time_unref(date);
     }
     g_free(base);
+    const char *database_override = g_getenv("CODEXBAR_SESSION_CODEX_STATE_DB");
+    char *database = database_override && database_override[0] != '\0'
+        ? g_strdup(database_override)
+        : g_build_filename(home, "state_5.sqlite", NULL);
+    sqlite3 *state = NULL;
+    if (sqlite3_open_v2(database, &state, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+        sqlite3_busy_timeout(state, 100);
+        sqlite3_stmt *statement = NULL;
+        const char *queries[] = {
+            "select title, agent_path from threads where id = ?1 limit 1",
+            "select title, null from threads where id = ?1 limit 1",
+        };
+        for (guint query = 0; query < G_N_ELEMENTS(queries) && !statement; query++) {
+            if (sqlite3_prepare_v2(state, queries[query], -1, &statement, NULL) != SQLITE_OK) statement = NULL;
+        }
+        if (statement) {
+            for (guint index = 0; index < rollouts->len; index++) {
+                Rollout *rollout = g_ptr_array_index(rollouts, index);
+                sqlite3_reset(statement);
+                sqlite3_clear_bindings(statement);
+                sqlite3_bind_text(statement, 1, rollout->id, -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(statement) != SQLITE_ROW) continue;
+                const char *title = (const char *)sqlite3_column_text(statement, 0);
+                const char *agent = (const char *)sqlite3_column_text(statement, 1);
+                if (title && title[0] != '\0') {
+                    g_free(rollout->session_name);
+                    json_object *value = json_object_new_string(title);
+                    rollout->session_name = session_label(value);
+                    json_object_put(value);
+                } else if (!rollout->session_name && agent && agent[0] != '\0') {
+                    rollout->session_name = g_path_get_basename(agent);
+                }
+            }
+            sqlite3_finalize(statement);
+        }
+    }
+    sqlite3_close(state);
+    g_free(database);
+    g_free(home);
     g_ptr_array_sort(rollouts, compare_rollout);
+    return rollouts;
+}
+
+static void scan_pi_directory(GPtrArray *rollouts,
+                              const char *directory,
+                              CodexBarSessionDialect dialect,
+                              guint depth,
+                              guint *entries) {
+    if (depth > 8 || *entries >= 512) return;
+    GDir *dir = g_dir_open(directory, 0, NULL);
+    if (!dir) return;
+    const char *name = NULL;
+    while (*entries < 512 && (name = g_dir_read_name(dir))) {
+        (*entries)++;
+        char *path = g_build_filename(directory, name, NULL);
+        struct stat status;
+        if (lstat(path, &status) == 0 && S_ISDIR(status.st_mode)) {
+            scan_pi_directory(rollouts, path, dialect, depth + 1, entries);
+        } else if (lstat(path, &status) == 0 && S_ISREG(status.st_mode) && g_str_has_suffix(name, ".jsonl")) {
+            Rollout *rollout = read_pi_rollout(path, status.st_mtime, dialect);
+            if (rollout) g_ptr_array_add(rollouts, rollout);
+        }
+        g_free(path);
+    }
+    g_dir_close(dir);
+}
+
+static GPtrArray *scan_pi_rollouts(CodexBarSessionDialect dialect) {
+    const char *override = dialect == CODEXBAR_SESSION_DIALECT_PI
+        ? g_getenv("CODEXBAR_SESSION_PI_ROOT")
+        : g_getenv("CODEXBAR_SESSION_OMP_ROOT");
+    char *root = override && override[0] != '\0'
+        ? g_strdup(override)
+        : g_build_filename(g_get_home_dir(),
+                           dialect == CODEXBAR_SESSION_DIALECT_PI ? ".pi" : ".omp",
+                           "agent",
+                           "sessions",
+                           NULL);
+    GPtrArray *rollouts = g_ptr_array_new_with_free_func(rollout_free);
+    guint entries = 0;
+    scan_pi_directory(rollouts, root, dialect, 0, &entries);
+    g_ptr_array_sort(rollouts, compare_rollout);
+    g_free(root);
     return rollouts;
 }
 
@@ -502,8 +717,9 @@ static char *project_name(const char *cwd) {
 }
 
 static CodexBarAgentSession *make_session(const char *id,
-                                         CodexBarSessionProvider provider,
-                                         CodexBarSessionSource source,
+                                          CodexBarSessionProvider provider,
+                                          CodexBarSessionDialect dialect,
+                                          CodexBarSessionSource source,
                                          const AgentProcess *process,
                                          const char *cwd,
                                          const char *transcript,
@@ -514,6 +730,7 @@ static CodexBarAgentSession *make_session(const char *id,
     CodexBarAgentSession *session = g_new0(CodexBarAgentSession, 1);
     session->id = clean_text(id);
     session->provider = provider;
+    session->dialect = dialect;
     session->source = source;
     session->active = has_activity ? now - activity <= SESSION_ACTIVE_SECONDS : process != NULL;
     session->has_pid = process != NULL;
@@ -527,6 +744,12 @@ static CodexBarAgentSession *make_session(const char *id,
     session->transcript_path = transcript ? g_strdup(transcript) : NULL;
     session->host = g_strdup(host);
     return session;
+}
+
+static void set_session_name(CodexBarAgentSession *session, const char *name) {
+    if (!session || !name || name[0] == '\0') return;
+    g_free(session->session_name);
+    session->session_name = clean_text(name);
 }
 
 static Rollout *matching_rollout(GPtrArray *rollouts, const char *cwd) {
@@ -588,9 +811,9 @@ GPtrArray *codexbar_sessions_scan(GError **error) {
             CodexBarSessionSource source = rollout && rollout->source != CODEXBAR_SESSION_UNKNOWN
                 ? rollout->source
                 : CODEXBAR_SESSION_CLI;
-            g_ptr_array_add(sessions,
-                            make_session(rollout ? rollout->id : fallback,
+            CodexBarAgentSession *session = make_session(rollout ? rollout->id : fallback,
                                          CODEXBAR_SESSION_CODEX,
+                                         CODEXBAR_SESSION_DIALECT_NONE,
                                          source,
                                          process,
                                          process->cwd ? process->cwd : (rollout ? rollout->cwd : NULL),
@@ -598,9 +821,11 @@ GPtrArray *codexbar_sessions_scan(GError **error) {
                                          rollout != NULL,
                                          rollout ? rollout->modified_at : 0,
                                          host,
-                                         now));
+                                         now);
+            set_session_name(session, rollout ? rollout->session_name : NULL);
+            g_ptr_array_add(sessions, session);
             g_free(fallback);
-        } else {
+        } else if (process->provider == CODEXBAR_SESSION_CLAUDE) {
             Transcript *transcript = NULL;
             GPtrArray *transcripts = claude_transcripts(process->cwd);
             if (process_count_for_cwd(processes, CODEXBAR_SESSION_CLAUDE, process->cwd) == 1 && transcripts->len > 0) {
@@ -613,6 +838,7 @@ GPtrArray *codexbar_sessions_scan(GError **error) {
             g_ptr_array_add(sessions,
                             make_session(identifier ? identifier : fallback,
                                          CODEXBAR_SESSION_CLAUDE,
+                                         CODEXBAR_SESSION_DIALECT_NONE,
                                          process->source,
                                          process,
                                          process->cwd,
@@ -624,6 +850,25 @@ GPtrArray *codexbar_sessions_scan(GError **error) {
             g_free(identifier);
             g_free(fallback);
             g_ptr_array_unref(transcripts);
+        } else {
+            GPtrArray *candidates = scan_pi_rollouts(process->dialect);
+            Rollout *rollout = matching_rollout(candidates, process->cwd);
+            char *fallback = rollout ? NULL : g_strdup_printf("pid:%" G_GINT64_FORMAT, process->pid);
+            CodexBarAgentSession *session = make_session(rollout ? rollout->id : fallback,
+                                                         CODEXBAR_SESSION_PI,
+                                                         process->dialect,
+                                                         CODEXBAR_SESSION_CLI,
+                                                         process,
+                                                         process->cwd ? process->cwd : (rollout ? rollout->cwd : NULL),
+                                                         rollout ? rollout->path : NULL,
+                                                         rollout != NULL,
+                                                         rollout ? rollout->modified_at : 0,
+                                                         host,
+                                                         now);
+            set_session_name(session, rollout ? rollout->session_name : NULL);
+            g_ptr_array_add(sessions, session);
+            g_free(fallback);
+            g_ptr_array_unref(candidates);
         }
     }
 
@@ -633,6 +878,7 @@ GPtrArray *codexbar_sessions_scan(GError **error) {
         g_ptr_array_add(sessions,
                         make_session(rollout->id,
                                      CODEXBAR_SESSION_CODEX,
+                                     CODEXBAR_SESSION_DIALECT_NONE,
                                      rollout->source,
                                      NULL,
                                      rollout->cwd,
@@ -904,7 +1150,15 @@ GPtrArray *codexbar_remote_sessions_parse(const char *json, size_t length, const
             session->host = g_strdup(host);
             if (g_str_equal(provider, "codex")) session->provider = CODEXBAR_SESSION_CODEX;
             else if (g_str_equal(provider, "claude")) session->provider = CODEXBAR_SESSION_CLAUDE;
+            else if (g_str_equal(provider, "pi")) session->provider = CODEXBAR_SESSION_PI;
             else valid = FALSE;
+            char *dialect = read_optional_string(entry, "dialect", &valid);
+            if (dialect) {
+                if (g_str_equal(dialect, "pi")) session->dialect = CODEXBAR_SESSION_DIALECT_PI;
+                else if (g_str_equal(dialect, "omp")) session->dialect = CODEXBAR_SESSION_DIALECT_OMP;
+                else valid = FALSE;
+            }
+            g_free(dialect);
             if (g_str_equal(source, "cli")) session->source = CODEXBAR_SESSION_CLI;
             else if (g_str_equal(source, "desktopApp")) session->source = CODEXBAR_SESSION_DESKTOP;
             else if (g_str_equal(source, "ide")) session->source = CODEXBAR_SESSION_IDE;
@@ -983,6 +1237,7 @@ typedef struct {
 } RemoteFetchJob;
 
 static const char *remote_list_command =
+    "CODEXBAR_REMOTE_SESSIONS_LOCAL_ONLY=1 codexbar-linux sessions --json-v2 || "
     "CODEXBAR_REMOTE_SESSIONS_LOCAL_ONLY=1 codexbar-linux sessions --json";
 
 static CodexBarRemoteSessionHostResult *remote_fetch_one(const char *host,

@@ -221,6 +221,21 @@ static void test_command_parser_and_transport(void) {
     g_assert_true(json_object_get_boolean(unavailable));
     codexbar_provider_free(provider);
 
+    const char *depleted_with_purchased =
+        "{\"credits\":{\"monthlyCredits\":0,\"purchasedCredits\":5,"
+        "\"premiumMonthlyCredits\":0,\"opensourceMonthlyCredits\":0},"
+        "\"windowLimits\":{\"fiveHour\":{\"cap\":3,\"used\":1},"
+        "\"weekly\":{\"cap\":15,\"used\":3}}}";
+    provider = codexbar_commandcode_parse(
+        depleted_with_purchased, strlen(depleted_with_purchased),
+        command_subscription(), strlen(command_subscription()), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(
+        codexbar_provider_quota_window(provider, 0)->used_percent, 100.0 / 3.0, 0.0001);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 20);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 2)->used_percent, ==, 100);
+    codexbar_provider_free(provider);
+
     CodexBarProviderConfig config = config_with_cookie("secret");
     reset_fixture(FIXTURE_COMMAND);
     provider = codexbar_commandcode_fetch_with_transport_and_cancellable(

@@ -37,6 +37,10 @@ typedef struct {
     gint64 priced_tokens;
     gint64 unpriced_tokens;
     double known_cost_usd;
+    gint64 standard_tokens;
+    double standard_cost_usd;
+    gint64 priority_tokens;
+    double priority_cost_usd;
     gint64 previous_total_tokens;
     gint64 previous_priced_tokens;
     gint64 previous_unpriced_tokens;

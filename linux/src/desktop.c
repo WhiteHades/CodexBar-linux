@@ -50,6 +50,9 @@ typedef struct {
     CodexBarRefreshCoordinator *refresh_coordinator;
     CodexBarRefreshFrequency refresh_frequency;
     CodexBarRuntime *runtime;
+    CodexBarSnapshot *last_snapshot;
+    GArray *attempted_reset_boundaries;
+    gint64 scheduled_reset_boundary_ms;
     gint64 last_menu_open_us;
     gint64 fixed_refresh_deadline_us;
     gboolean stopping;
@@ -241,6 +244,8 @@ static void status_item_free(CodexBarStatusItem *item) {
     g_clear_object(&item->refresh_cancellable);
     codexbar_refresh_coordinator_free(item->refresh_coordinator);
     codexbar_runtime_free(item->runtime);
+    codexbar_snapshot_free(item->last_snapshot);
+    g_clear_pointer(&item->attempted_reset_boundaries, g_array_unref);
     g_free(item);
 }
 
@@ -464,6 +469,14 @@ static void schedule_next_refresh(CodexBarStatusItem *item) {
     if (item->stopping || decision.delay_seconds == 0) return;
     gint64 now = g_get_monotonic_time();
     gint64 delay_us = (gint64)decision.delay_seconds * G_USEC_PER_SEC;
+    gint64 now_ms = g_get_real_time() / 1000;
+    CodexBarResetBoundaryDecision boundary = codexbar_refresh_next_reset_boundary(
+        item->last_snapshot,
+        now_ms,
+        decision.delay_seconds,
+        item->attempted_reset_boundaries ? (const gint64 *)item->attempted_reset_boundaries->data : NULL,
+        item->attempted_reset_boundaries ? item->attempted_reset_boundaries->len : 0);
+    item->scheduled_reset_boundary_ms = 0;
     if (decision.reason == CODEXBAR_REFRESH_REASON_FIXED) {
         if (item->fixed_refresh_deadline_us == 0) {
             item->fixed_refresh_deadline_us = now + delay_us;
@@ -474,6 +487,13 @@ static void schedule_next_refresh(CodexBarStatusItem *item) {
         delay_us = item->fixed_refresh_deadline_us - now;
     } else {
         item->fixed_refresh_deadline_us = 0;
+    }
+    if (boundary.scheduled) {
+        gint64 boundary_delay_us = (boundary.refresh_at_ms - now_ms) * 1000;
+        if (boundary_delay_us < delay_us) {
+            delay_us = MAX((gint64)G_TIME_SPAN_MILLISECOND, boundary_delay_us);
+            item->scheduled_reset_boundary_ms = boundary.boundary_ms;
+        }
     }
     guint delay_ms = (guint)CLAMP((delay_us + 999) / 1000, 1, G_MAXUINT);
     item->refresh_timer = g_timeout_add(delay_ms, refresh_timer_fired, item);
@@ -491,6 +511,9 @@ static void refresh_complete(GObject *source_object, GAsyncResult *result, gpoin
     if (current && !item->stopping) {
         if (snapshot) {
             set_snapshot_state(item, snapshot);
+            codexbar_snapshot_free(item->last_snapshot);
+            item->last_snapshot = snapshot;
+            snapshot = NULL;
         } else {
             set_error_state(item, error ? error->message : "usage refresh failed");
         }
@@ -526,6 +549,12 @@ static void request_refresh(CodexBarStatusItem *item, gboolean replace) {
 static gboolean refresh_timer_fired(gpointer user_data) {
     CodexBarStatusItem *item = user_data;
     item->refresh_timer = 0;
+    if (item->scheduled_reset_boundary_ms != 0) {
+        gint64 attempted = item->scheduled_reset_boundary_ms;
+        g_array_append_val(item->attempted_reset_boundaries, attempted);
+        if (item->attempted_reset_boundaries->len > 64) g_array_remove_index(item->attempted_reset_boundaries, 0);
+        item->scheduled_reset_boundary_ms = 0;
+    }
     request_refresh(item, FALSE);
     return G_SOURCE_REMOVE;
 }
@@ -678,6 +707,7 @@ int codexbar_status_item_run(const char *program) {
     item->status = g_strdup("Active");
     item->refresh_coordinator = codexbar_refresh_coordinator_new();
     item->runtime = codexbar_runtime_new();
+    item->attempted_reset_boundaries = g_array_new(FALSE, FALSE, sizeof(gint64));
     CodexBarConfig *config = codexbar_config_load(NULL);
     item->refresh_frequency = config ? config->refresh_frequency : CODEXBAR_REFRESH_FIVE_MINUTES;
     codexbar_config_free(config);

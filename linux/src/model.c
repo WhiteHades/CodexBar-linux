@@ -174,6 +174,171 @@ CodexBarQuotaWindow *codexbar_provider_quota_window(const CodexBarProvider *prov
     return index < provider->quota_windows->len ? g_ptr_array_index(provider->quota_windows, index) : NULL;
 }
 
+static gboolean provider_has_binding_lane(const char *provider, gboolean tertiary) {
+    static const char *const weekly[] = {
+        "alibaba", "alibabatokenplan", "chutes", "claude", "clinepass", "commandcode",
+        "doubao", "qwencloud", "stepfun", "zai", "zenmux",
+    };
+    static const char *const monthly[] = {"alibaba", "clinepass", "doubao"};
+    const char *const *providers = tertiary ? monthly : weekly;
+    size_t count = tertiary ? G_N_ELEMENTS(monthly) : G_N_ELEMENTS(weekly);
+    for (size_t index = 0; index < count; index++) {
+        if (g_str_equal(provider, providers[index])) return TRUE;
+    }
+    return FALSE;
+}
+
+static guint quota_window_index(const CodexBarProvider *provider, const char *id) {
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+        if (g_str_equal(window->id, id)) return index;
+    }
+    return G_MAXUINT;
+}
+
+static guint primary_window_index(const CodexBarProvider *provider) {
+    if (g_str_equal(provider->provider, "zai")) {
+        for (guint index = 0; index < provider->quota_windows->len; index++) {
+            const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+            if (window->has_window_minutes && window->window_minutes == 300) return index;
+        }
+    }
+    guint canonical = quota_window_index(provider, "primary");
+    if (canonical != G_MAXUINT) return canonical;
+    if (g_str_equal(provider->provider, "zenmux")) {
+        return quota_window_index(provider, "quota_5_hour");
+    }
+    if (g_str_equal(provider->provider, "stepfun")) {
+        for (guint index = 0; index < provider->quota_windows->len; index++) {
+            const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+            if (window->has_window_minutes && window->window_minutes == 300) return index;
+        }
+    }
+    return provider->quota_windows->len > 0 ? 0 : G_MAXUINT;
+}
+
+static guint binding_window_index(const CodexBarProvider *provider, gboolean tertiary) {
+    if (g_str_equal(provider->provider, "zai") || g_str_equal(provider->provider, "stepfun")) {
+        if (tertiary) return G_MAXUINT;
+        for (guint index = 0; index < provider->quota_windows->len; index++) {
+            const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+            if (window->has_window_minutes && window->window_minutes > 300) return index;
+        }
+        return G_MAXUINT;
+    }
+    guint canonical = quota_window_index(provider, tertiary ? "tertiary" : "secondary");
+    if (canonical != G_MAXUINT) return canonical;
+    if (g_str_equal(provider->provider, "zenmux")) {
+        return tertiary ? G_MAXUINT : quota_window_index(provider, "quota_7_day");
+    }
+    guint primary = primary_window_index(provider);
+    if (primary == G_MAXUINT) return G_MAXUINT;
+    const CodexBarQuotaWindow *primary_window = g_ptr_array_index(provider->quota_windows, primary);
+    gint64 primary_minutes = primary_window->has_window_minutes ? primary_window->window_minutes : 300;
+    guint selected = G_MAXUINT;
+    gint64 selected_minutes = tertiary ? G_MININT64 : G_MAXINT64;
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+        if (index == primary || !window->has_window_minutes || window->window_minutes <= primary_minutes) continue;
+        if ((!tertiary && window->window_minutes < selected_minutes) ||
+            (tertiary && window->window_minutes > selected_minutes)) {
+            selected = index;
+            selected_minutes = window->window_minutes;
+        }
+    }
+    if (tertiary) {
+        guint secondary = binding_window_index(provider, FALSE);
+        if (selected == secondary) return G_MAXUINT;
+    }
+    return selected;
+}
+
+static gint64 effective_window_minutes(const CodexBarProvider *provider,
+                                       const CodexBarQuotaWindow *window,
+                                       gboolean primary) {
+    if (window->has_window_minutes) return window->window_minutes;
+    if (g_str_equal(provider->provider, "zenmux")) {
+        if (g_str_equal(window->id, "quota_5_hour")) return 5 * 60;
+        if (g_str_equal(window->id, "quota_7_day")) return 7 * 24 * 60;
+    }
+    return primary ? 5 * 60 : 0;
+}
+
+static gboolean actively_exhausted(const CodexBarQuotaWindow *window, gint64 now_ms) {
+    return window && window->usage_known && window->used_percent >= 100.0 &&
+           (!window->has_resets_at || window->resets_at_ms > now_ms);
+}
+
+const CodexBarQuotaWindow *codexbar_provider_projected_quota_window(
+    const CodexBarProvider *provider,
+    guint index,
+    gint64 now_ms,
+    CodexBarQuotaWindowProjection *projection) {
+    g_return_val_if_fail(provider != NULL, NULL);
+    g_return_val_if_fail(projection != NULL, NULL);
+    *projection = (CodexBarQuotaWindowProjection){0};
+    const CodexBarQuotaWindow *raw = codexbar_provider_quota_window(provider, index);
+    if (!raw || !provider->provider || index != primary_window_index(provider) ||
+        !provider_has_binding_lane(provider->provider, FALSE)) {
+        return raw;
+    }
+
+    gint64 primary_minutes = effective_window_minutes(provider, raw, TRUE);
+    const CodexBarQuotaWindow *blockers[3] = {0};
+    guint blocker_count = 0;
+    for (guint lane = 0; lane < 2; lane++) {
+        gboolean tertiary = lane == 1;
+        if (!provider_has_binding_lane(provider->provider, tertiary)) continue;
+        guint binding_index = binding_window_index(provider, tertiary);
+        if (binding_index == G_MAXUINT || binding_index == index) continue;
+        const CodexBarQuotaWindow *binding = codexbar_provider_quota_window(provider, binding_index);
+        gint64 binding_minutes = binding ? effective_window_minutes(provider, binding, FALSE) : 0;
+        if (!binding || binding_minutes <= primary_minutes ||
+            !actively_exhausted(binding, now_ms)) {
+            continue;
+        }
+        blockers[blocker_count++] = binding;
+    }
+    if (blocker_count == 0) return raw;
+    if (actively_exhausted(raw, now_ms)) blockers[blocker_count++] = raw;
+
+    projection->window = *raw;
+    projection->window.used_percent = 100.0;
+    projection->window.pace = NULL;
+    projection->window.has_resets_at = FALSE;
+    projection->window.resets_at_ms = 0;
+    projection->window.reset_description = NULL;
+    guint unknown_count = 0;
+    const CodexBarQuotaWindow *unknown = NULL;
+    gint64 latest_reset = 0;
+    for (guint blocker = 0; blocker < blocker_count; blocker++) {
+        if (!blockers[blocker]->has_resets_at) {
+            unknown_count++;
+            unknown = blockers[blocker];
+        } else {
+            latest_reset = MAX(latest_reset, blockers[blocker]->resets_at_ms);
+        }
+    }
+    if (unknown_count == 0) {
+        projection->window.has_resets_at = TRUE;
+        projection->window.resets_at_ms = latest_reset;
+    } else if (blocker_count == 1 && unknown->reset_description) {
+        projection->owned_reset_description = g_strdup(unknown->reset_description);
+        g_strstrip(projection->owned_reset_description);
+        if (projection->owned_reset_description[0] == '\0') {
+            g_clear_pointer(&projection->owned_reset_description, g_free);
+        }
+        projection->window.reset_description = projection->owned_reset_description;
+    }
+    return &projection->window;
+}
+
+void codexbar_quota_window_projection_clear(CodexBarQuotaWindowProjection *projection) {
+    if (!projection) return;
+    g_free(projection->owned_reset_description);
+    *projection = (CodexBarQuotaWindowProjection){0};
+}
+
 void codexbar_provider_add_balance(CodexBarProvider *provider, CodexBarBalance *balance) {
     g_return_if_fail(provider != NULL);
     g_return_if_fail(balance != NULL);
@@ -505,6 +670,7 @@ void codexbar_provider_free(CodexBarProvider *provider) {
     if (provider->credit_events) json_object_put(provider->credit_events);
     if (provider->usage_extensions) json_object_put(provider->usage_extensions);
     if (provider->raw) json_object_put(provider->raw);
+    g_free(provider->runtime_scope);
     g_ptr_array_unref(provider->quota_windows);
     g_ptr_array_unref(provider->balances);
     g_free(provider);
@@ -715,8 +881,11 @@ double codexbar_provider_highest_used(const CodexBarProvider *provider) {
     g_return_val_if_fail(provider != NULL, 0.0);
     double highest = 0.0;
     for (guint index = 0; index < provider->quota_windows->len; index++) {
-        const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+        CodexBarQuotaWindowProjection projection = {0};
+        const CodexBarQuotaWindow *window = codexbar_provider_projected_quota_window(
+            provider, index, g_get_real_time() / 1000, &projection);
         if (window->usage_known) highest = MAX(highest, window->used_percent);
+        codexbar_quota_window_projection_clear(&projection);
     }
     return highest;
 }

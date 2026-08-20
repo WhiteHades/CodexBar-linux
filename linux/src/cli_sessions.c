@@ -19,6 +19,11 @@ static json_object *session_json(const CodexBarAgentSession *session) {
     json_object *object = json_object_new_object();
     json_object_object_add(object, "id", json_object_new_string(session->id));
     json_object_object_add(object, "provider", json_object_new_string(codexbar_session_provider_name(session->provider)));
+    if (session->dialect != CODEXBAR_SESSION_DIALECT_NONE) {
+        json_object_object_add(object,
+                               "dialect",
+                               json_object_new_string(session->dialect == CODEXBAR_SESSION_DIALECT_PI ? "pi" : "omp"));
+    }
     json_object_object_add(object, "source", json_object_new_string(codexbar_session_source_name(session->source)));
     json_object_object_add(object, "state", json_object_new_string(session->active ? "active" : "idle"));
     json_object_object_add(object, "pid", session->has_pid ? json_object_new_int64(session->pid) : NULL);
@@ -57,18 +62,24 @@ static void print_table(const GPtrArray *sessions) {
         puts("No agent sessions found.");
         return;
     }
-    puts("STATE   PROVIDER  SOURCE      PROJECT  ACTIVITY  ID");
+    puts("STATE   PROVIDER  DIALECT  SOURCE      SESSION  ACTIVITY  ID");
     gint64 now = g_get_real_time() / G_USEC_PER_SEC;
     const char *override = g_getenv("CODEXBAR_SESSION_NOW");
     if (override && override[0] != '\0') now = g_ascii_strtoll(override, NULL, 10);
     for (guint index = 0; index < sessions->len; index++) {
         const CodexBarAgentSession *session = g_ptr_array_index(sessions, index);
         char *age = age_text(session, now);
-        printf("%-7s %-9s %-11s %-8s %-9s %s\n",
+        const char *dialect = session->dialect == CODEXBAR_SESSION_DIALECT_PI
+            ? "pi"
+            : session->dialect == CODEXBAR_SESSION_DIALECT_OMP ? "omp" : "-";
+        const char *label = session->session_name ? session->session_name
+                                                  : session->project_name ? session->project_name : "-";
+        printf("%-7s %-9s %-8s %-11s %-8s %-9s %s\n",
                session->active ? "active" : "idle",
                codexbar_session_provider_name(session->provider),
+               dialect,
                codexbar_session_source_name(session->source),
-               session->project_name ? session->project_name : "-",
+               label,
                age,
                session->id);
         g_free(age);
@@ -77,14 +88,18 @@ static void print_table(const GPtrArray *sessions) {
 
 static int list_sessions(int argc, char **argv) {
     gboolean json = FALSE;
+    gboolean json_v2 = FALSE;
     gboolean pretty = FALSE;
     for (int index = 0; index < argc; index++) {
         if (g_str_equal(argv[index], "--json")) {
             json = TRUE;
+        } else if (g_str_equal(argv[index], "--json-v2")) {
+            json = TRUE;
+            json_v2 = TRUE;
         } else if (g_str_equal(argv[index], "--pretty")) {
             pretty = TRUE;
         } else if (g_str_equal(argv[index], "--help") || g_str_equal(argv[index], "-h")) {
-            puts("Usage: codexbar-linux sessions [list] [--json] [--pretty]\n"
+            puts("Usage: codexbar-linux sessions [list] [--json|--json-v2] [--pretty]\n"
                  "       codexbar-linux sessions focus <id> [--host <host>]");
             return 0;
         } else {
@@ -137,7 +152,9 @@ static int list_sessions(int argc, char **argv) {
     if (json) {
         json_object *array = json_object_new_array_ext((int)sessions->len);
         for (guint index = 0; index < sessions->len; index++) {
-            json_object_array_add(array, session_json(g_ptr_array_index(sessions, index)));
+            const CodexBarAgentSession *session = g_ptr_array_index(sessions, index);
+            if (!json_v2 && session->provider == CODEXBAR_SESSION_PI) continue;
+            json_object_array_add(array, session_json(session));
         }
         puts(json_object_to_json_string_ext(array, pretty ? JSON_C_TO_STRING_PRETTY : JSON_C_TO_STRING_PLAIN));
         json_object_put(array);

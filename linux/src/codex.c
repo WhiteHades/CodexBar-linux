@@ -141,6 +141,71 @@ static void parse_http_window(json_object *rate_limit,
     codexbar_provider_add_quota_window(provider, window);
 }
 
+static json_object *individual_limit(json_object *root) {
+    json_object *limit = NULL;
+    if (json_object_object_get_ex(root, "individual_limit", &limit) &&
+        json_object_is_type(limit, json_type_object)) {
+        return limit;
+    }
+    json_object *rate_limit = NULL;
+    if (json_object_object_get_ex(root, "rate_limit", &rate_limit) &&
+        json_object_is_type(rate_limit, json_type_object) &&
+        json_object_object_get_ex(rate_limit, "individual_limit", &limit) &&
+        json_object_is_type(limit, json_type_object)) {
+        return limit;
+    }
+    json_object *spend_control = NULL;
+    if (json_object_object_get_ex(root, "spend_control", &spend_control) &&
+        json_object_is_type(spend_control, json_type_object) &&
+        json_object_object_get_ex(spend_control, "individual_limit", &limit) &&
+        json_object_is_type(limit, json_type_object)) {
+        return limit;
+    }
+    return NULL;
+}
+
+static void parse_individual_limit(json_object *root,
+                                   CodexBarProvider *provider,
+                                   gint64 updated_at_ms) {
+    json_object *object = individual_limit(root);
+    double limit = 0;
+    if (!object || !json_number_value(object, "limit", &limit) || !isfinite(limit) || limit <= 0) return;
+    double used = 0;
+    double remaining_percent = 0;
+    gboolean has_used = json_number_value(object, "used", &used) && isfinite(used);
+    gboolean has_remaining_percent = json_number_value(object, "remaining_percent", &remaining_percent) &&
+                                        isfinite(remaining_percent);
+    if (!has_used && has_remaining_percent) {
+        used = limit * CLAMP(100.0 - remaining_percent, 0.0, 100.0) / 100.0;
+    }
+    used = MAX(0.0, used);
+    if (!has_remaining_percent) {
+        remaining_percent = CLAMP(100.0 - used / limit * 100.0, 0.0, 100.0);
+    }
+    CodexBarBalance *balance = codexbar_balance_new(
+        "codex-credit-limit", "monthly credit limit", MAX(0.0, limit - used), "credits");
+    balance->has_used = TRUE;
+    balance->used = used;
+    balance->has_limit = TRUE;
+    balance->limit = limit;
+    balance->has_remaining_percent = TRUE;
+    balance->remaining_percent = CLAMP(remaining_percent, 0.0, 100.0);
+    balance->has_updated_at = TRUE;
+    balance->updated_at_ms = updated_at_ms;
+    double reset = 0;
+    if ((json_number_value(object, "resets_at", &reset) ||
+         json_number_value(object, "reset_at", &reset)) &&
+        isfinite(reset) && reset > 0 && reset <= (double)G_MAXINT64 / 1000.0) {
+        balance->has_resets_at = TRUE;
+        balance->resets_at_ms = (gint64)reset * 1000;
+    }
+    if (provider->balances->len == 0) {
+        codexbar_provider_add_balance(
+            provider, codexbar_balance_new("credits", "credits", 0.0, "credits"));
+    }
+    codexbar_provider_add_balance(provider, balance);
+}
+
 CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
                                                   const char *source,
                                                   gint64 updated_at_ms,
@@ -175,6 +240,7 @@ CodexBarProvider *codexbar_codex_parse_http_usage(const char *json,
         json_object_get_boolean(has_credits) && json_number_value(credits, "balance", &balance)) {
         codexbar_provider_add_balance(provider, codexbar_balance_new("credits", "credits", balance, "credits"));
     }
+    parse_individual_limit(root, provider, updated_at_ms);
     json_object_put(root);
     if (provider->quota_windows->len == 0 && provider->balances->len == 0) {
         codexbar_provider_free(provider);

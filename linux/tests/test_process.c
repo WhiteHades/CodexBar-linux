@@ -54,6 +54,13 @@ static int helper_stdin(void) {
     return read(STDIN_FILENO, input, sizeof(input)) == 0 ? 0 : 3;
 }
 
+static int helper_pty(void) {
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO) || !isatty(STDERR_FILENO)) return 1;
+    if (tcgetpgrp(STDIN_FILENO) != getpgrp()) return 2;
+    fputs("pty ready", stdout);
+    return 0;
+}
+
 static int helper_inspect(const char *expected_directory, const char *descriptor_text) {
     char directory[PATH_MAX];
     int descriptor = atoi(descriptor_text);
@@ -295,6 +302,26 @@ static void test_forwards_bounded_standard_input(void) {
     codexbar_process_result_free(result);
 }
 
+static void test_provides_controlling_terminal(void) {
+    const char *arguments[] = {test_program, "--helper-pty", NULL};
+    CodexBarProcessRequest request = {
+        .arguments = arguments,
+        .timeout_milliseconds = 2000,
+        .termination_grace_milliseconds = 100,
+        .maximum_output_bytes = 1024,
+        .new_session = TRUE,
+        .pseudo_terminal = TRUE,
+    };
+    GError *error = NULL;
+    CodexBarProcessResult *result = codexbar_process_run(&request, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(result);
+    g_assert_true(codexbar_process_result_succeeded(result));
+    g_assert_nonnull(strstr(result->standard_output, "pty ready"));
+    g_assert_cmpuint(result->standard_error_length, ==, 0);
+    codexbar_process_result_free(result);
+}
+
 static void test_reports_spawn_failure_separately_from_exit_127(void) {
     const char *missing_arguments[] = {"/codexbar/definitely-missing", NULL};
     CodexBarProcessRequest missing_request = {
@@ -475,6 +502,115 @@ static void test_timeout_cleans_process_group(void) {
     CodexBarProcessResult *result = codexbar_process_run(&request, NULL, &error);
     g_assert_null(result);
     g_assert_error(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
+    g_clear_error(&error);
+    char *pids = wait_for_file(ready_path);
+    pid_t root = 0;
+    pid_t child = 0;
+    parse_helper_pids(pids, &root, &child);
+    g_free(pids);
+    char *stopped = wait_for_file(stopped_path);
+    g_free(stopped);
+    assert_process_exited(root);
+    assert_process_exited(child);
+    remove_helper_directory(directory, ready_path, stopped_path);
+    g_free(stopped_path);
+    g_free(ready_path);
+    g_free(directory);
+}
+
+static void test_pty_timeout_cleans_process_group(void) {
+    GError *error = NULL;
+    char *directory = g_dir_make_tmp("codexbar-process-XXXXXX", &error);
+    g_assert_no_error(error);
+    char *ready_path = g_build_filename(directory, "ready", NULL);
+    char *stopped_path = g_build_filename(directory, "stopped", NULL);
+    const char *arguments[] = {test_program, "--helper-group", "wait", ready_path, stopped_path, NULL};
+    CodexBarProcessRequest request = {
+        .arguments = arguments,
+        .timeout_milliseconds = 1000,
+        .termination_grace_milliseconds = 500,
+        .maximum_output_bytes = 1024,
+        .new_session = TRUE,
+        .pseudo_terminal = TRUE,
+    };
+    CodexBarProcessResult *result = codexbar_process_run(&request, NULL, &error);
+    g_assert_null(result);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
+    g_clear_error(&error);
+    char *pids = wait_for_file(ready_path);
+    pid_t root = 0;
+    pid_t child = 0;
+    parse_helper_pids(pids, &root, &child);
+    g_free(pids);
+    char *stopped = wait_for_file(stopped_path);
+    g_free(stopped);
+    assert_process_exited(root);
+    assert_process_exited(child);
+    remove_helper_directory(directory, ready_path, stopped_path);
+    g_free(stopped_path);
+    g_free(ready_path);
+    g_free(directory);
+}
+
+static void test_pty_cancellation_cleans_process_group(void) {
+    GError *error = NULL;
+    char *directory = g_dir_make_tmp("codexbar-process-XXXXXX", &error);
+    g_assert_no_error(error);
+    char *ready_path = g_build_filename(directory, "ready", NULL);
+    char *stopped_path = g_build_filename(directory, "stopped", NULL);
+    const char *arguments[] = {test_program, "--helper-group", "wait", ready_path, stopped_path, NULL};
+    GCancellable *cancellable = g_cancellable_new();
+    ThreadedRun run = {
+        .request = {
+            .arguments = arguments,
+            .timeout_milliseconds = 5000,
+            .termination_grace_milliseconds = 500,
+            .maximum_output_bytes = 1024,
+            .new_session = TRUE,
+            .pseudo_terminal = TRUE,
+        },
+        .cancellable = cancellable,
+    };
+    GThread *thread = g_thread_new("pty-process-cancel", run_process, &run);
+    char *pids = wait_for_file(ready_path);
+    pid_t root = 0;
+    pid_t child = 0;
+    parse_helper_pids(pids, &root, &child);
+    g_free(pids);
+    g_cancellable_cancel(cancellable);
+    g_thread_join(thread);
+    g_assert_null(run.result);
+    g_assert_error(run.error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+    g_clear_error(&run.error);
+    char *stopped = wait_for_file(stopped_path);
+    g_free(stopped);
+    assert_process_exited(root);
+    assert_process_exited(child);
+    g_object_unref(cancellable);
+    remove_helper_directory(directory, ready_path, stopped_path);
+    g_free(stopped_path);
+    g_free(ready_path);
+    g_free(directory);
+}
+
+static void test_pty_output_limit_cleans_process_group(void) {
+    GError *error = NULL;
+    char *directory = g_dir_make_tmp("codexbar-process-XXXXXX", &error);
+    g_assert_no_error(error);
+    char *ready_path = g_build_filename(directory, "ready", NULL);
+    char *stopped_path = g_build_filename(directory, "stopped", NULL);
+    const char *arguments[] = {test_program, "--helper-group", "overflow", ready_path, stopped_path, NULL};
+    CodexBarProcessRequest request = {
+        .arguments = arguments,
+        .timeout_milliseconds = 2000,
+        .termination_grace_milliseconds = 500,
+        .maximum_output_bytes = 512,
+        .new_session = TRUE,
+        .pseudo_terminal = TRUE,
+    };
+    CodexBarProcessResult *result = codexbar_process_run(&request, NULL, &error);
+    g_assert_null(result);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE);
     g_clear_error(&error);
     char *pids = wait_for_file(ready_path);
     pid_t root = 0;
@@ -810,6 +946,7 @@ static void test_supervisor_death_cleans_process_group(void) {
 int main(int argc, char **argv) {
     if (argc == 2 && g_str_equal(argv[1], "--helper-capture")) return helper_capture();
     if (argc == 2 && g_str_equal(argv[1], "--helper-stdin")) return helper_stdin();
+    if (argc == 2 && g_str_equal(argv[1], "--helper-pty")) return helper_pty();
     if (argc == 4 && g_str_equal(argv[1], "--helper-inspect")) return helper_inspect(argv[2], argv[3]);
     if (argc == 3 && g_str_equal(argv[1], "--helper-touch")) return helper_touch(argv[2]);
     if (argc == 3 && g_str_equal(argv[1], "--helper-environment")) return helper_environment(argv[2]);
@@ -822,6 +959,7 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/process/captures-output-and-nonzero-status", test_captures_output_and_nonzero_status);
     g_test_add_func("/process/forwards-bounded-standard-input", test_forwards_bounded_standard_input);
+    g_test_add_func("/process/provides-controlling-terminal", test_provides_controlling_terminal);
     g_test_add_func("/process/distinguishes-spawn-failure-from-exit-127", test_reports_spawn_failure_separately_from_exit_127);
     g_test_add_func(
         "/process/applies-environment-and-directory-only-to-target",
@@ -832,6 +970,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/process/pre-cancel-does-not-spawn", test_pre_cancelled_request_does_not_spawn);
     g_test_add_func("/process/cancel-cleans-process-group", test_cancellation_cleans_process_group);
     g_test_add_func("/process/timeout-cleans-process-group", test_timeout_cleans_process_group);
+    g_test_add_func("/process/pty-timeout-cleans-process-group", test_pty_timeout_cleans_process_group);
+    g_test_add_func("/process/pty-cancel-cleans-process-group", test_pty_cancellation_cleans_process_group);
+    g_test_add_func("/process/pty-output-limit-cleans-process-group", test_pty_output_limit_cleans_process_group);
     g_test_add_func("/process/output-limit-cleans-process-group", test_output_limit_cleans_process_group);
     g_test_add_func("/process/short-output-limit-is-not-truncated", test_short_process_output_limit_is_not_truncated);
     g_test_add_func("/process/combined-output-limit", test_combined_output_limit);

@@ -225,7 +225,8 @@ CodexBarProvider *codexbar_stepfun_parse_usage(const char *json,
         }
         gint64 credit_reset = 0;
         flexible_int64(credit, "subscription_credit_reset_time", &credit_reset);
-        add_window(provider, "stepfun.credit", "Credit", left, 0, credit_reset, now_ms);
+        add_window(provider, "stepfun.credit", "Credit", left,
+                   credit_reset > 0 ? 30 * 24 * 60 : 0, credit_reset, now_ms);
     } else {
         add_window(provider, "stepfun.five-hour", "5h Window", five_left, 300, five_reset, now_ms);
         add_window(provider, "stepfun.weekly", "Weekly Window", weekly_left, 10080, weekly_reset, now_ms);

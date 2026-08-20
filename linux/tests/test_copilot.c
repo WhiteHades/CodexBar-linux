@@ -40,6 +40,28 @@ static void test_token_billing_without_fake_quota(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_token_billing_credits_used(void) {
+    const char *json =
+        "{\"copilot_plan\":\"business\",\"token_based_billing\":true,"
+        "\"quota_reset_date\":\"2026-09-01\",\"quota_snapshots\":{"
+        "\"premium_interactions\":{\"unlimited\":true,\"entitlement\":0,\"remaining\":0,"
+        "\"percent_remaining\":100,\"credits_used\":\"31\"},"
+        "\"chat\":{\"unlimited\":true,\"entitlement\":0,\"remaining\":0,"
+        "\"percent_remaining\":100,\"credits_used\":0}}}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_copilot_parse_usage(json, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    g_assert_cmpuint(provider->balances->len, ==, 1);
+    CodexBarBalance *credits = codexbar_provider_balance(provider, 0);
+    g_assert_cmpstr(credits->id, ==, "copilot-credits-used");
+    g_assert_cmpfloat(credits->used, ==, 31.0);
+    g_assert_true(credits->has_resets_at);
+    g_assert_cmpint(credits->resets_at_ms, ==, G_GINT64_CONSTANT(1788220800000));
+    codexbar_provider_free(provider);
+}
+
 static void test_unknown_and_over_quota(void) {
     const char *json =
         "{\"copilot_plan\":\"paid\",\"quota_snapshots\":{\"premium_interactions\":{},"
@@ -101,6 +123,7 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/copilot/direct-and-monthly", test_direct_and_monthly_quotas);
     g_test_add_func("/copilot/token-billing", test_token_billing_without_fake_quota);
+    g_test_add_func("/copilot/token-billing-credits-used", test_token_billing_credits_used);
     g_test_add_func("/copilot/unknown-over-quota", test_unknown_and_over_quota);
     g_test_add_func("/copilot/unusable", test_unusable_payload_fails);
     g_test_add_func("/copilot/urls", test_usage_urls);
