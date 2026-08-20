@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           git remote add upstream https://github.com/steipete/CodexBar.git
-          git fetch --prune --tags upstream main
+          git fetch --prune --no-tags upstream main
           git status --short --branch
           git log -1 --oneline origin/main
           git log -1 --oneline upstream/main
