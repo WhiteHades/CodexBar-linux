@@ -1,0 +1,140 @@
++    g_free(authorization);
++    return provider;
++}
++
+ CodexBarProvider *codexbar_fireworks_fetch_with_cancellable(const CodexBarProviderConfig *config,
+                                                             GCancellable *cancellable,
+                                                             GError **error) {
+diff --git a/linux/tests/test_fireworks.c b/linux/tests/test_fireworks.c
+index d39665b8238abc9b50c6055d7f1872ba64287135..f834e1896258c780117977c1fe195b8c23d0c144 100644
+--- a/linux/tests/test_fireworks.c
++++ b/linux/tests/test_fireworks.c
+@@ -10,6 +10,10 @@ typedef struct {
+     const char *authorization;
+     long status;
+     const char *body;
++    const char *const *urls;
++    const long *statuses;
++    const char *const *bodies;
++    guint response_count;
+     GCancellable *cancellable;
+     gboolean cancel_after_response;
+     guint calls;
+@@ -35,8 +39,12 @@ static const char *request_header(const CodexBarHttpRequest *request, const char
+ 
+ static CodexBarHttpResponse *stub_transport(const CodexBarHttpRequest *request, GError **error) {
+     (void)error;
+-    fixture.calls++;
+-    g_assert_cmpstr(request->url, ==, fixture.url);
++    guint index = fixture.calls++;
++    if (fixture.response_count > 0) g_assert_cmpuint(index, <, fixture.response_count);
++    const char *url = fixture.response_count > 0 ? fixture.urls[index] : fixture.url;
++    long status = fixture.response_count > 0 ? fixture.statuses[index] : fixture.status;
++    const char *body = fixture.response_count > 0 ? fixture.bodies[index] : fixture.body;
++    g_assert_cmpstr(request->url, ==, url);
+     g_assert_cmpstr(request->method, ==, "GET");
+     g_assert_cmpstr(request_header(request, "Authorization"), ==, fixture.authorization);
+     g_assert_cmpstr(request_header(request, "Accept"), ==, "application/json");
+@@ -45,7 +53,7 @@ static CodexBarHttpResponse *stub_transport(const CodexBarHttpRequest *request,
+     g_assert_cmpint(request->protocol_policy, ==, CODEXBAR_HTTP_HTTPS_ONLY);
+     g_assert_cmpint(request->redirect_policy, ==, CODEXBAR_HTTP_REDIRECT_DENY);
+     g_assert_true(request->cancellable == fixture.cancellable);
+-    CodexBarHttpResponse *response = make_response(fixture.status, fixture.body);
++    CodexBarHttpResponse *response = make_response(status, body);
+     if (fixture.cancel_after_response) g_cancellable_cancel(fixture.cancellable);
+     return response;
+ }
+@@ -71,6 +79,20 @@ static void reset_fixture(const char *url, const char *authorization, long statu
+     };
+ }
+ 
++static void reset_sequence(const char *const *urls,
++                           const long *statuses,
++                           const char *const *bodies,
++                           guint response_count,
++                           const char *authorization) {
++    fixture = (TransportFixture){
++        .authorization = authorization,
++        .urls = urls,
++        .statuses = statuses,
++        .bodies = bodies,
++        .response_count = response_count,
++    };
++}
++
+ static void test_summary_parsing(void) {
+     const char *json =
+         "{\"lineItems\":["
+@@ -131,7 +153,9 @@ static void test_request_and_config_credentials(void) {
+     g_setenv("FIREWORKS_ACCOUNT_SLUG", "environment-slug", TRUE);
+     const char *url = "https://api.fireworks.ai/v1/accounts/acct-1_x.d/billing/summary?"
+                       "startTime=2026-07-11T12:34:56Z&endTime=2026-08-10T12:34:56Z";
+-    reset_fixture(url, "Bearer config-key", 200, "{\"lineItems\":[]}");
++    const char *rated =
++        "{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"0\",\"nanos\":0}}]}";
++    reset_fixture(url, "Bearer config-key", 200, rated);
+     CodexBarProviderConfig config = {.api_key = " 'config-key' ", .raw = raw_config(" acct-1_x.d ")};
+     GError *error = NULL;
+     CodexBarProvider *provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
+@@ -145,7 +169,7 @@ static void test_request_and_config_credentials(void) {
+     config = (CodexBarProviderConfig){0};
+     url = "https://api.fireworks.ai/v1/accounts/environment-slug/billing/summary?"
+           "startTime=2026-07-11T12:34:56Z&endTime=2026-08-10T12:34:56Z";
+-    reset_fixture(url, "Bearer environment-key", 200, "{}");
++    reset_fixture(url, "Bearer environment-key", 200, rated);
+     provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
+         &config, stub_transport, NULL, G_GINT64_CONSTANT(1786365296000), &error);
+     g_assert_no_error(error);
+@@ -153,7 +177,7 @@ static void test_request_and_config_credentials(void) {
+     codexbar_provider_free(provider);
+ 
+     g_unsetenv("FIREWORKS_API_KEY");
+-    reset_fixture(url, "Bearer fallback-key", 200, "{}");
++    reset_fixture(url, "Bearer fallback-key", 200, rated);
+     provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
+         &config, stub_transport, NULL, G_GINT64_CONSTANT(1786365296000), &error);
+     g_assert_no_error(error);
+@@ -163,7 +187,7 @@ static void test_request_and_config_credentials(void) {
+     g_unsetenv("FIREWORKS_ACCOUNT_SLUG");
+ }
+ 
+-static void test_credentials_and_slug_fail_before_network(void) {
++static void test_credentials_and_invalid_slug_fail_before_network(void) {
+     g_unsetenv("FIREWORKS_API_KEY");
+     g_unsetenv("FIREWORKS_KEY");
+     g_unsetenv("FIREWORKS_ACCOUNT_SLUG");
+@@ -176,13 +200,6 @@ static void test_credentials_and_slug_fail_before_network(void) {
+     g_clear_error(&error);
+     json_object_put(config.raw);
+ 
+-    config = (CodexBarProviderConfig){.api_key = "key"};
+-    provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
+-        &config, unexpected_transport, NULL, 1, &error);
+-    g_assert_null(provider);
+-    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+-    g_clear_error(&error);
+-
+     const char *invalid[] = {"sp ace", "has/slash", "has?query", "has#fragment", "percent%2F", "col\xC3\xA9on"};
+     for (guint index = 0; index < G_N_ELEMENTS(invalid); index++) {
+         config.raw = raw_config(invalid[index]);
+@@ -195,6 +212,119 @@ static void test_credentials_and_slug_fail_before_network(void) {
+     }
+ }
+ 
++static void test_missing_slug_discovers_paginated_account(void) {
++    g_unsetenv("FIREWORKS_ACCOUNT_SLUG");
++    const char *urls[] = {
++        "https://api.fireworks.ai/v1/accounts",
++        "https://api.fireworks.ai/v1/accounts?pageToken=next%20page",
++        "https://api.fireworks.ai/v1/accounts/discovered-team/billing/summary?"
++        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
++    };
++    const long statuses[] = {200, 200, 200};
++    const char *bodies[] = {
++        "{\"accounts\":[],\"nextPageToken\":\"next page\"}",
++        "{\"accounts\":[{\"accountId\":\"accounts/discovered-team\"}]}",
++        "{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"2\","
++        "\"nanos\":250000000}}]}",
++    };
++    reset_sequence(urls, statuses, bodies, G_N_ELEMENTS(urls), "Bearer fw-test-key");
++    CodexBarProviderConfig config = {.api_key = "fw-test-key"};
