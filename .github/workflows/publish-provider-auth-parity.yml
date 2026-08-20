@@ -1,0 +1,58 @@
+name: publish provider auth parity
+
+on:
+  push:
+    branches:
+      - sync/provider-auth-bootstrap
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out bootstrap branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reassemble, verify, and publish product commits
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target='sync/provider-auth-parity'
+          base='17b03f0726fe2bdb907ea595ac2ccff778754944'
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+
+          cp .sync/provider-auth/01-amp.patch "$work/01-amp.patch"
+          cat .sync/provider-auth/fireworks/part-* > "$work/02-fireworks.patch"
+          cat .sync/provider-auth/codex/part-* > "$work/03-codex-pat.patch"
+
+          cat > "$work/checksums" <<'SUMS'
+          cfb0b58af0c1f292dceaaeaf2e1cf0319214b5d96e9fbe19e71f601a12a93d2e  01-amp.patch
+          0c37f9566d1842553c146688e47cbbda3abc3a83d94a9b2b2c45f83a0bd65211  02-fireworks.patch
+          8fd10ea4a9ab63a8c8687cd3880408975d8fda59d4331e3c80d8f374dcea0dfb  03-codex-pat.patch
+          SUMS
+          (cd "$work" && sha256sum --check checksums)
+
+          if git ls-remote --exit-code --heads origin "refs/heads/$target" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing branch $target" >&2
+            exit 1
+          fi
+
+          git config user.name 'OpenAI GPT-5.6 Pro'
+          git config user.email 'noreply@openai.com'
+          git switch --detach "$base"
+          git switch -c "$target"
+
+          for patch in "$work/01-amp.patch" "$work/02-fireworks.patch" "$work/03-codex-pat.patch"; do
+            git am "$patch"
+            git diff --check HEAD^
+            git push origin "HEAD:refs/heads/$target"
+          done
+
+          test "$(git rev-list --count "$base..HEAD")" -eq 3
+          git log --oneline --decorate "$base..HEAD"
