@@ -1,0 +1,140 @@
++    return clean_value(text);
++}
++
++static char *account_slug_from_object(json_object *object, gboolean *malformed) {
++    static const char *const keys[] = {"accountId", "id", "name"};
++    for (size_t index = 0; index < G_N_ELEMENTS(keys); index++) {
++        char *candidate = json_clean_string_member(object, keys[index], malformed);
++        if (*malformed) return NULL;
++        if (!candidate) continue;
++        char *slash = strrchr(candidate, '/');
++        if (slash) memmove(candidate, slash + 1, strlen(slash + 1) + 1);
++        if (codexbar_fireworks_account_slug_is_valid(candidate)) return candidate;
++        g_free(candidate);
++    }
++    return NULL;
++}
++
++static gint compare_string_pointers(gconstpointer left, gconstpointer right) {
++    return g_strcmp0(*(char *const *)left, *(char *const *)right);
++}
++
++static GPtrArray *fireworks_list_account_slugs(const char *authorization,
++                                               CodexBarFireworksTransport transport,
++                                               GCancellable *cancellable,
++                                               GError **error) {
++    GHashTable *unique = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
++    GHashTable *seen_tokens = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
++    char *page_token = NULL;
++    for (guint page = 0; page < FIREWORKS_MAXIMUM_ACCOUNT_PAGES; page++) {
++        char *url = accounts_url(page_token);
++        CodexBarHttpResponse *response = fireworks_send_get(url, authorization, transport, cancellable, error);
++        g_free(url);
++        if (!response) goto failed;
++        if (response->status != 200) {
++            fireworks_set_http_error("accounts", response->status, error);
++            codexbar_http_response_free(response);
++            goto failed;
++        }
++
++        json_object *root = parse_json_document(response->body, response->body_length);
++        codexbar_http_response_free(response);
++        if (!root || !json_object_is_type(root, json_type_object)) {
++            if (root) json_object_put(root);
++            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                "Fireworks accounts response is malformed.");
++            goto failed;
+         }
++        json_object *accounts = NULL;
++        if (json_object_object_get_ex(root, "accounts", &accounts) &&
++            !json_object_is_type(accounts, json_type_null)) {
++            if (!json_object_is_type(accounts, json_type_array)) {
++                json_object_put(root);
++                g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                    "Fireworks accounts response is malformed.");
++                goto failed;
++            }
++            for (size_t index = 0; index < json_object_array_length(accounts); index++) {
++                json_object *account = json_object_array_get_idx(accounts, index);
++                if (!account || !json_object_is_type(account, json_type_object)) {
++                    json_object_put(root);
++                    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                        "Fireworks accounts response is malformed.");
++                    goto failed;
++                }
++                gboolean malformed = FALSE;
++                char *slug = account_slug_from_object(account, &malformed);
++                if (malformed) {
++                    json_object_put(root);
++                    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                        "Fireworks accounts response is malformed.");
++                    goto failed;
++                }
++                if (slug) {
++                    if (g_hash_table_contains(unique, slug)) {
++                        g_free(slug);
++                    } else {
++                        g_hash_table_add(unique, slug);
++                    }
++                }
++            }
++        }
++
++        gboolean malformed = FALSE;
++        char *next_token = json_clean_string_member(root, "nextPageToken", &malformed);
++        json_object_put(root);
++        if (malformed) {
++            g_free(next_token);
++            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                "Fireworks accounts response is malformed.");
++            goto failed;
++        }
++        g_free(page_token);
++        page_token = next_token;
++        if (!page_token) {
++            GPtrArray *slugs = g_ptr_array_new_with_free_func(g_free);
++            GHashTableIter iterator;
++            gpointer key = NULL;
++            g_hash_table_iter_init(&iterator, unique);
++            while (g_hash_table_iter_next(&iterator, &key, NULL)) g_ptr_array_add(slugs, g_strdup(key));
++            g_ptr_array_sort(slugs, compare_string_pointers);
++            g_hash_table_unref(seen_tokens);
++            g_hash_table_unref(unique);
++            return slugs;
++        }
++        if (g_hash_table_contains(seen_tokens, page_token)) {
++            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                                "Fireworks accounts pagination token repeated.");
++            goto failed;
++        }
++        g_hash_table_add(seen_tokens, g_strdup(page_token));
++    }
++    g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
++                        "Fireworks accounts pagination exceeded 100 pages.");
++
++failed:
++    g_free(page_token);
++    g_hash_table_unref(seen_tokens);
++    g_hash_table_unref(unique);
++    return NULL;
++}
++
++static char *single_discovered_slug(GPtrArray *slugs, GError **error) {
++    if (slugs->len == 0) {
++        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
++                            "No Fireworks accounts are visible to this API key.");
+         return NULL;
+     }
+-    g_clear_error(&request_error);
++    if (slugs->len == 1) return g_strdup(g_ptr_array_index(slugs, 0));
++    GString *joined = g_string_new(NULL);
++    for (guint index = 0; index < slugs->len; index++) {
++        if (index > 0) g_string_append(joined, ", ");
++        g_string_append(joined, g_ptr_array_index(slugs, index));
++    }
++    g_set_error(error,
++                G_IO_ERROR,
++                G_IO_ERROR_FAILED,
++                "This Fireworks API key can access multiple accounts: %s. Set accountSlug or "
++                "FIREWORKS_ACCOUNT_SLUG.",
++                joined->str);
