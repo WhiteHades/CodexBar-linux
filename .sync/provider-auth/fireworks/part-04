@@ -1,0 +1,114 @@
++    GError *error = NULL;
++    CodexBarProvider *provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
++        &config, stub_transport, NULL, G_GINT64_CONSTANT(1787054400000), &error);
++    g_assert_no_error(error);
++    g_assert_nonnull(provider);
++    g_assert_cmpuint(fixture.calls, ==, 3);
++    g_assert_cmpfloat(provider->provider_cost->used, ==, 2.25);
++    g_assert_nonnull(provider->identity);
++    g_assert_cmpstr(provider->identity->account_id, ==, "discovered-team");
++    g_assert_cmpstr(provider->identity->login_method, ==, "API key (discovered)");
++    json_object *discovered = NULL;
++    g_assert_true(json_object_object_get_ex(
++        provider->usage_extensions, "fireworksAccountSlugWasDiscovered", &discovered));
++    g_assert_true(json_object_get_boolean(discovered));
++    codexbar_provider_free(provider);
++}
++
++static void test_multiple_and_missing_accounts_are_explicit(void) {
++    g_unsetenv("FIREWORKS_ACCOUNT_SLUG");
++    const char *urls[] = {"https://api.fireworks.ai/v1/accounts"};
++    const long statuses[] = {200};
++    const char *bodies[] = {
++        "{\"accounts\":[{\"name\":\"accounts/zeta\"},{\"id\":\"alpha\"},"
++        "{\"accountId\":\"accounts/zeta\"}]}",
++    };
++    reset_sequence(urls, statuses, bodies, G_N_ELEMENTS(urls), "Bearer fw-test-key");
++    CodexBarProviderConfig config = {.api_key = "fw-test-key"};
++    GError *error = NULL;
++    CodexBarProvider *provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
++        &config, stub_transport, NULL, 1, &error);
++    g_assert_null(provider);
++    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_FAILED);
++    g_assert_nonnull(strstr(error->message, "alpha, zeta"));
++    g_clear_error(&error);
++
++    const char *empty_bodies[] = {"{\"accounts\":[]}"};
++    reset_sequence(urls, statuses, empty_bodies, G_N_ELEMENTS(urls), "Bearer fw-test-key");
++    provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
++        &config, stub_transport, NULL, 1, &error);
++    g_assert_null(provider);
++    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
++    g_assert_nonnull(strstr(error->message, "No Fireworks accounts"));
++    g_clear_error(&error);
++}
++
++static void test_configured_account_recovery_and_validation(void) {
++    const char *urls[] = {
++        "https://api.fireworks.ai/v1/accounts/old-slug/billing/summary?"
++        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
++        "https://api.fireworks.ai/v1/accounts",
++        "https://api.fireworks.ai/v1/accounts/current-slug/billing/summary?"
++        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
++    };
++    const long statuses[] = {404, 200, 200};
++    const char *bodies[] = {
++        "{\"code\":5,\"message\":\"account not found\"}",
++        "{\"accounts\":[{\"name\":\"accounts/current-slug\"}]}",
++        "{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"1\","
++        "\"nanos\":0}}]}",
++    };
++    reset_sequence(urls, statuses, bodies, G_N_ELEMENTS(urls), "Bearer fw-test-key");
++    CodexBarProviderConfig config = {.api_key = "fw-test-key", .raw = raw_config("old-slug")};
++    GError *error = NULL;
++    CodexBarProvider *provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
++        &config, stub_transport, NULL, G_GINT64_CONSTANT(1787054400000), &error);
++    g_assert_no_error(error);
++    g_assert_nonnull(provider);
++    g_assert_cmpuint(fixture.calls, ==, 3);
++    g_assert_cmpstr(provider->identity->account_id, ==, "current-slug");
++    g_assert_cmpstr(provider->identity->login_method, ==, "API key (discovered)");
++    codexbar_provider_free(provider);
++    json_object_put(config.raw);
++
++    const char *wrong_urls[] = {
++        "https://api.fireworks.ai/v1/accounts/guessed-user/billing/summary?"
++        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
++        "https://api.fireworks.ai/v1/accounts",
++    };
++    const long wrong_statuses[] = {200, 200};
++    const char *wrong_bodies[] = {
++        "{\"lineItems\":[],\"usageBuckets\":[]}",
++        "{\"accounts\":[{\"name\":\"accounts/actual-team\"}]}",
++    };
++    reset_sequence(wrong_urls, wrong_statuses, wrong_bodies, G_N_ELEMENTS(wrong_urls),
++                   "Bearer fw-test-key");
++    config = (CodexBarProviderConfig){.api_key = "fw-test-key", .raw = raw_config("guessed-user")};
++    provider = codexbar_fireworks_fetch_with_transport_and_cancellable(
++        &config, stub_transport, NULL, G_GINT64_CONSTANT(1787054400000), &error);
++    g_assert_null(provider);
++    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
++    g_assert_nonnull(strstr(error->message, "guessed-user"));
++    g_assert_cmpuint(fixture.calls, ==, 2);
++    g_clear_error(&error);
++    json_object_put(config.raw);
++}
++
+ static void test_http_errors_and_cancellation(void) {
+     CodexBarProviderConfig config = {.api_key = "credential-secret", .raw = raw_config("account")};
+     const char *url = "https://api.fireworks.ai/v1/accounts/account/billing/summary?"
+@@ -240,7 +370,11 @@ int main(int argc, char **argv) {
+     g_test_add_func("/fireworks/summary-parsing", test_summary_parsing);
+     g_test_add_func("/fireworks/summary-errors", test_summary_errors);
+     g_test_add_func("/fireworks/request-config-credentials", test_request_and_config_credentials);
+-    g_test_add_func("/fireworks/credentials-slug-validation", test_credentials_and_slug_fail_before_network);
++    g_test_add_func("/fireworks/credentials-slug-validation",
++                    test_credentials_and_invalid_slug_fail_before_network);
++    g_test_add_func("/fireworks/discover-paginated-account", test_missing_slug_discovers_paginated_account);
++    g_test_add_func("/fireworks/discover-account-errors", test_multiple_and_missing_accounts_are_explicit);
++    g_test_add_func("/fireworks/configured-account-recovery", test_configured_account_recovery_and_validation);
+     g_test_add_func("/fireworks/http-errors-cancellation", test_http_errors_and_cancellation);
+     return g_test_run();
+ }
+-- 
+2.47.3
