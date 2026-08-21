@@ -9,7 +9,7 @@
 #define P (CODEXBAR_SOURCE_API)
 
 static const CodexBarProviderDescriptor providers[] = {
-    {"codex", "Codex", "codex", NULL, A | W | C | O, TRUE, "https://chatgpt.com/codex/settings/usage", "https://status.openai.com/", CODEXBAR_NATIVE_CODEX},
+    {"codex", "Codex", "codex", NULL, A | W | C | O | P, TRUE, "https://chatgpt.com/codex/settings/usage", "https://status.openai.com/", CODEXBAR_NATIVE_CODEX},
     {"openai", "OpenAI", "openai", "openai-api", A | P, FALSE, "https://platform.openai.com/usage", "https://status.openai.com", CODEXBAR_NATIVE_OPENAI},
     {"azureopenai", "Azure OpenAI", "azure-openai", "azureopenai,aoai", A | P, FALSE, "https://ai.azure.com", "https://azure.status.microsoft/en-us/status", CODEXBAR_NATIVE_AZURE_OPENAI},
     {"claude", "Claude", "claude", NULL, A | P | W | C | O, FALSE, "https://console.anthropic.com/settings/billing", "https://status.claude.com/", CODEXBAR_NATIVE_CLAUDE},
@@ -142,6 +142,7 @@ guint codexbar_provider_auto_source_plan(const CodexBarProviderDescriptor *provi
     if (!provider || !codexbar_provider_supports_source(provider, "auto")) return 0;
     guint count = 0;
     if (g_str_equal(provider->id, "codex")) {
+        append_source("api", sources, capacity, &count);
         append_source("oauth", sources, capacity, &count);
         append_source("cli", sources, capacity, &count);
         return count;

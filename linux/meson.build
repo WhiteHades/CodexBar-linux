@@ -364,6 +364,14 @@ fireworks_test = executable(
 )
 test('codexbar-linux-fireworks', fireworks_test, env: normalized_test_env)
 
+codex_pat_test = executable(
+  'codexbar-linux-codex-pat-tests',
+  files('tests/test_codex_pat.c', 'src/codex.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-codex-pat', codex_pat_test, env: normalized_test_env)
+
 ibmbob_test = executable(
   'codexbar-linux-ibmbob-tests',
   files('tests/test_ibmbob.c', 'src/ibmbob.c', 'src/http.c', 'src/model.c'),

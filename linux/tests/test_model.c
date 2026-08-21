@@ -1914,6 +1914,15 @@ static void test_codex_http_reset_bounds(void) {
 }
 
 static void test_codex_source_planner(void) {
+    char *previous_home = g_strdup(g_getenv("HOME"));
+    char *previous_codex_home = g_strdup(g_getenv("CODEX_HOME"));
+    GError *temporary_error = NULL;
+    char *temporary_home = g_dir_make_tmp("codexbar-source-planner-XXXXXX", &temporary_error);
+    g_assert_no_error(temporary_error);
+    g_assert_nonnull(temporary_home);
+    g_setenv("HOME", temporary_home, TRUE);
+    g_unsetenv("CODEX_HOME");
+
     const char *usage =
         "{\"plan_type\":\"pro\",\"rate_limit\":{\"primary_window\":{\"used_percent\":25,"
         "\"reset_at\":1776216359,\"limit_window_seconds\":18000}},"
@@ -1961,6 +1970,21 @@ static void test_codex_source_planner(void) {
     g_clear_error(&error);
     g_assert_cmpuint(codex_source_cli_calls, ==, 1);
     json_object_put(config.raw);
+
+    if (previous_home) {
+        g_setenv("HOME", previous_home, TRUE);
+    } else {
+        g_unsetenv("HOME");
+    }
+    if (previous_codex_home) {
+        g_setenv("CODEX_HOME", previous_codex_home, TRUE);
+    } else {
+        g_unsetenv("CODEX_HOME");
+    }
+    g_rmdir(temporary_home);
+    g_free(temporary_home);
+    g_free(previous_codex_home);
+    g_free(previous_home);
 }
 
 static void test_provider_registry(void) {
@@ -2022,13 +2046,14 @@ static void test_provider_registry(void) {
     g_assert_true(codexbar_provider_supports_source(codex, "cli"));
     g_assert_true(codexbar_provider_supports_source(codex, "oauth"));
     g_assert_true(codexbar_provider_supports_source(codex, "web"));
-    g_assert_false(codexbar_provider_supports_source(codex, "api"));
+    g_assert_true(codexbar_provider_supports_source(codex, "api"));
     const char *plan[3] = {0};
-    g_assert_cmpuint(codexbar_provider_auto_source_plan(codex, plan, G_N_ELEMENTS(plan)), ==, 2);
-    g_assert_cmpstr(plan[0], ==, "oauth");
-    g_assert_cmpstr(plan[1], ==, "cli");
+    g_assert_cmpuint(codexbar_provider_auto_source_plan(codex, plan, G_N_ELEMENTS(plan)), ==, 3);
+    g_assert_cmpstr(plan[0], ==, "api");
+    g_assert_cmpstr(plan[1], ==, "oauth");
+    g_assert_cmpstr(plan[2], ==, "cli");
     char *supported = codexbar_provider_supported_sources(codex);
-    g_assert_cmpstr(supported, ==, "auto, web, cli, oauth");
+    g_assert_cmpstr(supported, ==, "auto, web, cli, oauth, api");
     g_free(supported);
     const CodexBarProviderDescriptor *claude = codexbar_provider_registry_find("claude");
     g_assert_true(codexbar_provider_supports_source(claude, "oauth"));

@@ -530,6 +530,7 @@ static char **regex_captures(const char *text, const char *pattern, guint captur
     char **captures = g_new0(char *, capture_count + 1);
     for (guint index = 0; index < capture_count; index++) {
         captures[index] = g_match_info_fetch(match, (gint)index + 1);
+        if (captures[index]) g_strstrip(captures[index]);
     }
     g_match_info_free(match);
     g_regex_unref(regex);
@@ -572,7 +573,7 @@ static char *strip_ansi(const char *text) {
 static void amp_add_workspace_balances(CodexBarProvider *provider, const char *text) {
     GError *regex_error = NULL;
     GRegex *regex = g_regex_new(
-        "^\\s*Workspace\\s+(.+?):\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining\\s*$",
+        "^\\s*Workspace\\s+(.+?):\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining",
         G_REGEX_MULTILINE | G_REGEX_CASELESS, 0, &regex_error);
     if (!regex) {
         g_clear_error(&regex_error);
@@ -618,21 +619,28 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
     static const char absolute_pattern[] =
         "^\\s*Amp Free:\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*/\\s*\\$?"
         "([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining(?:\\s*\\(replenishes\\s*\\+\\$?"
-        "([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*/\\s*hour\\))?\\s*$";
+        "([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*/\\s*hour\\))?";
     static const char percent_pattern[] =
         "^\\s*Amp Free:\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+remaining(?:\\s+today)?"
-        "(?:\\s*\\(resets\\s+daily\\))?\\s*$";
-    static const char subscription_pattern[] =
+        "(?:\\s*(\\(resets\\s+daily\\)))?";
+    static const char legacy_subscription_pattern[] =
         "^\\s*Subscription\\s+(.+?):\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+other\\s+usage"
         "\\s+and\\s+([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+orb\\s+usage\\s+remaining\\s*-"
-        "\\s*resets\\s+upon\\s+renewal\\s+in\\s+([0-9][0-9,]*)\\s+days?(?:\\s*-\\s*https?://\\S+)?\\s*$";
+        "\\s*resets\\s+upon\\s+renewal\\s+in\\s+([0-9][0-9,]*)\\s+(days?|months?)"
+        "(?:\\s*-\\s*https?://\\S+)?\\s*$";
+    static const char current_subscription_pattern[] =
+        "^\\s*Amp\\s+(.+?)\\s+Subscription:\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+other\\s+usage"
+        "\\s+and\\s+([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+orb\\s+usage\\s+remaining\\s*-"
+        "\\s*resets\\s+upon\\s+renewal\\s+in\\s+([0-9][0-9,]*)\\s+(days?|months?)"
+        "(?:\\s*-\\s*https?://\\S+)?\\s*$";
     char **absolute = regex_captures(clean, absolute_pattern, 3);
-    char **percent = absolute ? NULL : regex_captures(clean, percent_pattern, 1);
-    char **subscription = regex_captures(clean, subscription_pattern, 4);
+    char **percent = absolute ? NULL : regex_captures(clean, percent_pattern, 2);
+    char **subscription = regex_captures(clean, legacy_subscription_pattern, 5);
+    if (!subscription) subscription = regex_captures(clean, current_subscription_pattern, 5);
     char **identity = regex_captures(clean,
         "^\\s*Signed in as\\s+([^\\s(]+)(?:\\s+\\(([^\\r\\n)]+)\\))?\\s*$", 2);
     char **individual = regex_captures(clean,
-        "^\\s*Individual credits:\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining\\s*$", 1);
+        "^\\s*Individual credits:\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining", 1);
 
     gboolean has_free = FALSE;
     double free_remaining = 0, free_quota = 0, hourly = 0;
@@ -645,13 +653,14 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
         has_free = TRUE;
         free_remaining = CLAMP(free_remaining, 0, 100);
         free_quota = 100;
-        free_detail = "resets daily";
+        free_detail = percent[1] && percent[1][0] != '\0' ? "resets daily" : NULL;
     }
     gboolean has_subscription = FALSE;
-    double other_remaining = 0, orb_remaining = 0, renewal_days = 0;
+    double other_remaining = 0, orb_remaining = 0, renewal_value = 0;
     if (subscription && parse_display_number(subscription[1], &other_remaining) &&
         parse_display_number(subscription[2], &orb_remaining) &&
-        parse_display_number(subscription[3], &renewal_days) && subscription[0][0] != '\0') {
+        parse_display_number(subscription[3], &renewal_value) && subscription[0][0] != '\0' &&
+        subscription[4] && subscription[4][0] != '\0') {
         has_subscription = TRUE;
     }
     double individual_remaining = 0;
@@ -671,17 +680,31 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
     provider->dashboard_url = g_strdup("https://ampcode.com/settings/usage");
     provider->explicit_quota_slots = TRUE;
     if (has_subscription) {
-        gint64 resets_at_ms = now_ms + (gint64)llround(renewal_days * 86400000.0);
-        char *detail = g_strdup_printf(renewal_days == 1 ? "renews in 1 day" : "renews in %.0f days",
-                                       renewal_days);
-        codexbar_provider_add_quota_window(
-            provider,
-            new_window("primary", "Other usage", 100 - CLAMP(other_remaining, 0, 100),
-                       30 * 24 * 60, TRUE, resets_at_ms, TRUE, detail));
-        codexbar_provider_add_quota_window(
-            provider,
-            new_window("secondary", "Orb usage", 100 - CLAMP(orb_remaining, 0, 100),
-                       30 * 24 * 60, TRUE, resets_at_ms, TRUE, detail));
+        gboolean uses_months = g_ascii_strncasecmp(subscription[4], "month", 5) == 0;
+        gint64 resets_at_ms = 0;
+        if (uses_months) {
+            GDateTime *now = g_date_time_new_from_unix_utc(now_ms / 1000);
+            GDateTime *reset = now ? g_date_time_add_months(now, (gint)llround(renewal_value)) : NULL;
+            if (reset) resets_at_ms = g_date_time_to_unix(reset) * 1000;
+            if (reset) g_date_time_unref(reset);
+            if (now) g_date_time_unref(now);
+        } else {
+            resets_at_ms = now_ms + (gint64)llround(renewal_value * 86400000.0);
+        }
+        const char *unit = uses_months ? "month" : "day";
+        char *detail = renewal_value == 1
+                           ? g_strdup_printf("renews in 1 %s", unit)
+                           : g_strdup_printf("renews in %.0f %ss", renewal_value, unit);
+        CodexBarQuotaWindow *primary = new_window(
+            "primary", "Other usage", 100 - CLAMP(other_remaining, 0, 100),
+            30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, NULL);
+        CodexBarQuotaWindow *secondary = new_window(
+            "secondary", "Orb usage", 100 - CLAMP(orb_remaining, 0, 100),
+            30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, NULL);
+        primary->reset_description = g_strdup(detail);
+        secondary->reset_description = g_strdup(detail);
+        codexbar_provider_add_quota_window(provider, primary);
+        codexbar_provider_add_quota_window(provider, secondary);
         provider->plan = g_strdup(subscription[0]);
         g_free(detail);
     } else if (has_free) {
@@ -689,10 +712,11 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
         gint64 window_minutes = hourly > 0 ? (gint64)llround(MAX(1, free_quota / hourly) * 60.0) : 24 * 60;
         gboolean has_reset = hourly > 0;
         gint64 resets_at_ms = has_reset ? now_ms + (gint64)llround(used / hourly * 3600000.0) : 0;
-        codexbar_provider_add_quota_window(
-            provider,
-            new_window("primary", "Amp Free", free_quota > 0 ? used / free_quota * 100.0 : 0,
-                       window_minutes, TRUE, resets_at_ms, has_reset, free_detail));
+        CodexBarQuotaWindow *window = new_window(
+            "primary", "Amp Free", free_quota > 0 ? used / free_quota * 100.0 : 0,
+            window_minutes, TRUE, resets_at_ms, has_reset, NULL);
+        window->reset_description = g_strdup(free_detail);
+        codexbar_provider_add_quota_window(provider, window);
     }
     if (has_individual) {
         codexbar_provider_add_balance(
