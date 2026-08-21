@@ -1,0 +1,96 @@
+0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+remaining(?:\\s+today)?"
+-        "(?:\\s*\\(resets\\s+daily\\))?\\s*$";
++        "(?:\\s*(\\(resets\\s+daily\\)))?";
+     static const char legacy_subscription_pattern[] =
+         "^\\s*Subscription\\s+(.+?):\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+other\\s+usage"
+         "\\s+and\\s+([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*%\\s+orb\\s+usage\\s+remaining\\s*-"
+@@ -633,13 +634,13 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+         "\\s*resets\\s+upon\\s+renewal\\s+in\\s+([0-9][0-9,]*)\\s+(days?|months?)"
+         "(?:\\s*-\\s*https?://\\S+)?\\s*$";
+     char **absolute = regex_captures(clean, absolute_pattern, 3);
+-    char **percent = absolute ? NULL : regex_captures(clean, percent_pattern, 1);
++    char **percent = absolute ? NULL : regex_captures(clean, percent_pattern, 2);
+     char **subscription = regex_captures(clean, legacy_subscription_pattern, 5);
+     if (!subscription) subscription = regex_captures(clean, current_subscription_pattern, 5);
+     char **identity = regex_captures(clean,
+         "^\\s*Signed in as\\s+([^\\s(]+)(?:\\s+\\(([^\\r\\n)]+)\\))?\\s*$", 2);
+     char **individual = regex_captures(clean,
+-        "^\\s*Individual credits:\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining\\s*$", 1);
++        "^\\s*Individual credits:\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining", 1);
+ 
+    gboolean has_free = FALSE;
+    double free_remaining = 0, free_quota = 0, hourly = 0;
+@@ -652,7 +653,7 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+        has_free = TRUE;
+        free_remaining = CLAMP(free_remaining, 0, 100);
+        free_quota = 100;
+-        free_detail = "resets daily";
++        free_detail = percent[1] && percent[1][0] != '\0' ? "resets daily" : NULL;
+    }
+    gboolean has_subscription = FALSE;
+    double other_remaining = 0, orb_remaining = 0, renewal_value = 0;
+@@ -694,14 +695,16 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+        char *detail = renewal_value == 1
+                            ? g_strdup_printf("renews in 1 %s", unit)
+                            : g_strdup_printf("renews in %.0f %ss", renewal_value, unit);
+-        codexbar_provider_add_quota_window(
+-            provider,
+-            new_window("primary", "Other usage", 100 - CLAMP(other_remaining, 0, 100),
+-                       30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, detail));
+-        codexbar_provider_add_quota_window(
+-            provider,
+-            new_window("secondary", "Orb usage", 100 - CLAMP(orb_remaining, 0, 100),
+-                       30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, detail));
++        CodexBarQuotaWindow *primary = new_window(
++            "primary", "Other usage", 100 - CLAMP(other_remaining, 0, 100),
++            30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, NULL);
++        CodexBarQuotaWindow *secondary = new_window(
++            "secondary", "Orb usage", 100 - CLAMP(orb_remaining, 0, 100),
++            30 * 24 * 60, TRUE, resets_at_ms, resets_at_ms > 0, NULL);
++        primary->reset_description = g_strdup(detail);
++        secondary->reset_description = g_strdup(detail);
++        codexbar_provider_add_quota_window(provider, primary);
++        codexbar_provider_add_quota_window(provider, secondary);
+        provider->plan = g_strdup(subscription[0]);
+        g_free(detail);
+    } else if (has_free) {
+@@ -709,10 +712,11 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+        gint64 window_minutes = hourly > 0 ? (gint64)llround(MAX(1, free_quota / hourly) * 60.0) : 24 * 60;
+        gboolean has_reset = hourly > 0;
+        gint64 resets_at_ms = has_reset ? now_ms + (gint64)llround(used / hourly * 3600000.0) : 0;
+-        codexbar_provider_add_quota_window(
+-            provider,
+-            new_window("primary", "Amp Free", free_quota > 0 ? used / free_quota * 100.0 : 0,
+-                       window_minutes, TRUE, resets_at_ms, has_reset, free_detail));
++        CodexBarQuotaWindow *window = new_window(
++            "primary", "Amp Free", free_quota > 0 ? used / free_quota * 100.0 : 0,
++            window_minutes, TRUE, resets_at_ms, has_reset, NULL);
++        window->reset_description = g_strdup(free_detail);
++        codexbar_provider_add_quota_window(provider, window);
+    }
+    if (has_individual) {
+        codexbar_provider_add_balance(
+diff --git a/linux/tests/test_codex_pat.c b/linux/tests/test_codex_pat.c
+index 413608509..09a110543 100644
+--- a/linux/tests/test_codex_pat.c
++++ b/linux/tests/test_codex_pat.c
+@@ -33,6 +33,8 @@ static guint expected_request_count;
+ static guint expected_request_index;
+ static guint cli_calls;
+ static char expected_authorization[256];
++static GCancellable *expected_cancellable;
++static gboolean cancel_after_response;
+ 
+ static const char usage_json[] =
+     "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{"
+@@ -53,6 +55,8 @@ static void expect_requests(const ExpectedRequest *requests, guint count) {
+     if (count > 0) memcpy(expected_requests, requests, count * sizeof(*requests));
+     expected_request_count = count;
+     expected_request_index = 0;
++    expected_cancellable = NULL;
++    cancel_after_response = FALSE;
+ }
+ 
+ static void assert_requests_consumed(void) {
+@@ -67,6 +71,7 @@ static CodexBarHttpResponse *pat_transport(const CodexBarHttpRequest *request, G
+     g_assert_cmpstr(request->method, ==, "G

@@ -1,0 +1,117 @@
+From 459c6fc72a46bb4e1643e546f30e86421f30d673 Mon Sep 17 00:00:00 2001
+From: "OpenAI GPT-5.6 Pro" <noreply@openai.com>
+Date: Fri, 21 Aug 2026 01:19:04 +0000
+Subject: [PATCH] fix: stabilize provider auth parity
+
+---
+ linux/src/codex.c                 | 34 ++++++++++++----
+ linux/src/fireworks.c             |  2 +-
+ linux/src/web_providers2.c        | 40 +++++++++---------
+ linux/tests/test_codex_pat.c      | 67 ++++++++++++++++++++++++++++---
+ linux/tests/test_diagnose_cli.sh  |  4 +-
+ linux/tests/test_fireworks.c      |  5 ++-
+ linux/tests/test_web_providers2.c | 30 +++++++++++++-
+ 7 files changed, 145 insertions(+), 37 deletions(-)
+
+diff --git a/linux/src/codex.c b/linux/src/codex.c
+index dfe622b37..d95ccf02b 100644
+--- a/linux/src/codex.c
++++ b/linux/src/codex.c
+@@ -810,6 +810,7 @@ static CodexBarHttpResponse *pat_request(const char *url,
+                                          CodexBarCodexTransport transport,
+                                          GCancellable *cancellable,
+                                          GError **error) {
++    if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
+     char *authorization = g_strdup_printf("Bearer %s", token);
+     CodexBarHttpRequestHeader headers[5] = {
+         {"Authorization", authorization},
+@@ -832,7 +833,21 @@ static CodexBarHttpResponse *pat_request(const char *url,
+     };
+     CodexBarHttpResponse *response = transport(&request, error);
+     g_free(authorization);
+-    if (!response) return NULL;
++    if (cancellable && g_cancellable_is_cancelled(cancellable)) {
++        codexbar_http_response_free(response);
++        if (error && *error) g_clear_error(error);
++        g_cancellable_set_error_if_cancelled(cancellable, error);
++        return NULL;
++    }
++    if (!response) {
++        if (error && !*error) {
++            g_set_error_literal(error,
++                                G_IO_ERROR,
++                                G_IO_ERROR_FAILED,
++                                "Codex personal-access-token network request failed");
++        }
++        return NULL;
++    }
+     if (response->status == 401 || response->status == 403) {
+         g_set_error(error,
+                     codex_error_quark(),
+@@ -1003,14 +1018,17 @@ CodexBarProvider *codexbar_codex_fetch_with_adapters(const CodexBarProviderConfi
+         return NULL;
+     }
+ 
+-    GError *pat_error = NULL;
+-    CodexBarProvider *provider = fetch_pat_usage(config, transport, cancellable, &pat_error);
+-    if (provider) return provider;
+-    if (!source_error_allows_fallback(pat_error)) {
+-        g_propagate_error(error, pat_error);
+-        return NULL;
++    CodexBarProvider *provider = NULL;
++    if (codexbar_codex_pat_is_available(config)) {
++        GError *pat_error = NULL;
++        provider = fetch_pat_usage(config, transport, cancellable, &pat_error);
++        if (provider) return provider;
++        if (!source_error_allows_fallback(pat_error)) {
++            g_propagate_error(error, pat_error);
++            return NULL;
++        }
++        g_clear_error(&pat_error);
+     }
+-    g_clear_error(&pat_error);
+ 
+     GError *oauth_error = NULL;
+     provider = fetch_http_usage(config, "oauth", transport, cancellable, &oauth_error);
+diff --git a/linux/src/fireworks.c b/linux/src/fireworks.c
+index 93d7fdca2..5725ad656 100644
+--- a/linux/src/fireworks.c
++++ b/linux/src/fireworks.c
+@@ -204,7 +204,7 @@ static char *summary_url(const char *slug, gint64 now_ms, GError **error) {
+ 
+ static char *accounts_url(const char *page_token) {
+     if (!page_token) return g_strdup("https://api.fireworks.ai/v1/accounts");
+-    char *escaped = g_uri_escape_string(page_token, NULL, TRUE);
++    char *escaped = g_uri_escape_string(page_token, NULL, FALSE);
+     char *url = g_strdup_printf("https://api.fireworks.ai/v1/accounts?pageToken=%s", escaped);
+     g_free(escaped);
+     return url;
+diff --git a/linux/src/web_providers2.c b/linux/src/web_providers2.c
+index 1af043cac..f9ca8fdde 100644
+--- a/linux/src/web_providers2.c
++++ b/linux/src/web_providers2.c
+@@ -530,6 +530,7 @@ static char **regex_captures(const char *text, const char *pattern, guint captur
+     char **captures = g_new0(char *, capture_count + 1);
+     for (guint index = 0; index < capture_count; index++) {
+         captures[index] = g_match_info_fetch(match, (gint)index + 1);
++        if (captures[index]) g_strstrip(captures[index]);
+     }
+     g_match_info_free(match);
+     g_regex_unref(regex);
+@@ -572,7 +573,7 @@ static char *strip_ansi(const char *text) {
+ static void amp_add_workspace_balances(CodexBarProvider *provider, const char *text) {
+     GError *regex_error = NULL;
+     GRegex *regex = g_regex_new(
+-        "^\\s*Workspace\\s+(.+?):\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining\\s*$",
++        "^\\s*Workspace\\s+(.+?):\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining",
+         G_REGEX_MULTILINE | G_REGEX_CASELESS, 0, &regex_error);
+     if (!regex) {
+         g_clear_error(&regex_error);
+@@ -618,10 +619,10 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
+     static const char absolute_pattern[] =
+         "^\\s*Amp Free:\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*/\\s*\\$?"
+         "([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining(?:\\s*\\(replenishes\\s*\\+\\$?"
+-        "([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*/\\s*hour\\))?\\s*$";
++        "([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*/\\s*hour\\))?";
+     static const char percent_pattern[] =
+         "^\\s*Amp Free:\\s*([0-9][
