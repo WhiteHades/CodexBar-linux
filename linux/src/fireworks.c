@@ -204,7 +204,7 @@ static char *summary_url(const char *slug, gint64 now_ms, GError **error) {
 
 static char *accounts_url(const char *page_token) {
     if (!page_token) return g_strdup("https://api.fireworks.ai/v1/accounts");
-    char *escaped = g_uri_escape_string(page_token, NULL, TRUE);
+    char *escaped = g_uri_escape_string(page_token, NULL, FALSE);
     char *url = g_strdup_printf("https://api.fireworks.ai/v1/accounts?pageToken=%s", escaped);
     g_free(escaped);
     return url;

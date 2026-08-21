@@ -810,6 +810,7 @@ static CodexBarHttpResponse *pat_request(const char *url,
                                          CodexBarCodexTransport transport,
                                          GCancellable *cancellable,
                                          GError **error) {
+    if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
     char *authorization = g_strdup_printf("Bearer %s", token);
     CodexBarHttpRequestHeader headers[5] = {
         {"Authorization", authorization},
@@ -832,7 +833,21 @@ static CodexBarHttpResponse *pat_request(const char *url,
     };
     CodexBarHttpResponse *response = transport(&request, error);
     g_free(authorization);
-    if (!response) return NULL;
+    if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+        codexbar_http_response_free(response);
+        if (error && *error) g_clear_error(error);
+        g_cancellable_set_error_if_cancelled(cancellable, error);
+        return NULL;
+    }
+    if (!response) {
+        if (error && !*error) {
+            g_set_error_literal(error,
+                                G_IO_ERROR,
+                                G_IO_ERROR_FAILED,
+                                "Codex personal-access-token network request failed");
+        }
+        return NULL;
+    }
     if (response->status == 401 || response->status == 403) {
         g_set_error(error,
                     codex_error_quark(),
@@ -1003,14 +1018,17 @@ CodexBarProvider *codexbar_codex_fetch_with_adapters(const CodexBarProviderConfi
         return NULL;
     }
 
-    GError *pat_error = NULL;
-    CodexBarProvider *provider = fetch_pat_usage(config, transport, cancellable, &pat_error);
-    if (provider) return provider;
-    if (!source_error_allows_fallback(pat_error)) {
-        g_propagate_error(error, pat_error);
-        return NULL;
+    CodexBarProvider *provider = NULL;
+    if (codexbar_codex_pat_is_available(config)) {
+        GError *pat_error = NULL;
+        provider = fetch_pat_usage(config, transport, cancellable, &pat_error);
+        if (provider) return provider;
+        if (!source_error_allows_fallback(pat_error)) {
+            g_propagate_error(error, pat_error);
+            return NULL;
+        }
+        g_clear_error(&pat_error);
     }
-    g_clear_error(&pat_error);
 
     GError *oauth_error = NULL;
     provider = fetch_http_usage(config, "oauth", transport, cancellable, &oauth_error);

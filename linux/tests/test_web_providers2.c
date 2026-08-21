@@ -241,7 +241,8 @@ static void test_amp_parsers(void) {
         "Amp Megawatt Subscription: 100% other usage and 100% orb usage remaining - "
         "resets upon renewal in 1 month\n"
         "Individual credits: $4.35 remaining (set up auto-reload to avoid running out) - "
-        "https://ampcode.com/settings";
+        "https://ampcode.com/settings\n"
+        "Workspace Team: $7 remaining (shared pool)";
     provider = codexbar_amp_parse_display_text(monthly, strlen(monthly), 1787054400000LL, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(provider->plan, ==, "Megawatt");
@@ -251,8 +252,35 @@ static void test_amp_parsers(void) {
     g_assert_cmpint(codexbar_provider_quota_window(provider, 0)->resets_at_ms, ==, 1789732800000LL);
     g_assert_cmpstr(codexbar_provider_quota_window(provider, 0)->reset_description, ==,
                     "renews in 1 month");
+    g_assert_cmpuint(provider->balances->len, ==, 2);
     g_assert_cmpfloat(((CodexBarBalance *)g_ptr_array_index(provider->balances, 0))->remaining,
                       ==, 4.35);
+    g_assert_cmpfloat(((CodexBarBalance *)g_ptr_array_index(provider->balances, 1))->remaining,
+                      ==, 7.0);
+    codexbar_provider_free(provider);
+
+    const char *free_without_marker = "Amp Free: 75% remaining today";
+    provider = codexbar_amp_parse_display_text(
+        free_without_marker, strlen(free_without_marker), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_null(codexbar_provider_quota_window(provider, 0)->reset_description);
+    codexbar_provider_free(provider);
+
+    const char *free_with_marker = "Amp Free: 75% remaining today (resets daily) - details";
+    provider = codexbar_amp_parse_display_text(
+        free_with_marker, strlen(free_with_marker), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 0)->reset_description, ==,
+                    "resets daily");
+    codexbar_provider_free(provider);
+
+    const char *absolute_with_suffix =
+        "Amp Free: $75 / $100 remaining (replenishes +$5 / hour) - details";
+    provider = codexbar_amp_parse_display_text(
+        absolute_with_suffix, strlen(absolute_with_suffix), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 25);
+    g_assert_true(codexbar_provider_quota_window(provider, 0)->has_resets_at);
     codexbar_provider_free(provider);
 
     const char *legacy =

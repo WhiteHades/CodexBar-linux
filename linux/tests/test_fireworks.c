@@ -200,6 +200,7 @@ static void test_credentials_and_invalid_slug_fail_before_network(void) {
     g_clear_error(&error);
     json_object_put(config.raw);
 
+    config.api_key = "key";
     const char *invalid[] = {"sp ace", "has/slash", "has?query", "has#fragment", "percent%2F", "col\xC3\xA9on"};
     for (guint index = 0; index < G_N_ELEMENTS(invalid); index++) {
         config.raw = raw_config(invalid[index]);
@@ -216,13 +217,13 @@ static void test_missing_slug_discovers_paginated_account(void) {
     g_unsetenv("FIREWORKS_ACCOUNT_SLUG");
     const char *urls[] = {
         "https://api.fireworks.ai/v1/accounts",
-        "https://api.fireworks.ai/v1/accounts?pageToken=next%20page",
+        "https://api.fireworks.ai/v1/accounts?pageToken=next%20page%2F%C3%A9%3F",
         "https://api.fireworks.ai/v1/accounts/discovered-team/billing/summary?"
         "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
     };
     const long statuses[] = {200, 200, 200};
     const char *bodies[] = {
-        "{\"accounts\":[],\"nextPageToken\":\"next page\"}",
+        "{\"accounts\":[],\"nextPageToken\":\"next page/\\u00e9?\"}",
         "{\"accounts\":[{\"accountId\":\"accounts/discovered-team\"}]}",
         "{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"2\","
         "\"nanos\":250000000}}]}",
