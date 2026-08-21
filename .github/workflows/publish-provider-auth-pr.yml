@@ -45,13 +45,14 @@ jobs:
           git config user.name 'OpenAI GPT-5.6 Pro'
           git config user.email 'noreply@openai.com'
 
-          if test -f .sync/provider-auth/04-fix.patch; then
-            test "$(sha256sum .sync/provider-auth/04-fix.patch | awk '{print $1}')" = \
+          if compgen -G '.sync/provider-auth/fix/part-*' >/dev/null; then
+            cat .sync/provider-auth/fix/part-* > "$work/04-fix.patch"
+            test "$(sha256sum "$work/04-fix.patch" | awk '{print $1}')" = \
               '915fc822de96bc6664825040820c896c5e630cceb528fd9dad7ee92040a627b4'
             git fetch --no-tags origin "refs/heads/$target:refs/remotes/origin/$target"
             test "$(git rev-parse "origin/$target")" = "$published_head"
             git switch --detach "origin/$target"
-            git am .sync/provider-auth/04-fix.patch
+            git am "$work/04-fix.patch"
             git diff --check HEAD^ HEAD
             verify_blob linux/src/codex.c d95ccf02bf2a75f1db643943c4e5694b5fbdd720
             verify_blob linux/src/fireworks.c 5725ad6565d85ce1200395527deb7336553baa27
