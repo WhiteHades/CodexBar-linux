@@ -218,15 +218,15 @@ static void test_missing_slug_discovers_paginated_account(void) {
     const char *urls[] = {
         "https://api.fireworks.ai/v1/accounts",
         "https://api.fireworks.ai/v1/accounts?pageToken=next%20page%2F%C3%A9%3F",
-        "https://api.fireworks.ai/v1/accounts/discovered-team/billing/summary?"
-        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
+        ("https://api.fireworks.ai/v1/accounts/discovered-team/billing/summary?"
+         "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z"),
     };
     const long statuses[] = {200, 200, 200};
     const char *bodies[] = {
         "{\"accounts\":[],\"nextPageToken\":\"next page/\\u00e9?\"}",
         "{\"accounts\":[{\"accountId\":\"accounts/discovered-team\"}]}",
-        "{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"2\","
-        "\"nanos\":250000000}}]}",
+        ("{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"2\","
+         "\"nanos\":250000000}}]}"),
     };
     reset_sequence(urls, statuses, bodies, G_N_ELEMENTS(urls), "Bearer fw-test-key");
     CodexBarProviderConfig config = {.api_key = "fw-test-key"};
@@ -252,8 +252,8 @@ static void test_multiple_and_missing_accounts_are_explicit(void) {
     const char *urls[] = {"https://api.fireworks.ai/v1/accounts"};
     const long statuses[] = {200};
     const char *bodies[] = {
-        "{\"accounts\":[{\"name\":\"accounts/zeta\"},{\"id\":\"alpha\"},"
-        "{\"accountId\":\"accounts/zeta\"}]}",
+        ("{\"accounts\":[{\"name\":\"accounts/zeta\"},{\"id\":\"alpha\"},"
+         "{\"accountId\":\"accounts/zeta\"}]}"),
     };
     reset_sequence(urls, statuses, bodies, G_N_ELEMENTS(urls), "Bearer fw-test-key");
     CodexBarProviderConfig config = {.api_key = "fw-test-key"};
@@ -277,18 +277,18 @@ static void test_multiple_and_missing_accounts_are_explicit(void) {
 
 static void test_configured_account_recovery_and_validation(void) {
     const char *urls[] = {
-        "https://api.fireworks.ai/v1/accounts/old-slug/billing/summary?"
-        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
+        ("https://api.fireworks.ai/v1/accounts/old-slug/billing/summary?"
+         "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z"),
         "https://api.fireworks.ai/v1/accounts",
-        "https://api.fireworks.ai/v1/accounts/current-slug/billing/summary?"
-        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
+        ("https://api.fireworks.ai/v1/accounts/current-slug/billing/summary?"
+         "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z"),
     };
     const long statuses[] = {404, 200, 200};
     const char *bodies[] = {
         "{\"code\":5,\"message\":\"account not found\"}",
         "{\"accounts\":[{\"name\":\"accounts/current-slug\"}]}",
-        "{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"1\","
-        "\"nanos\":0}}]}",
+        ("{\"lineItems\":[{\"totalCost\":{\"currencyCode\":\"USD\",\"units\":\"1\","
+         "\"nanos\":0}}]}"),
     };
     reset_sequence(urls, statuses, bodies, G_N_ELEMENTS(urls), "Bearer fw-test-key");
     CodexBarProviderConfig config = {.api_key = "fw-test-key", .raw = raw_config("old-slug")};
@@ -304,8 +304,8 @@ static void test_configured_account_recovery_and_validation(void) {
     json_object_put(config.raw);
 
     const char *wrong_urls[] = {
-        "https://api.fireworks.ai/v1/accounts/guessed-user/billing/summary?"
-        "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z",
+        ("https://api.fireworks.ai/v1/accounts/guessed-user/billing/summary?"
+         "startTime=2026-07-19T12:00:00Z&endTime=2026-08-18T12:00:00Z"),
         "https://api.fireworks.ai/v1/accounts",
     };
     const long wrong_statuses[] = {200, 200};
