@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'sync/**'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - gcc-14
+          - clang
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream history for parity checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/steipete/CodexBar.git 2>/dev/null || true
+          git fetch --prune --no-tags upstream main
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc-14 clang ninja-build pkg-config python3-pip \
+            libglib2.0-dev libcurl4-openssl-dev libjson-c-dev \
+            libsqlite3-dev libncurses-dev dbus-x11
+          python3 -m pip install --break-system-packages 'meson>=1.6,<2'
+
+      - name: Build and test
+        run: make check

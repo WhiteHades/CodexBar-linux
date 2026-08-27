@@ -134,7 +134,7 @@ static char *reset_description(gint64 reset_ms, gint64 now_ms) {
     if (interval <= 0) return g_strdup("Expired");
     gint64 hours = interval / (60 * 60 * 1000);
     gint64 minutes = interval % (60 * 60 * 1000) / (60 * 1000);
-    if (hours > 24) {
+    if (hours >= 24) {
         return g_strdup_printf(
             "Resets in %" G_GINT64_FORMAT "d %" G_GINT64_FORMAT "h", hours / 24, hours % 24);
     }

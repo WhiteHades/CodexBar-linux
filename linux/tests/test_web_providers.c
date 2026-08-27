@@ -131,6 +131,40 @@ static void test_cursor_enterprise_and_legacy(void) {
     codexbar_provider_free(provider);
 }
 
+static void test_cursor_membership_labels(void) {
+    const struct {
+        const char *membership;
+        const char *expected;
+    } cases[] = {
+        {"enterprise", "Cursor Enterprise"},
+        {"express", "Cursor Start"},
+        {"free", "Cursor Free"},
+        {"free_trial", "Cursor Pro Trial"},
+        {"hobby", "Cursor Hobby"},
+        {"pro", "Cursor Pro"},
+        {"pro_plus", "Cursor Pro+"},
+        {"pro_student", "Cursor Pro"},
+        {"team", "Cursor Team"},
+        {"ultra", "Cursor Ultra"},
+        {"custom_plan", "Cursor custom_plan"},
+        {"Custom_Plan", "Cursor Custom_Plan"},
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(cases); index++) {
+        char *summary = g_strdup_printf(
+            "{\"membershipType\":\"%s\",\"individualUsage\":{\"plan\":{\"totalPercentUsed\":1}}}",
+            cases[index].membership);
+        GError *error = NULL;
+        CodexBarProvider *provider = codexbar_cursor_parse_usage(
+            summary, strlen(summary), NULL, 0, NULL, 0, 1000, &error);
+        g_assert_no_error(error);
+        g_assert_nonnull(provider);
+        g_assert_cmpstr(provider->plan, ==, cases[index].expected);
+        g_assert_cmpstr(provider->identity->login_method, ==, cases[index].expected);
+        codexbar_provider_free(provider);
+        g_free(summary);
+    }
+}
+
 static void test_cursor_local_auth_database(void) {
     g_assert_cmpint(g_mkdir_with_parents(".tmp/web-provider-test", 0700), ==, 0);
     char *database_path = g_strdup(".tmp/web-provider-test/cursor-state.vscdb");
@@ -289,6 +323,7 @@ static void test_cancellation_and_malformed_inputs(void) {
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/web-providers/cursor/parser", test_cursor_enterprise_and_legacy);
+    g_test_add_func("/web-providers/cursor/membership-labels", test_cursor_membership_labels);
     g_test_add_func("/web-providers/cursor/local-auth", test_cursor_local_auth_database);
     g_test_add_func("/web-providers/cursor/transport", test_cursor_transport_and_cookie_security);
     g_test_add_func("/web-providers/opencode", test_opencode_parser_and_transport);

@@ -385,20 +385,18 @@ static gboolean nested_number(json_object *root,
 static char *cursor_plan_name(const char *raw) {
     if (!raw) return NULL;
     char *lower = g_ascii_strdown(raw, -1);
-    const char *suffix = lower;
+    const char *suffix = raw;
     if (g_str_equal(lower, "enterprise")) suffix = "Enterprise";
-    else if (g_str_equal(lower, "pro")) suffix = "Pro";
+    else if (g_str_equal(lower, "express")) suffix = "Start";
+    else if (g_str_equal(lower, "free")) suffix = "Free";
+    else if (g_str_equal(lower, "free_trial")) suffix = "Pro Trial";
     else if (g_str_equal(lower, "hobby")) suffix = "Hobby";
+    else if (g_str_equal(lower, "pro")) suffix = "Pro";
+    else if (g_str_equal(lower, "pro_plus")) suffix = "Pro+";
+    else if (g_str_equal(lower, "pro_student")) suffix = "Pro";
     else if (g_str_equal(lower, "team")) suffix = "Team";
-    char *capitalized = NULL;
-    if (suffix == lower) {
-        char *first = g_utf8_strup(lower, 1);
-        capitalized = g_strconcat(first, g_utf8_next_char(lower), NULL);
-        g_free(first);
-        suffix = capitalized;
-    }
+    else if (g_str_equal(lower, "ultra")) suffix = "Ultra";
     char *result = g_strdup_printf("Cursor %s", suffix);
-    g_free(capitalized);
     g_free(lower);
     return result;
 }

@@ -88,3 +88,44 @@ gint64 codexbar_refresh_next_fixed_deadline(gint64 previous_deadline_us,
     }
     return deadline;
 }
+
+CodexBarResetBoundaryDecision codexbar_refresh_next_reset_boundary(
+    const CodexBarSnapshot *snapshot,
+    gint64 now_ms,
+    guint normal_refresh_seconds,
+    const gint64 *attempted_boundaries_ms,
+    guint attempted_boundary_count) {
+    CodexBarResetBoundaryDecision decision = {0};
+    if (!snapshot || normal_refresh_seconds == 0) return decision;
+    gint64 normal_refresh_ms = now_ms + (gint64)normal_refresh_seconds * 1000;
+    for (guint provider_index = 0; provider_index < snapshot->providers->len; provider_index++) {
+        const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, provider_index);
+        for (guint window_index = 0; window_index < provider->quota_windows->len; window_index++) {
+            const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, window_index);
+            if (!window->has_resets_at || window->resets_at_ms > G_MAXINT64 - CODEXBAR_RESET_BOUNDARY_GRACE_MILLISECONDS) {
+                continue;
+            }
+            gint64 boundary_ms = window->resets_at_ms + CODEXBAR_RESET_BOUNDARY_GRACE_MILLISECONDS;
+            if (boundary_ms > normal_refresh_ms || (provider->has_updated_at && provider->updated_at_ms >= boundary_ms)) {
+                continue;
+            }
+            gboolean attempted = FALSE;
+            for (guint index = 0; index < attempted_boundary_count; index++) {
+                if (attempted_boundaries_ms[index] == boundary_ms) {
+                    attempted = TRUE;
+                    break;
+                }
+            }
+            if (attempted) continue;
+            gint64 refresh_at_ms = MAX(boundary_ms, now_ms + CODEXBAR_RESET_BOUNDARY_MINIMUM_DELAY_MILLISECONDS);
+            if (!decision.scheduled || refresh_at_ms < decision.refresh_at_ms) {
+                decision = (CodexBarResetBoundaryDecision){
+                    .scheduled = TRUE,
+                    .refresh_at_ms = refresh_at_ms,
+                    .boundary_ms = boundary_ms,
+                };
+            }
+        }
+    }
+    return decision;
+}

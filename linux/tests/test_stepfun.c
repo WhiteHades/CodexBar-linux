@@ -68,8 +68,11 @@ static void test_parse_credit_and_classification(void) {
     CodexBarProvider *provider = codexbar_stepfun_parse_usage(credit, strlen(credit), 1, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(provider->quota_windows->len, ==, 1);
-    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 25);
-    g_assert_true(codexbar_provider_quota_window(provider, 0)->has_resets_at);
+    CodexBarQuotaWindow *credit_window = codexbar_provider_quota_window(provider, 0);
+    g_assert_cmpfloat(credit_window->used_percent, ==, 25);
+    g_assert_true(credit_window->has_resets_at);
+    g_assert_true(credit_window->has_window_minutes);
+    g_assert_cmpint(credit_window->window_minutes, ==, 43200);
     const char *plan = "{\"status\":1,\"subscription\":{\"name\":\"Mini Plan\"}}";
     g_assert_true(codexbar_stepfun_apply_plan(provider, plan, strlen(plan)));
     g_assert_cmpstr(provider->plan, ==, "Mini Plan");
@@ -83,6 +86,16 @@ static void test_parse_credit_and_classification(void) {
     provider = codexbar_stepfun_parse_usage(live, strlen(live), 1, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    codexbar_provider_free(provider);
+
+    const char *zero_reset =
+        "{\"status\":1,\"plan_family\":2,\"plan_credit_rate_limit\":{"
+        "\"subscription_credit_left_rate\":0.5,\"subscription_credit_reset_time\":\"0\"}}";
+    provider = codexbar_stepfun_parse_usage(zero_reset, strlen(zero_reset), 1, &error);
+    g_assert_no_error(error);
+    credit_window = codexbar_provider_quota_window(provider, 0);
+    g_assert_false(credit_window->has_resets_at);
+    g_assert_false(credit_window->has_window_minutes);
     codexbar_provider_free(provider);
 }
 

@@ -22,6 +22,8 @@ typedef struct {
     double remaining;
     gboolean has_percent;
     double percent_remaining;
+    gboolean has_credits_used;
+    double credits_used;
 } CopilotQuota;
 
 static gboolean parse_json_number(json_object *value, double *result) {
@@ -85,6 +87,7 @@ static CopilotQuota parse_quota(json_object *value) {
     quota.has_entitlement = parse_json_number(object_member(value, "entitlement"), &quota.entitlement);
     quota.has_remaining = parse_json_number(object_member(value, "remaining"), &quota.remaining);
     quota.has_percent = parse_json_number(object_member(value, "percent_remaining"), &quota.percent_remaining);
+    quota.has_credits_used = parse_json_number(object_member(value, "credits_used"), &quota.credits_used);
 
     json_object *unlimited = object_member(value, "unlimited");
     quota.unlimited = unlimited && json_object_get_type(unlimited) == json_type_boolean &&
@@ -145,12 +148,32 @@ static CopilotQuota select_quota(CopilotQuota direct, CopilotQuota monthly) {
         return direct;
     }
     if (quota_is_finite_window(&monthly)) {
+        if (direct.has_credits_used) {
+            monthly.has_credits_used = TRUE;
+            monthly.credits_used = direct.credits_used;
+        }
         return monthly;
     }
     if (direct.present && direct.unlimited) {
         return direct;
     }
     return (CopilotQuota){0};
+}
+
+static CopilotQuota first_credits_counter(json_object *snapshots) {
+    CopilotQuota result = {0};
+    if (!snapshots || json_object_get_type(snapshots) != json_type_object) return result;
+    static const char *const preferred[] = {"premium_interactions", "completions", "chat", "chat_messages"};
+    for (size_t index = 0; index < G_N_ELEMENTS(preferred); index++) {
+        CopilotQuota quota = quota_member(snapshots, preferred[index]);
+        if (quota.has_credits_used) return quota;
+    }
+    json_object_object_foreach(snapshots, name, value) {
+        (void)name;
+        CopilotQuota quota = parse_quota(value);
+        if (quota.has_credits_used) return quota;
+    }
+    return result;
 }
 
 static CopilotQuota unknown_quota(json_object *snapshots) {
@@ -279,6 +302,9 @@ CodexBarProvider *codexbar_copilot_parse_usage(const char *json, GError **error)
     CopilotQuota chat_monthly = monthly_quota(monthly, limited, "chat");
     CopilotQuota premium = select_quota(premium_direct, premium_monthly);
     CopilotQuota chat = select_quota(chat_direct, chat_monthly);
+    CopilotQuota credits = premium.has_credits_used ? premium
+                           : chat.has_credits_used  ? chat
+                                                   : first_credits_counter(snapshots);
 
     json_object *token_billing_value = object_member(root, "token_based_billing");
     gboolean token_billing = token_billing_value && json_object_get_type(token_billing_value) == json_type_boolean &&
@@ -306,6 +332,17 @@ CodexBarProvider *codexbar_copilot_parse_usage(const char *json, GError **error)
     provider->explicit_quota_slots = TRUE;
     add_quota_window(provider, "premium", "Premium", &premium, has_reset, reset_ms);
     add_quota_window(provider, "chat", "Chat", &chat, has_reset, reset_ms);
+    if (credits.has_credits_used) {
+        CodexBarBalance *balance = codexbar_balance_new(
+            "copilot-credits-used", "Credits", 0.0, "credits");
+        balance->has_used = TRUE;
+        balance->used = credits.credits_used;
+        if (has_reset) {
+            balance->has_resets_at = TRUE;
+            balance->resets_at_ms = reset_ms;
+        }
+        codexbar_provider_add_balance(provider, balance);
+    }
 
     json_object_put(root);
     return provider;

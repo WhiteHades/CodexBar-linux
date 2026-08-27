@@ -1,0 +1,109 @@
+name: publish provider auth PR
+
+on:
+  pull_request:
+    branches:
+      - sync/upstream-2026-08-20
+    paths:
+      - '.sync/provider-auth/**'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.head_ref == 'sync/provider-auth-bootstrap'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out pull request merge
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reassemble, verify, and publish product commits
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target='sync/provider-auth-parity'
+          base='17b03f0726fe2bdb907ea595ac2ccff778754944'
+          published_head='c25b3c1361ebde9e8ed1893235570b41c56e70df'
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+
+          verify_blob() {
+            local path="$1"
+            local expected="$2"
+            local actual
+            actual="$(git rev-parse "HEAD:$path")"
+            test "$actual" = "$expected" || {
+              echo "Blob mismatch for $path: expected $expected, got $actual" >&2
+              exit 1
+            }
+          }
+
+          git config user.name 'OpenAI GPT-5.6 Pro'
+          git config user.email 'noreply@openai.com'
+
+          if compgen -G '.sync/provider-auth/fix/part-*' >/dev/null; then
+            cat .sync/provider-auth/fix/part-* > "$work/04-fix.patch"
+            test "$(sha256sum "$work/04-fix.patch" | awk '{print $1}')" = \
+              '915fc822de96bc6664825040820c896c5e630cceb528fd9dad7ee92040a627b4'
+            git fetch --no-tags origin "refs/heads/$target:refs/remotes/origin/$target"
+            test "$(git rev-parse "origin/$target")" = "$published_head"
+            git switch --detach "origin/$target"
+            git am "$work/04-fix.patch"
+            git diff --check HEAD^ HEAD
+            verify_blob linux/src/codex.c d95ccf02bf2a75f1db643943c4e5694b5fbdd720
+            verify_blob linux/src/fireworks.c 5725ad6565d85ce1200395527deb7336553baa27
+            verify_blob linux/src/web_providers2.c f9ca8fdde73cc29c97de5816b187e840bf4ed25b
+            verify_blob linux/tests/test_codex_pat.c 09a11054383cc9f87451bb9a6eced47847aa268d
+            verify_blob linux/tests/test_diagnose_cli.sh e0f708c665b5e266fd8978ad013d76ff8d1af2ac
+            verify_blob linux/tests/test_fireworks.c 33452561ba6f584b37438cc76e68f24850cacbce
+            verify_blob linux/tests/test_web_providers2.c 3dd5087cbb293ec17a5498918e1dde3f60d684cc
+            test "$(git rev-list --count "$published_head..HEAD")" -eq 1
+            git push origin "HEAD:refs/heads/$target"
+            git log --oneline --decorate "$published_head..HEAD"
+            exit 0
+          fi
+
+          cp .sync/provider-auth/01-amp.patch "$work/01-amp.patch"
+          cat .sync/provider-auth/fireworks/part-* > "$work/02-fireworks.patch"
+          cat .sync/provider-auth/codex/part-* > "$work/03-codex-pat.patch"
+
+          if git ls-remote --exit-code --heads origin "refs/heads/$target" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing branch $target" >&2
+            exit 1
+          fi
+
+          git switch --detach "$base"
+          git switch -c "$target"
+
+          git am "$work/01-amp.patch"
+          git diff --check HEAD^ HEAD
+          verify_blob CHANGELOG.md a1fb90bd957d621bee3ab930e2892f46c12000ab
+          verify_blob linux/src/web_providers2.c 1af043cacb50aba53828690194a73d8e8bfec6fa
+          verify_blob linux/tests/test_web_providers2.c 75237094ddc79c1663a1b4e81941a8d0e2c45f54
+          git push origin "HEAD:refs/heads/$target"
+
+          git am "$work/02-fireworks.patch"
+          git diff --check HEAD^ HEAD
+          verify_blob CHANGELOG.md bc65a3677bd8a1bb3a81929a383eeccad16cf0ac
+          verify_blob linux/src/fireworks.c 93d7fdca295818ff42514d35ea5ea928d2bc468a
+          verify_blob linux/tests/test_fireworks.c f834e1896258c780117977c1fe195b8c23d0c144
+          git push origin "HEAD:refs/heads/$target"
+
+          git am "$work/03-codex-pat.patch"
+          git diff --check HEAD^ HEAD
+          verify_blob CHANGELOG.md a95480952d74980174c310dc47e27133fb783882
+          verify_blob linux/meson.build 30fa98d271e4658dcf5585487c19a58002bd237a
+          verify_blob linux/src/backend.c ace9f8cd402d18535b75cf644d5d0b83f89f20b1
+          verify_blob linux/src/codex.c dfe622b37cd0f06a7eba799d05dc1ff7a602dfd4
+          verify_blob linux/src/codex.h 3c91d1b5bd9bd31813d961a03a662458026f9c5f
+          verify_blob linux/src/provider_registry.c 6697882a1ca44af75f0db6c6ae09c5fc791df56d
+          verify_blob linux/tests/test_codex_pat.c 4136085099b1af560aab52dfae7d81acfceadb98
+          verify_blob linux/tests/test_model.c 8e9715854a772cfb22b6a670c5d5e7c26443a50a
+          git push origin "HEAD:refs/heads/$target"
+
+          test "$(git rev-list --count "$base..HEAD")" -eq 3
+          git log --oneline --decorate "$base..HEAD"

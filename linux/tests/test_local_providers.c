@@ -1,9 +1,11 @@
 #include "local_providers.h"
 
 #include <gio/gio.h>
+#include <glib/gstdio.h>
 #include <json-c/json.h>
 #include <math.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static void test_kiro_parsing(void) {
     const char *usage =
@@ -281,6 +283,37 @@ static void test_pre_cancelled_cli_fetches(void) {
     g_object_unref(cancellable);
 }
 
+static void test_kiro_fetch_uses_pty(void) {
+    GError *error = NULL;
+    char *directory = g_dir_make_tmp("codexbar-kiro-pty-XXXXXX", &error);
+    g_assert_no_error(error);
+    char *script = g_build_filename(directory, "kiro-cli", NULL);
+    const char *contents =
+        "#!/bin/sh\n"
+        "[ -t 0 ] && [ -t 1 ] && [ -t 2 ] || exit 91\n"
+        "case \"$1\" in\n"
+        "  whoami) printf 'Logged in with Test\\nEmail: pty@example.test\\n' ;;\n"
+        "  chat)\n"
+        "    case \"$3\" in\n"
+        "      /usage) printf '| KIRO PRO |\\n(10 of 50 covered in plan), resets on 2027-01-01\\n' ;;\n"
+        "      /context) printf 'Context window: 2%% used\\n' ;;\n"
+        "    esac ;;\n"
+        "esac\n";
+    g_assert_true(g_file_set_contents(script, contents, -1, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(chmod(script, 0700), ==, 0);
+    CodexBarProvider *provider = codexbar_kiro_fetch_with_binary_and_cancellable(script, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->account, ==, "pty@example.test");
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 20);
+    codexbar_provider_free(provider);
+    g_assert_cmpint(g_remove(script), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+    g_free(script);
+    g_free(directory);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/local-providers/kiro/parsing", test_kiro_parsing);
@@ -291,5 +324,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/local-providers/antigravity/proc-ports", test_antigravity_proc_ports);
     g_test_add_func("/local-providers/antigravity/transport", test_antigravity_transport_and_cancellation);
     g_test_add_func("/local-providers/cli/pre-cancelled", test_pre_cancelled_cli_fetches);
+    g_test_add_func("/local-providers/kiro/pty", test_kiro_fetch_uses_pty);
     return g_test_run();
 }

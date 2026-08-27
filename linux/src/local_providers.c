@@ -396,15 +396,17 @@ static char *combined_process_output(const CodexBarProcessResult *result) {
 }
 
 static CodexBarProcessResult *run_local_command(const char *const *arguments,
-                                                 guint timeout_ms,
-                                                 GCancellable *cancellable,
-                                                 GError **error) {
+                                                  guint timeout_ms,
+                                                  gboolean pseudo_terminal,
+                                                  GCancellable *cancellable,
+                                                  GError **error) {
     CodexBarProcessRequest request = {
         .arguments = arguments,
         .timeout_milliseconds = timeout_ms,
         .termination_grace_milliseconds = 300,
         .maximum_output_bytes = LOCAL_PROCESS_OUTPUT_LIMIT,
         .new_session = TRUE,
+        .pseudo_terminal = pseudo_terminal,
     };
     return codexbar_process_run(&request, cancellable, error);
 }
@@ -419,7 +421,7 @@ CodexBarProvider *codexbar_kiro_fetch_with_binary_and_cancellable(const char *bi
     if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
     const char *account_argv[] = {binary, "whoami", NULL};
     GError *account_error = NULL;
-    CodexBarProcessResult *account_result = run_local_command(account_argv, 3000, cancellable, &account_error);
+    CodexBarProcessResult *account_result = run_local_command(account_argv, 3000, TRUE, cancellable, &account_error);
     char *account = combined_process_output(account_result);
     if (account && login_required(account)) {
         codexbar_process_result_free(account_result);
@@ -433,7 +435,7 @@ CodexBarProvider *codexbar_kiro_fetch_with_binary_and_cancellable(const char *bi
     g_clear_error(&account_error);
 
     const char *usage_argv[] = {binary, "chat", "--no-interactive", "/usage", NULL};
-    CodexBarProcessResult *usage_result = run_local_command(usage_argv, 20000, cancellable, error);
+    CodexBarProcessResult *usage_result = run_local_command(usage_argv, 20000, TRUE, cancellable, error);
     if (!usage_result) {
         g_free(account);
         return NULL;
@@ -450,7 +452,7 @@ CodexBarProvider *codexbar_kiro_fetch_with_binary_and_cancellable(const char *bi
 
     const char *context_argv[] = {binary, "chat", "--no-interactive", "/context", NULL};
     GError *context_error = NULL;
-    CodexBarProcessResult *context_result = run_local_command(context_argv, 8000, cancellable, &context_error);
+    CodexBarProcessResult *context_result = run_local_command(context_argv, 8000, TRUE, cancellable, &context_error);
     if (!context_result && context_error && g_error_matches(context_error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
         g_propagate_error(error, context_error);
         g_free(usage);
@@ -582,7 +584,7 @@ CodexBarProvider *codexbar_augment_fetch_with_binary_and_cancellable(const char 
     }
     if (cancellable && g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
     const char *argv[] = {binary, "account", "status", NULL};
-    CodexBarProcessResult *result = run_local_command(argv, 15000, cancellable, error);
+    CodexBarProcessResult *result = run_local_command(argv, 15000, FALSE, cancellable, error);
     if (!result) return NULL;
     char *output = combined_process_output(result);
     gboolean succeeded = codexbar_process_result_succeeded(result);

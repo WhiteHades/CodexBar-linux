@@ -29,9 +29,10 @@ static void test_oauth_usage(void) {
     g_assert_cmpfloat_with_epsilon(session->used_percent, 12.5, 0.0001);
     g_assert_cmpint(session->window_minutes, ==, 300);
     g_assert_true(session->has_resets_at);
-    CodexBarQuotaWindow *fable = codexbar_provider_quota_window(provider, 4);
+    CodexBarQuotaWindow *fable = codexbar_provider_quota_window(provider, 3);
     g_assert_cmpstr(fable->id, ==, "claude-weekly-scoped-fable");
     g_assert_cmpstr(fable->title, ==, "Fable only");
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 4)->id, ==, "claude-routines");
     g_assert_nonnull(provider->provider_cost);
     g_assert_cmpfloat_with_epsilon(provider->provider_cost->used, 3.25, 0.0001);
     g_assert_cmpfloat_with_epsilon(provider->provider_cost->limit, 20.5, 0.0001);
@@ -45,10 +46,37 @@ static void test_null_routines(void) {
     CodexBarProvider *provider = codexbar_claude_parse_oauth_usage(json, NULL, "pro", 1, &error);
     g_assert_no_error(error);
     g_assert_nonnull(provider);
-    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
-    CodexBarQuotaWindow *routines = codexbar_provider_quota_window(provider, 1);
-    g_assert_cmpstr(routines->id, ==, "claude-routines");
-    g_assert_cmpfloat(routines->used_percent, ==, 0);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    codexbar_provider_free(provider);
+
+    provider = codexbar_claude_parse_web_usage(json, NULL, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    codexbar_provider_free(provider);
+}
+
+static void test_routines_follow_scoped_weekly_windows(void) {
+    const char *json =
+        "{\"five_hour\":{\"utilization\":1},"
+        "\"seven_day_cowork\":{\"utilization\":18},"
+        "\"limits\":[{\"kind\":\"weekly_scoped\",\"group\":\"weekly\",\"percent\":7,"
+        "\"scope\":{\"model\":{\"id\":\"fable\",\"display_name\":\"Fable\"}}}]}";
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_claude_parse_oauth_usage(json, NULL, "pro", 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 1)->id, ==, "claude-weekly-scoped-fable");
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 2)->id, ==, "claude-routines");
+    codexbar_provider_free(provider);
+
+    provider = codexbar_claude_parse_web_usage(json, NULL, NULL, 1, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 3);
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 1)->id, ==, "claude-weekly-scoped-fable");
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 2)->id, ==, "claude-routines");
     codexbar_provider_free(provider);
 }
 
@@ -83,6 +111,7 @@ static guint transport_calls;
 static guint runner_calls;
 static int transport_mode;
 static gboolean runner_fails;
+static gboolean runner_subscription_only;
 
 static CodexBarHttpResponse *response(long status, const char *body) {
     CodexBarHttpResponse *value = g_new0(CodexBarHttpResponse, 1);
@@ -128,9 +157,11 @@ static CodexBarProcessResult *source_runner(const CodexBarProcessRequest *reques
     g_assert_null(g_environ_getenv((char **)request->environment, "ANTHROPIC_ADMIN_KEY"));
     g_assert_cmpstr(g_environ_getenv((char **)request->environment, "DISABLE_AUTOUPDATER"), ==, "1");
     CodexBarProcessResult *result = g_new0(CodexBarProcessResult, 1);
-    result->standard_output = g_strdup(
-        "Current session\n25% used\nCurrent week (all models)\n80% left\n"
-        "Current week (Sonnet only)\n10% used\nAccount: cli@example.test\nOrg: CLI Org\n");
+    result->standard_output = runner_subscription_only
+                                  ? g_strdup("You are currently using your subscription to power your Claude Code usage.\n")
+                                  : g_strdup(
+                                        "Current session\n25% used\nCurrent week (all models)\n80% left\n"
+                                        "Current week (Sonnet only)\n10% used\nAccount: cli@example.test\nOrg: CLI Org\n");
     result->standard_output_length = strlen(result->standard_output);
     result->exit_status = runner_fails ? 1 : 0;
     return result;
@@ -150,6 +181,38 @@ static void test_cli_usage(void) {
     g_assert_cmpstr(provider->account, ==, "user@example.test");
     g_assert_cmpstr(provider->identity->organization, ==, "Example Org");
     codexbar_provider_free(provider);
+}
+
+static void test_cli_subscription_limits_unavailable(void) {
+    GError *error = NULL;
+    CodexBarProvider *provider = codexbar_claude_parse_cli_usage(
+        "You are currently using your subscription to power your Claude Code usage.\n", 1000, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->source, ==, "cli");
+    g_assert_cmpstr(provider->plan, ==, "Claude Education");
+    g_assert_cmpstr(provider->note, ==, "Limits unavailable");
+    g_assert_cmpuint(provider->quota_windows->len, ==, 0);
+    codexbar_provider_free(provider);
+
+    CodexBarProviderConfig config = {.id = "claude", .raw = json_object_new_object()};
+    json_object_object_add(config.raw, "cookieHeader", json_object_new_string("sessionKey=sk-ant-session"));
+    g_setenv("CLAUDE_CONFIG_DIR", "/nonexistent-codexbar-claude-test", TRUE);
+    runner_subscription_only = TRUE;
+    transport_calls = 0;
+    runner_calls = 0;
+    transport_mode = 0;
+    provider = codexbar_claude_fetch_with_adapters_for_runtime(
+        &config, "auto", FALSE, source_transport, source_runner, NULL, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpstr(provider->note, ==, "Limits unavailable");
+    g_assert_cmpuint(runner_calls, ==, 1);
+    g_assert_cmpuint(transport_calls, ==, 0);
+    codexbar_provider_free(provider);
+    runner_subscription_only = FALSE;
+    json_object_put(config.raw);
+    g_unsetenv("CLAUDE_CONFIG_DIR");
 }
 
 static void test_source_planner(void) {
@@ -224,9 +287,11 @@ int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/claude/oauth-usage", test_oauth_usage);
     g_test_add_func("/claude/null-routines", test_null_routines);
+    g_test_add_func("/claude/routines-order", test_routines_follow_scoped_weekly_windows);
     g_test_add_func("/claude/spend-only", test_spend_only);
     g_test_add_func("/claude/invalid-usage", test_invalid_usage);
     g_test_add_func("/claude/cli-usage", test_cli_usage);
+    g_test_add_func("/claude/cli-limits-unavailable", test_cli_subscription_limits_unavailable);
     g_test_add_func("/claude/source-planner", test_source_planner);
     return g_test_run();
 }

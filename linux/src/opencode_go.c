@@ -118,36 +118,50 @@ static gboolean has_auth_key(const char *path) {
     return result;
 }
 
-static gboolean database_has_table(sqlite3 *database, const char *name) {
+static int database_has_table(sqlite3 *database, const char *name, gboolean *result) {
     sqlite3_stmt *statement = NULL;
     const char sql[] = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1";
-    if (sqlite3_prepare_v2(database, sql, -1, &statement, NULL) != SQLITE_OK) return FALSE;
+    int status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
+    if (status != SQLITE_OK) return status;
     sqlite3_bind_text(statement, 1, name, -1, SQLITE_TRANSIENT);
-    gboolean result = sqlite3_step(statement) == SQLITE_ROW;
+    status = sqlite3_step(statement);
+    *result = status == SQLITE_ROW;
     sqlite3_finalize(statement);
-    return result;
+    return status == SQLITE_ROW || status == SQLITE_DONE ? SQLITE_OK : status;
 }
 
-static GArray *read_rows(const char *path, GError **error) {
+static GArray *read_rows_once(const char *path, gboolean immutable, int *failure_code, char **failure_message) {
     sqlite3 *database = NULL;
-    int status = sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, NULL);
+    char *uri = immutable ? g_filename_to_uri(path, NULL, NULL) : NULL;
+    char *filename = immutable && uri ? g_strconcat(uri, "?immutable=1", NULL) : NULL;
+    int flags = SQLITE_OPEN_READONLY | (immutable ? SQLITE_OPEN_URI : 0);
+    int status = immutable && !filename ? SQLITE_CANTOPEN
+                                       : sqlite3_open_v2(immutable ? filename : path, &database, flags, NULL);
+    g_free(filename);
+    g_free(uri);
     if (status != SQLITE_OK) {
         const char *message = database ? sqlite3_errmsg(database) : "unknown error";
-        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "SQLite error reading OpenCode Go usage: %s", message);
+        *failure_code = database ? sqlite3_errcode(database) : status;
+        *failure_message = g_strdup(message);
         sqlite3_close(database);
         return NULL;
     }
     sqlite3_busy_timeout(database, 250);
 
-    const char *sql = database_has_table(database, "part") ? message_and_part_usage_sql : message_usage_sql;
+    gboolean has_part = FALSE;
+    status = database_has_table(database, "part", &has_part);
+    if (status != SQLITE_OK) {
+        *failure_code = sqlite3_errcode(database);
+        *failure_message = g_strdup(sqlite3_errmsg(database));
+        sqlite3_close(database);
+        return NULL;
+    }
+    const char *sql = has_part ? message_and_part_usage_sql : message_usage_sql;
     sqlite3_stmt *statement = NULL;
     status = sqlite3_prepare_v2(database, sql, -1, &statement, NULL);
     if (status != SQLITE_OK) {
-        g_set_error(error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_FAILED,
-                    "SQLite error reading OpenCode Go usage: %s",
-                    sqlite3_errmsg(database));
+        *failure_code = sqlite3_errcode(database);
+        *failure_message = g_strdup(sqlite3_errmsg(database));
         sqlite3_close(database);
         return NULL;
     }
@@ -161,17 +175,41 @@ static GArray *read_rows(const char *path, GError **error) {
         if (row.created_ms > 0 && row.cost >= 0 && isfinite(row.cost)) g_array_append_val(rows, row);
     }
     if (status != SQLITE_DONE) {
-        g_set_error(error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_FAILED,
-                    "SQLite error reading OpenCode Go usage: %s",
-                    sqlite3_errmsg(database));
+        *failure_code = sqlite3_errcode(database);
+        *failure_message = g_strdup(sqlite3_errmsg(database));
         g_array_unref(rows);
         rows = NULL;
     }
     sqlite3_finalize(statement);
     sqlite3_close(database);
     return rows;
+}
+
+static GArray *read_rows(const char *path, GError **error) {
+    int failure_code = SQLITE_OK;
+    char *failure_message = NULL;
+    GArray *rows = read_rows_once(path, FALSE, &failure_code, &failure_message);
+    if (rows) return rows;
+
+    char *wal_path = g_strconcat(path, "-wal", NULL);
+    char *shm_path = g_strconcat(path, "-shm", NULL);
+    gboolean sidecars_missing = !g_file_test(wal_path, G_FILE_TEST_EXISTS) &&
+                                !g_file_test(shm_path, G_FILE_TEST_EXISTS);
+    g_free(shm_path);
+    g_free(wal_path);
+    if ((failure_code == SQLITE_CANTOPEN || failure_code == SQLITE_READONLY) && sidecars_missing) {
+        /* An idle WAL can leave the main file in WAL mode after both sidecars are removed. */
+        g_clear_pointer(&failure_message, g_free);
+        rows = read_rows_once(path, TRUE, &failure_code, &failure_message);
+        if (rows) return rows;
+    }
+    g_set_error(error,
+                G_IO_ERROR,
+                G_IO_ERROR_FAILED,
+                "SQLite error reading OpenCode Go usage: %s",
+                failure_message ? failure_message : "unknown error");
+    g_free(failure_message);
+    return NULL;
 }
 
 static gint days_in_month(gint year, gint month) {
@@ -418,6 +456,7 @@ static gboolean opencode_go_reset_at(json_object *object,
 
 static gboolean opencode_go_json_window(json_object *object,
                                         gint64 now_ms,
+                                        gboolean direct_percent_units,
                                         double *percent,
                                         gint64 *reset_seconds) {
     static const char *const percent_keys[] = {
@@ -448,7 +487,7 @@ static gboolean opencode_go_json_window(json_object *object,
         }
         if (!has_used || !has_limit || limit <= 0) return FALSE;
         *percent = used / limit * 100.0;
-    } else if (*percent >= 0 && *percent <= 1.0) {
+    } else if (!direct_percent_units && *percent >= 0 && *percent <= 1.0) {
         *percent *= 100.0;
     }
     *percent = CLAMP(*percent, 0.0, 100.0);
@@ -477,7 +516,11 @@ static void opencode_go_collect_windows(json_object *value,
     if (json_object_is_type(value, json_type_object)) {
         double percent = 0;
         gint64 reset = 0;
-        if (opencode_go_json_window(value, now_ms, &percent, &reset)) {
+        gboolean api_percent_units = path &&
+                                     (g_str_has_prefix(path, "usage.rolling") ||
+                                      g_str_has_prefix(path, "usage.weekly") ||
+                                      g_str_has_prefix(path, "usage.monthly"));
+        if (opencode_go_json_window(value, now_ms, api_percent_units, &percent, &reset)) {
             WebWindowCandidate *candidate = g_new0(WebWindowCandidate, 1);
             candidate->percent = percent;
             candidate->reset_seconds = reset;

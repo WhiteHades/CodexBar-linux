@@ -1,0 +1,1 @@
+session_loop{thread_id=priority-thread}: Submission sub=Submission { id: "priority-turn", op: UserInput { text: "private fixture prompt" }, thread_settings: ThreadSettingsOverrides { service_tier: Some(Some("priority")) } }

@@ -36,6 +36,8 @@ struct CodexBarRuntime {
     GHashTable *session_states;
     GHashTable *warning_states;
     GHashTable *failure_states;
+    GHashTable *command_code_monthly_states;
+    CodexBarProvider *last_good_claude;
     CodexBarHistoryStore *history;
 };
 
@@ -66,6 +68,14 @@ typedef struct {
     guint64 fired_low;
     guint64 fired_high;
 } WarningState;
+
+typedef struct {
+    gboolean confirmed_paid_depletion;
+    gboolean has_reset;
+    gint64 reset_ms;
+    gint64 window_minutes;
+    char *reset_description;
+} CommandCodeMonthlyState;
 
 static CodexBarSnapshot *default_usage_fetcher(GCancellable *cancellable,
                                                gpointer user_data,
@@ -98,6 +108,12 @@ static void hook_dispatch_free(HookDispatch *dispatch) {
 static void session_state_free(SessionState *state) {
     if (!state) return;
     codexbar_session_quota_state_clear(&state->state);
+    g_free(state);
+}
+
+static void command_code_monthly_state_free(CommandCodeMonthlyState *state) {
+    if (!state) return;
+    g_free(state->reset_description);
     g_free(state);
 }
 
@@ -156,6 +172,8 @@ CodexBarRuntime *codexbar_runtime_new_with_transports(CodexBarRuntimeUsageFetche
         g_str_hash, g_str_equal, g_free, (GDestroyNotify)session_state_free);
     runtime->warning_states = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     runtime->failure_states = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    runtime->command_code_monthly_states = g_hash_table_new_full(
+        g_str_hash, g_str_equal, g_free, (GDestroyNotify)command_code_monthly_state_free);
     runtime->history = codexbar_history_store_new(NULL);
     return runtime;
 }
@@ -179,6 +197,8 @@ void codexbar_runtime_free(CodexBarRuntime *runtime) {
     g_hash_table_unref(runtime->session_states);
     g_hash_table_unref(runtime->warning_states);
     g_hash_table_unref(runtime->failure_states);
+    g_hash_table_unref(runtime->command_code_monthly_states);
+    codexbar_provider_free(runtime->last_good_claude);
     codexbar_history_store_free(runtime->history);
     g_free(runtime->config_digest);
     g_mutex_clear(&runtime->lock);
@@ -258,6 +278,7 @@ static void reconcile_config_revision(CodexBarRuntime *runtime, const char *dige
         g_hash_table_remove_all(runtime->session_states);
         g_hash_table_remove_all(runtime->warning_states);
         g_hash_table_remove_all(runtime->failure_states);
+        g_hash_table_remove_all(runtime->command_code_monthly_states);
     }
     g_free(runtime->config_digest);
     runtime->config_digest = g_strdup(digest);
@@ -519,11 +540,88 @@ static char *transition_lane_key(const CodexBarProvider *provider) {
     return g_strjoin("\x1f", provider->provider, account ? account : "", NULL);
 }
 
+static gboolean usage_extension_boolean(const CodexBarProvider *provider, const char *key) {
+    json_object *value = NULL;
+    return provider->usage_extensions &&
+           json_object_object_get_ex(provider->usage_extensions, key, &value) &&
+           json_object_is_type(value, json_type_boolean) && json_object_get_boolean(value);
+}
+
+static CodexBarQuotaWindow *quota_window_by_id(CodexBarProvider *provider, const char *id) {
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
+        if (g_str_equal(window->id, id)) return window;
+    }
+    return NULL;
+}
+
+static gboolean crof_credits_only(const CodexBarProvider *provider) {
+    if (!g_str_equal(provider->provider, "crof") || provider->quota_windows->len != 1) return FALSE;
+    const CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, 0);
+    return !window->has_window_minutes &&
+           (g_str_equal(window->id, "balance") || g_ascii_strcasecmp(window->title, "balance") == 0);
+}
+
+static void stabilize_command_code_monthly(CodexBarRuntime *runtime, CodexBarProvider *provider) {
+    if (!g_str_equal(provider->provider, "commandcode") || provider->error) return;
+    const char *account = provider_account_key(provider);
+    char *key = g_strjoin("\x1f",
+                          provider->provider,
+                          account ? account : "",
+                          provider->source ? provider->source : "",
+                          NULL);
+    char *scoped_key = g_strjoin("\x1f",
+                                 key,
+                                 provider->runtime_scope ? provider->runtime_scope : "",
+                                 NULL);
+    g_free(key);
+    key = scoped_key;
+    CodexBarQuotaWindow *monthly = quota_window_by_id(provider, "tertiary");
+    gboolean unavailable = usage_extension_boolean(
+        provider, "commandCodeSubscriptionEnrichmentUnavailable");
+    gboolean has_plan = usage_extension_boolean(provider, "commandCodeHasSubscriptionPlan");
+    gboolean depleted = usage_extension_boolean(provider, "commandCodeMonthlyGrantDepleted");
+    g_mutex_lock(&runtime->lock);
+    CommandCodeMonthlyState *state = g_hash_table_lookup(runtime->command_code_monthly_states, key);
+    if (!state) {
+        state = g_new0(CommandCodeMonthlyState, 1);
+        g_hash_table_insert(runtime->command_code_monthly_states, g_strdup(key), state);
+    }
+    if (unavailable && depleted && state->confirmed_paid_depletion) {
+        if (!monthly) {
+            monthly = codexbar_quota_window_new("tertiary", "Monthly credits");
+            monthly->usage_known = TRUE;
+            codexbar_provider_add_quota_window(provider, monthly);
+        }
+        monthly->used_percent = 100;
+        monthly->has_resets_at = state->has_reset;
+        monthly->resets_at_ms = state->reset_ms;
+        monthly->has_window_minutes = state->window_minutes > 0;
+        monthly->window_minutes = state->window_minutes;
+        g_free(monthly->reset_description);
+        monthly->reset_description = g_strdup(state->reset_description);
+    } else if (!unavailable) {
+        state->confirmed_paid_depletion = has_plan && depleted && monthly && monthly->used_percent >= 100;
+        state->has_reset = state->confirmed_paid_depletion && monthly->has_resets_at;
+        state->reset_ms = state->has_reset ? monthly->resets_at_ms : 0;
+        state->window_minutes = state->confirmed_paid_depletion && monthly->has_window_minutes
+                                    ? monthly->window_minutes
+                                    : 0;
+        g_free(state->reset_description);
+        state->reset_description = state->confirmed_paid_depletion
+                                       ? g_strdup(monthly->reset_description)
+                                       : NULL;
+    }
+    g_mutex_unlock(&runtime->lock);
+    g_free(key);
+}
+
 static CodexBarQuotaWindow *session_window(const CodexBarProvider *provider) {
     if (!provider->quota_windows || provider->quota_windows->len == 0 ||
         g_str_equal(provider->provider, "mimo") || g_str_equal(provider->provider, "qoder")) {
         return NULL;
     }
+    if (crof_credits_only(provider)) return NULL;
     if (g_str_equal(provider->provider, "antigravity")) {
         CodexBarQuotaWindow *selected = NULL;
         for (guint index = 0; index < provider->quota_windows->len; index++) {
@@ -720,6 +818,7 @@ static void dispatch_quota_low_transitions(CodexBarRuntime *runtime,
                                            json_object *warnings,
                                            const CodexBarProvider *provider) {
     gboolean hook_enabled = has_hook_rule(hooks, "quota_low", provider->provider);
+    if (crof_credits_only(provider)) return;
     for (guint index = 0; index < provider->quota_windows->len; index++) {
         CodexBarQuotaWindow *window = g_ptr_array_index(provider->quota_windows, index);
         if (!window->usage_known) continue;
@@ -840,6 +939,115 @@ static void attach_status(CodexBarSnapshot *snapshot,
     }
 }
 
+static gboolean claude_limits_unavailable(const CodexBarProvider *provider) {
+    return provider && provider->note && g_str_equal(provider->note, "Limits unavailable");
+}
+
+static gboolean claude_terminal_cli_transient(const CodexBarProvider *provider) {
+    return provider && provider->error && g_str_equal(provider->source, "cli") && provider->error_kind &&
+           (g_str_equal(provider->error_kind, "parse") || g_str_equal(provider->error_kind, "rateLimit"));
+}
+
+static CodexBarProvider *provider_copy(const CodexBarProvider *provider) {
+    if (!provider) return NULL;
+    CodexBarProvider *copy = codexbar_provider_new();
+    copy->provider = g_strdup(provider->provider);
+    copy->account = g_strdup(provider->account);
+    copy->plan = g_strdup(provider->plan);
+    copy->source = g_strdup(provider->source);
+    copy->dashboard_url = g_strdup(provider->dashboard_url);
+    copy->note = g_strdup(provider->note);
+    copy->error = g_strdup(provider->error);
+    copy->error_code = provider->error_code;
+    copy->error_kind = g_strdup(provider->error_kind);
+    copy->has_subscription_expires_at = provider->has_subscription_expires_at;
+    copy->subscription_expires_at_ms = provider->subscription_expires_at_ms;
+    copy->has_subscription_renews_at = provider->has_subscription_renews_at;
+    copy->subscription_renews_at_ms = provider->subscription_renews_at_ms;
+    copy->has_updated_at = provider->has_updated_at;
+    copy->updated_at_ms = provider->updated_at_ms;
+    copy->explicit_quota_slots = provider->explicit_quota_slots;
+    copy->has_credits_updated_at = provider->has_credits_updated_at;
+    copy->credits_updated_at_ms = provider->credits_updated_at_ms;
+    copy->runtime_scope = g_strdup(provider->runtime_scope);
+    if (provider->identity) {
+        copy->identity = g_new0(CodexBarProviderIdentity, 1);
+        copy->identity->organization = g_strdup(provider->identity->organization);
+        copy->identity->account_id = g_strdup(provider->identity->account_id);
+        copy->identity->login_method = g_strdup(provider->identity->login_method);
+    }
+    if (provider->status) copy->status = status_copy(provider->status);
+    if (provider->provider_cost) {
+        copy->provider_cost = g_new0(CodexBarProviderCost, 1);
+        *copy->provider_cost = *provider->provider_cost;
+        copy->provider_cost->currency = g_strdup(provider->provider_cost->currency);
+        copy->provider_cost->period = g_strdup(provider->provider_cost->period);
+    }
+    if (provider->token_cost) {
+        copy->token_cost = g_new0(CodexBarTokenCost, 1);
+        *copy->token_cost = *provider->token_cost;
+        copy->token_cost->currency = g_strdup(provider->token_cost->currency);
+        copy->token_cost->history_label = g_strdup(provider->token_cost->history_label);
+    }
+    copy->credit_events = provider->credit_events ? json_object_get(provider->credit_events) : NULL;
+    copy->usage_extensions = provider->usage_extensions ? json_object_get(provider->usage_extensions) : NULL;
+    copy->raw = provider->raw ? json_object_get(provider->raw) : NULL;
+    for (guint index = 0; index < provider->quota_windows->len; index++) {
+        const CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, index);
+        CodexBarQuotaWindow *window_copy = codexbar_quota_window_new(window->id, window->title);
+        *window_copy = *window;
+        window_copy->id = g_strdup(window->id);
+        window_copy->output_id = g_strdup(window->output_id);
+        window_copy->title = g_strdup(window->title);
+        window_copy->detail = g_strdup(window->detail);
+        window_copy->reset_description = g_strdup(window->reset_description);
+        window_copy->pace = NULL;
+        if (window->pace) {
+            window_copy->pace = g_new0(CodexBarPace, 1);
+            *window_copy->pace = *window->pace;
+            window_copy->pace->summary = g_strdup(window->pace->summary);
+        }
+        codexbar_provider_add_quota_window(copy, window_copy);
+    }
+    for (guint index = 0; index < provider->balances->len; index++) {
+        const CodexBarBalance *balance = codexbar_provider_balance(provider, index);
+        CodexBarBalance *balance_copy = g_new0(CodexBarBalance, 1);
+        *balance_copy = *balance;
+        balance_copy->id = g_strdup(balance->id);
+        balance_copy->title = g_strdup(balance->title);
+        balance_copy->unit = g_strdup(balance->unit);
+        codexbar_provider_add_balance(copy, balance_copy);
+    }
+    return copy;
+}
+
+static void reconcile_claude_snapshot(CodexBarRuntime *runtime, CodexBarSnapshot *snapshot) {
+    g_mutex_lock(&runtime->lock);
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
+        if (!g_str_equal(provider->provider, "claude")) continue;
+        if (!provider->error) {
+            if (claude_limits_unavailable(provider) && !provider->token_cost && runtime->last_good_claude &&
+                runtime->last_good_claude->token_cost) {
+                CodexBarProvider *prior = provider_copy(runtime->last_good_claude);
+                provider->token_cost = prior->token_cost;
+                prior->token_cost = NULL;
+                codexbar_provider_free(prior);
+            }
+            codexbar_provider_free(runtime->last_good_claude);
+            runtime->last_good_claude = provider_copy(provider);
+        } else if (claude_terminal_cli_transient(provider) && runtime->last_good_claude) {
+            CodexBarProvider *preserved = provider_copy(runtime->last_good_claude);
+            g_ptr_array_index(snapshot->providers, index) = preserved;
+            codexbar_provider_free(provider);
+        } else {
+            codexbar_provider_free(runtime->last_good_claude);
+            runtime->last_good_claude = NULL;
+        }
+    }
+    g_mutex_unlock(&runtime->lock);
+}
+
 CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
                                         GCancellable *cancellable,
                                         GError **error) {
@@ -878,6 +1086,7 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
         g_ptr_array_unref(requests);
         return snapshot;
     }
+    reconcile_claude_snapshot(runtime, snapshot);
     for (guint index = 0; index < requests->len; index++) {
         StatusRequest *request = g_ptr_array_index(requests, index);
         CodexBarServiceStatus *fresh = request_status(request);
@@ -887,6 +1096,9 @@ CodexBarSnapshot *codexbar_runtime_fetch(CodexBarRuntime *runtime,
         codexbar_service_status_free(status);
     }
     codexbar_pace_attach_snapshot(snapshot, g_get_real_time() / 1000);
+    for (guint index = 0; index < snapshot->providers->len; index++) {
+        stabilize_command_code_monthly(runtime, g_ptr_array_index(snapshot->providers, index));
+    }
     dispatch_snapshot_hooks(runtime, hooks, warnings, snapshot);
     if (!environment_flag("CODEXBAR_DISABLE_HISTORY")) {
         codexbar_history_store_record(runtime->history,

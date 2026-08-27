@@ -275,6 +275,45 @@ static char *find_string(json_object *root, const char *const *keys) {
     return string_value(find_key(root, keys, 0));
 }
 
+static json_object *failing_success_frame(json_object *value, guint depth) {
+    if (!value || depth > 12) return NULL;
+    if (json_object_is_type(value, json_type_object)) {
+        json_object *success = member(value, "success");
+        if (!success) success = member(value, "Success");
+        if (success && json_object_is_type(success, json_type_boolean) && !json_object_get_boolean(success)) {
+            return value;
+        }
+        json_object_object_foreach(value, key, child) {
+            (void)key;
+            json_object *found = failing_success_frame(child, depth + 1);
+            if (found) return found;
+        }
+    } else if (json_object_is_type(value, json_type_array)) {
+        size_t count = json_object_array_length(value);
+        for (size_t index = 0; index < count; index++) {
+            json_object *found = failing_success_frame(json_object_array_get_idx(value, index), depth + 1);
+            if (found) return found;
+        }
+    }
+    return NULL;
+}
+
+static gboolean alibaba_authorization_error(const char *code, const char *message) {
+    char *combined = g_ascii_strdown(code ? code : "", -1);
+    char *lower_message = g_ascii_strdown(message ? message : "", -1);
+    char *text = g_strconcat(combined, " ", lower_message, NULL);
+    gboolean workspace = strstr(text, "workspace.notauthorised") || strstr(text, "workspace.notauthorized");
+    gboolean result = !workspace &&
+                      (strstr(text, "notauthorised") || strstr(text, "notauthorized") ||
+                       strstr(text, "not authorised") || strstr(text, "not authorized") ||
+                       strstr(text, "unauthorised") || strstr(text, "unauthorized") ||
+                       strstr(text, "access denied") || strstr(text, "forbidden"));
+    g_free(text);
+    g_free(lower_message);
+    g_free(combined);
+    return result;
+}
+
 static const char *const total_keys[] = {
     "totalQuota", "totalCredits", "quota", "creditLimit", "monthlyTotalQuota",
     "totalValue", "TotalValue", NULL};
@@ -330,11 +369,22 @@ CodexBarProvider *codexbar_alibaba_token_plan_parse(const char *json,
         return NULL;
     }
     if (success && json_object_is_type(success, json_type_boolean) && !json_object_get_boolean(success)) {
+        json_object *frame = failing_success_frame(root, 0);
+        const char *const error_code_keys[] = {"errorCode", "Code", "code", NULL};
+        const char *const error_message_keys[] = {"errorMsg", "Message", "message", "msg", NULL};
+        char *frame_code = find_string(frame ? frame : root, error_code_keys);
+        char *frame_message = find_string(frame ? frame : root, error_message_keys);
+        gboolean unauthorized = alibaba_authorization_error(frame_code, frame_message);
         g_free(message);
         g_free(code);
         json_object_put(root);
-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                            "Alibaba Token Plan request was unsuccessful");
+        g_set_error(error,
+                    G_IO_ERROR,
+                    unauthorized ? G_IO_ERROR_PERMISSION_DENIED : G_IO_ERROR_FAILED,
+                    "Alibaba Token Plan request failed: %s",
+                    frame_message ? frame_message : frame_code ? frame_code : "request was unsuccessful");
+        g_free(frame_message);
+        g_free(frame_code);
         return NULL;
     }
     double total = 0, remaining = 0, used = 0, count = 0;
@@ -393,8 +443,8 @@ static char *https_override(const char *raw) {
     char *candidate = strstr(raw, "://") ? g_strdup(raw) : g_strdup_printf("https://%s", raw);
     GUri *uri = g_uri_parse(candidate, G_URI_FLAGS_NONE, NULL);
     gboolean valid = uri && g_uri_get_scheme(uri) && g_uri_get_host(uri) &&
-                     g_ascii_strcasecmp(g_uri_get_scheme(uri), "https") == 0 &&
-                     !g_uri_get_userinfo(uri);
+                      g_ascii_strcasecmp(g_uri_get_scheme(uri), "https") == 0 &&
+                      !g_uri_get_userinfo(uri) && !g_uri_get_query(uri) && !g_uri_get_fragment(uri);
     if (uri) g_uri_unref(uri);
     if (valid) return candidate;
     g_free(candidate);
@@ -431,6 +481,343 @@ static CodexBarHttpResponse *alibaba_request(const char *url,
     return send_request(&request, transport, error);
 }
 
+static gboolean alibaba_personal_region(const CodexBarProviderConfig *config) {
+    return config && config->region &&
+           (g_str_equal(config->region, "intl-personal") || g_str_equal(config->region, "cn-personal"));
+}
+
+static gboolean alibaba_china_region(const CodexBarProviderConfig *config) {
+    return config && config->region &&
+           (g_str_equal(config->region, "cn") || g_str_equal(config->region, "cn-personal"));
+}
+
+static char *alibaba_html_sec_token(const char *html, size_t length) {
+    if (!html || !length || length > WEB5_RESPONSE_LIMIT || memchr(html, '\0', length)) return NULL;
+    char *document = g_strndup(html, length);
+    static const char *const patterns[] = {
+        "SEC_TOKEN\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        "SEC_TOKEN\\s*:\\s*'([^']+)'",
+        "secToken\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        "\\\"secToken\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"",
+        NULL,
+    };
+    char *token = NULL;
+    for (size_t index = 0; patterns[index] && !token; index++) {
+        GRegex *regex = g_regex_new(patterns[index], 0, 0, NULL);
+        GMatchInfo *match = NULL;
+        if (regex && g_regex_match(regex, document, 0, &match)) token = g_match_info_fetch(match, 1);
+        if (match) g_match_info_free(match);
+        if (regex) g_regex_unref(regex);
+    }
+    g_free(document);
+    return token;
+}
+
+static char *alibaba_user_info_sec_token(const char *origin,
+                                         const char *cookie,
+                                         CodexBarWebProviders5Transport transport,
+                                         GCancellable *cancellable) {
+    char *url = g_strdup_printf("%s/tool/user/info.json", origin);
+    CodexBarHttpResponse *response = alibaba_request(
+        url, "GET", cookie, origin, origin, NULL, NULL, 10, transport, cancellable, NULL);
+    g_free(url);
+    if (!response || response->status != 200) {
+        codexbar_http_response_free(response);
+        return NULL;
+    }
+    json_object *parsed = parse_json(response->body, response->body_length);
+    json_object *root = parsed ? expand_tree(parsed, 0) : NULL;
+    if (parsed) json_object_put(parsed);
+    const char *const keys[] = {"secToken", "sec_token", NULL};
+    char *token = root ? find_string(root, keys) : NULL;
+    if (root) json_object_put(root);
+    codexbar_http_response_free(response);
+    return token;
+}
+
+static char *alibaba_personal_body(const char *api,
+                                   const char *commodity,
+                                   const char *cookie,
+                                   const char *sec_token,
+                                   gboolean china,
+                                   const char *dashboard) {
+    char *trace = g_uuid_string_random();
+    json_object *params = json_object_new_object();
+    json_object_object_add(params, "Api", json_object_new_string(api));
+    json_object_object_add(params, "V", json_object_new_string("1.0"));
+    json_object *data = json_object_new_object();
+    if (commodity) json_object_object_add(data, "commodityCode", json_object_new_string(commodity));
+    json_object *cornerstone = json_object_new_object();
+    json_object_object_add(cornerstone, "feTraceId", json_object_new_string(trace));
+    json_object_object_add(cornerstone, "feURL", json_object_new_string(dashboard));
+    json_object_object_add(cornerstone, "protocol", json_object_new_string("V2"));
+    json_object_object_add(cornerstone, "console", json_object_new_string("ONE_CONSOLE"));
+    json_object_object_add(cornerstone, "productCode", json_object_new_string("p_efm"));
+    json_object_object_add(cornerstone, "switchUserType", json_object_new_int(3));
+    json_object_object_add(cornerstone,
+                           "domain",
+                           json_object_new_string(china ? "bailian.console.aliyun.com"
+                                                        : "modelstudio.console.alibabacloud.com"));
+    json_object_object_add(cornerstone,
+                           "consoleSite",
+                           json_object_new_string(china ? "BAILIAN_ALIYUN" : "MODELSTUDIO_ALBABACLOUD"));
+    json_object_object_add(cornerstone, "userNickName", json_object_new_string(""));
+    json_object_object_add(cornerstone, "userPrincipalName", json_object_new_string(""));
+    json_object_object_add(cornerstone, "xsp_lang", json_object_new_string("en-US"));
+    char *anonymous = cookie_value(cookie, "cna");
+    if (anonymous) json_object_object_add(cornerstone, "X-Anonymous-Id", json_object_new_string(anonymous));
+    json_object_object_add(data, "cornerstoneParam", cornerstone);
+    json_object_object_add(params, "Data", data);
+    const char *params_json = json_object_to_json_string_ext(params, JSON_C_TO_STRING_PLAIN);
+    char *escaped = g_uri_escape_string(params_json, NULL, TRUE);
+    char *escaped_sec = sec_token ? g_uri_escape_string(sec_token, NULL, TRUE) : NULL;
+    char *escaped_action = g_uri_escape_string(
+        china ? "BroadScopeAspnGateway" : "IntlBroadScopeAspnGateway", NULL, TRUE);
+    char *escaped_region = g_uri_escape_string(china ? "cn-beijing" : "ap-southeast-1", NULL, TRUE);
+    char *body = g_strdup_printf("product=sfm_bailian&action=%s&region=%s&language=en-US&params=%s%s%s",
+                                 escaped_action,
+                                 escaped_region,
+                                 escaped,
+                                 escaped_sec ? "&sec_token=" : "",
+                                 escaped_sec ? escaped_sec : "");
+    g_free(escaped_region);
+    g_free(escaped_action);
+    g_free(escaped_sec);
+    g_free(escaped);
+    g_free(anonymous);
+    json_object_put(params);
+    g_free(trace);
+    return body;
+}
+
+static CodexBarHttpResponse *alibaba_personal_api(const char *base,
+                                                  const char *api,
+                                                  const char *commodity,
+                                                  const char *cookie,
+                                                  const char *sec_token,
+                                                  const char *csrf,
+                                                  gboolean china,
+                                                  const char *origin,
+                                                  const char *dashboard,
+                                                  CodexBarWebProviders5Transport transport,
+                                                  GCancellable *cancellable,
+                                                  GError **error) {
+    char *url = g_strdup_printf("%s/data/api.json?action=%s&product=sfm_bailian&api=%s&_v=undefined",
+                                base,
+                                china ? "BroadScopeAspnGateway" : "IntlBroadScopeAspnGateway",
+                                api);
+    char *body = alibaba_personal_body(api, commodity, cookie, sec_token, china, dashboard);
+    CodexBarHttpResponse *response = alibaba_request(
+        url, "POST", cookie, origin, dashboard, body, csrf, 20, transport, cancellable, error);
+    g_free(body);
+    g_free(url);
+    return response;
+}
+
+static char *personal_plan_name(json_object *root) {
+    const char *const plan_keys[] = {"specCode", "spec_code", "planName", "plan_name", NULL};
+    char *plan = find_string(root, plan_keys);
+    if (!plan) return g_strdup("Personal");
+    char *lower = g_ascii_strdown(plan, -1);
+    if (g_str_equal(lower, "lite") || g_str_equal(lower, "standard") ||
+        g_str_equal(lower, "pro") || g_str_equal(lower, "max")) {
+        plan[0] = (char)g_ascii_toupper((guchar)plan[0]);
+    }
+    g_free(lower);
+    return plan;
+}
+
+static CodexBarProvider *alibaba_personal_parse(const char *usage_json,
+                                                const char *subscription_json,
+                                                const char *quota_json,
+                                                gint64 now_ms,
+                                                GError **error) {
+    json_object *usage_parsed = parse_json(usage_json, strlen(usage_json));
+    json_object *usage = usage_parsed ? expand_tree(usage_parsed, 0) : NULL;
+    if (usage_parsed) json_object_put(usage_parsed);
+    json_object *failure = failing_success_frame(usage, 0);
+    if (failure) {
+        const char *const code_keys[] = {"errorCode", "Code", "code", NULL};
+        const char *const message_keys[] = {"errorMsg", "Message", "message", "msg", NULL};
+        char *code = find_string(failure, code_keys);
+        char *message = find_string(failure, message_keys);
+        char *lower = g_ascii_strdown(message ? message : code ? code : "", -1);
+        gboolean login = strstr(lower, "login") || strstr(lower, "token");
+        gboolean unauthorized = alibaba_authorization_error(code, message);
+        g_set_error(error,
+                    G_IO_ERROR,
+                    login || unauthorized ? G_IO_ERROR_PERMISSION_DENIED : G_IO_ERROR_FAILED,
+                    "Alibaba Token Plan Personal request failed: %s",
+                    message ? message : code ? code : "request was unsuccessful");
+        g_free(lower);
+        g_free(message);
+        g_free(code);
+        json_object_put(usage);
+        return NULL;
+    }
+    const char *const five_keys[] = {"per5HourPercentage", NULL};
+    const char *const week_keys[] = {"per1WeekPercentage", NULL};
+    double five_ratio = 0, week_ratio = 0;
+    gboolean has_five = usage && find_number(usage, five_keys, &five_ratio);
+    gboolean has_week = usage && find_number(usage, week_keys, &week_ratio);
+    if (!usage || (!has_five && !has_week)) {
+        if (usage) json_object_put(usage);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK,
+                            "Alibaba Token Plan Personal usage is temporarily unavailable; it will refresh automatically");
+        return NULL;
+    }
+    json_object *subscription_parsed = subscription_json ? parse_json(subscription_json, strlen(subscription_json)) : NULL;
+    json_object *subscription = subscription_parsed ? expand_tree(subscription_parsed, 0) : NULL;
+    if (subscription_parsed) json_object_put(subscription_parsed);
+    char *plan = personal_plan_name(subscription);
+    json_object *quota_parsed = quota_json ? parse_json(quota_json, strlen(quota_json)) : NULL;
+    json_object *quota = quota_parsed ? expand_tree(quota_parsed, 0) : NULL;
+    if (quota_parsed) json_object_put(quota_parsed);
+    char *plan_lower = g_ascii_strdown(plan, -1);
+    const char *plan_keys[] = {plan_lower, NULL};
+    json_object *plan_quota = quota ? find_key(quota, plan_keys, 0) : NULL;
+    double five_total = 0, week_total = 0;
+    const char *const five_total_keys[] = {"five_hour", "fiveHour", NULL};
+    const char *const week_total_keys[] = {"weekly", NULL};
+    gboolean has_five_total = find_number(plan_quota, five_total_keys, &five_total);
+    gboolean has_week_total = find_number(plan_quota, week_total_keys, &week_total);
+    CodexBarProvider *provider = new_provider("alibabatokenplan", now_ms);
+    provider->plan = plan;
+    provider->explicit_quota_slots = TRUE;
+    if (has_five) {
+        gint64 reset_ms = 0;
+        gboolean has_reset = timestamp(find_key(usage, (const char *const[]){"per5HourResetTime", NULL}, 0),
+                                       &reset_ms);
+        CodexBarQuotaWindow *window = codexbar_quota_window_new("primary", "5-hour");
+        window->usage_known = TRUE;
+        window->used_percent = CLAMP(five_ratio * 100.0, 0.0, 100.0);
+        window->has_window_minutes = TRUE;
+        window->window_minutes = 300;
+        window->has_resets_at = has_reset;
+        window->resets_at_ms = reset_ms;
+        if (has_five_total) window->detail = g_strdup_printf("%.0f / %.0f credits used",
+                                                             five_total * five_ratio, five_total);
+        codexbar_provider_add_quota_window(provider, window);
+    }
+    if (has_week) {
+        gint64 reset_ms = 0;
+        gboolean has_reset = timestamp(find_key(usage, (const char *const[]){"per1WeekResetTime", NULL}, 0),
+                                       &reset_ms);
+        CodexBarQuotaWindow *window = codexbar_quota_window_new("secondary", "7-day");
+        window->usage_known = TRUE;
+        window->used_percent = CLAMP(week_ratio * 100.0, 0.0, 100.0);
+        window->has_window_minutes = TRUE;
+        window->window_minutes = 10080;
+        window->has_resets_at = has_reset;
+        window->resets_at_ms = reset_ms;
+        if (has_week_total) window->detail = g_strdup_printf("%.0f / %.0f credits used",
+                                                             week_total * week_ratio, week_total);
+        codexbar_provider_add_quota_window(provider, window);
+    }
+    g_free(plan_lower);
+    if (quota) json_object_put(quota);
+    if (subscription) json_object_put(subscription);
+    json_object_put(usage);
+    return provider;
+}
+
+static CodexBarProvider *alibaba_personal_fetch(const CodexBarProviderConfig *config,
+                                                const char *cookie,
+                                                CodexBarWebProviders5Transport transport,
+                                                GCancellable *cancellable,
+                                                gint64 now_ms,
+                                                GError **error) {
+    gboolean china = alibaba_china_region(config);
+    const char *default_origin = china ? "https://bailian.console.aliyun.com"
+                                       : "https://modelstudio.console.alibabacloud.com";
+    const char *default_base = china ? "https://bailian-cs.console.aliyun.com"
+                                     : "https://bailian-singapore-cs.alibabacloud.com";
+    const char *raw_host_override = g_getenv("ALIBABA_TOKEN_PLAN_HOST");
+    const char *raw_quota_override = g_getenv("ALIBABA_TOKEN_PLAN_QUOTA_URL");
+    char *origin_override = https_override(raw_host_override);
+    char *quota_override = https_override(raw_quota_override);
+    if ((raw_host_override && raw_host_override[0] && !origin_override) ||
+        (raw_quota_override && raw_quota_override[0] && !quota_override)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                            "Alibaba Token Plan overrides must use HTTPS hosts without query or fragment");
+        g_free(quota_override);
+        g_free(origin_override);
+        return NULL;
+    }
+    const char *origin = origin_override ? origin_override : default_origin;
+    const char *base = quota_override ? quota_override : origin_override ? origin_override : default_base;
+    char *dashboard = g_strdup_printf(
+        china ? "%s/cn-beijing?tab=plan#/efm/subscription/token-plan/personal"
+              : "%s/ap-southeast-1/?tab=plan#/efm/subscription/token-plan/personal",
+        origin);
+    char *cookie_sec_token = cookie_value(cookie, "sec_token");
+    char *sec_token = NULL;
+    CodexBarHttpResponse *dashboard_response = alibaba_request(
+        dashboard, "GET", cookie, origin, dashboard, NULL, NULL, 10, transport, cancellable, NULL);
+    if (dashboard_response && dashboard_response->status == 200) {
+        char *fresh = alibaba_html_sec_token(dashboard_response->body, dashboard_response->body_length);
+        if (fresh) g_free(sec_token), sec_token = fresh;
+    }
+    codexbar_http_response_free(dashboard_response);
+    if (!sec_token) {
+        sec_token = alibaba_user_info_sec_token(origin, cookie, transport, cancellable);
+    }
+    if (!sec_token) sec_token = g_steal_pointer(&cookie_sec_token);
+    g_free(cookie_sec_token);
+    char *csrf = cookie_value(cookie, "login_aliyunid_csrf");
+    if (!csrf) csrf = cookie_value(cookie, "csrf");
+    const char *usage_api = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage";
+    const char *subscription_api = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/subscription";
+    const char *quota_api = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/quota-config";
+    CodexBarHttpResponse *usage = alibaba_personal_api(
+        base, usage_api, NULL, cookie, sec_token, csrf, china, origin, dashboard, transport, cancellable, error);
+    if (!usage) {
+        g_free(csrf);
+        g_free(sec_token);
+        g_free(dashboard);
+        g_free(quota_override);
+        g_free(origin_override);
+        return NULL;
+    }
+    const char *commodity = china ? "sfm_tokenplansolo_public_cn" : "sfm_tokenplansolo_public_intl";
+    CodexBarHttpResponse *subscription = alibaba_personal_api(
+        base, subscription_api, commodity, cookie, sec_token, csrf, china, origin, dashboard,
+        transport, cancellable, NULL);
+    CodexBarHttpResponse *quota = alibaba_personal_api(
+        base, quota_api, NULL, cookie, sec_token, csrf, china, origin, dashboard,
+        transport, cancellable, NULL);
+    CodexBarProvider *provider = NULL;
+    for (guint attempt = 0; attempt < 3 && !provider; attempt++) {
+        GError *parse_error = NULL;
+        provider = alibaba_personal_parse(
+            usage->body, subscription ? subscription->body : NULL, quota ? quota->body : NULL, now_ms, &parse_error);
+        if (provider) {
+            g_clear_error(&parse_error);
+            break;
+        }
+        gboolean retryable = g_error_matches(parse_error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
+        if (!retryable || attempt == 2 || (cancellable && g_cancellable_is_cancelled(cancellable))) {
+            g_propagate_error(error, parse_error);
+            break;
+        }
+        g_clear_error(&parse_error);
+        codexbar_http_response_free(usage);
+        usage = alibaba_personal_api(
+            base, usage_api, NULL, cookie, sec_token, csrf, china, origin, dashboard,
+            transport, cancellable, error);
+        if (!usage) break;
+    }
+    codexbar_http_response_free(quota);
+    codexbar_http_response_free(subscription);
+    codexbar_http_response_free(usage);
+    g_free(csrf);
+    g_free(sec_token);
+    g_free(dashboard);
+    g_free(quota_override);
+    g_free(origin_override);
+    return provider;
+}
+
 CodexBarProvider *codexbar_alibaba_token_plan_fetch_with_transport_and_cancellable(
     const CodexBarProviderConfig *config,
     CodexBarWebProviders5Transport transport,
@@ -443,7 +830,13 @@ CodexBarProvider *codexbar_alibaba_token_plan_fetch_with_transport_and_cancellab
                             "Alibaba Token Plan cookie is missing");
         return NULL;
     }
-    gboolean china = config && config->region && g_ascii_strcasecmp(config->region, "cn") == 0;
+    if (alibaba_personal_region(config)) {
+        CodexBarProvider *provider = alibaba_personal_fetch(
+            config, cookie, transport, cancellable, now_ms, error);
+        g_free(cookie);
+        return provider;
+    }
+    gboolean china = alibaba_china_region(config);
     const char *default_origin = china ? "https://bailian.console.aliyun.com"
                                        : "https://modelstudio.console.alibabacloud.com";
     const char *raw_host_override = g_getenv("ALIBABA_TOKEN_PLAN_HOST");
@@ -623,7 +1016,12 @@ CodexBarProvider *codexbar_mimo_parse(const char *balance_json,
         if (number(member(item, "used"), &used) && number(member(item, "limit"), &limit) &&
             number(member(item, "percent"), &fraction) && used >= 0 && limit > 0 && fraction >= 0) {
             add_window(provider, "Monthly token plan", used, limit, reset_ms, has_reset);
-            codexbar_provider_quota_window(provider, 0)->used_percent = CLAMP(fraction * 100, 0, 100);
+            CodexBarQuotaWindow *window = codexbar_provider_quota_window(provider, 0);
+            window->used_percent = CLAMP(fraction * 100, 0, 100);
+            if (has_reset) {
+                window->has_window_minutes = TRUE;
+                window->window_minutes = 30 * 24 * 60;
+            }
         }
     }
     if (usage_root) json_object_put(usage_root);

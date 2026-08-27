@@ -91,6 +91,8 @@ core_sources = files(
 )
 
 core_deps = [glib_dep, gio_dep, json_dep, curl_dep, sqlite_dep, math_dep]
+util_dep = meson.get_compiler('c').find_library('util')
+core_deps += util_dep
 
 process_supervisor = executable(
   'codexbar-process-supervisor',
@@ -163,9 +165,9 @@ test('codexbar-linux', test_executable, env: normalized_test_env, depends: proce
 
 refresh_test = executable(
   'codexbar-linux-refresh-tests',
-  files('tests/test_refresh.c', 'src/refresh_coordinator.c', 'src/refresh_policy.c'),
+  files('tests/test_refresh.c', 'src/refresh_coordinator.c', 'src/refresh_policy.c', 'src/model.c'),
   include_directories: source_includes,
-  dependencies: [glib_dep],
+  dependencies: [glib_dep, json_dep, math_dep],
 )
 test('codexbar-linux-refresh', refresh_test, env: normalized_test_env)
 
@@ -290,16 +292,26 @@ test(
 )
 
 cost_cli_test = find_program('tests/test_cost_cli.sh')
-test('codexbar-linux-cost-cli', cost_cli_test, args: [codexbar_linux], depends: process_supervisor)
+test(
+  'codexbar-linux-cost-cli',
+  cost_cli_test,
+  args: [codexbar_linux, meson.project_source_root() / 'fixtures/native/local-parity', find_program('python3')],
+  depends: process_supervisor,
+)
 
 sessions_cli_test = find_program('tests/test_sessions_cli.sh')
-test('codexbar-linux-sessions-cli', sessions_cli_test, args: [codexbar_linux], depends: process_supervisor)
+test(
+  'codexbar-linux-sessions-cli',
+  sessions_cli_test,
+  args: [codexbar_linux, meson.project_source_root() / 'fixtures/native/local-parity', find_program('python3')],
+  depends: process_supervisor,
+)
 
 remote_sessions_test = executable(
   'codexbar-linux-remote-sessions-tests',
   files('tests/test_remote_sessions.c', 'src/sessions.c', 'src/process.c'),
   include_directories: source_includes,
-  dependencies: [glib_dep, gio_dep, json_dep],
+  dependencies: [glib_dep, gio_dep, json_dep, sqlite_dep],
 )
 test('codexbar-linux-remote-sessions', remote_sessions_test, env: normalized_test_env)
 
@@ -351,6 +363,14 @@ fireworks_test = executable(
   dependencies: core_deps,
 )
 test('codexbar-linux-fireworks', fireworks_test, env: normalized_test_env)
+
+codex_pat_test = executable(
+  'codexbar-linux-codex-pat-tests',
+  files('tests/test_codex_pat.c', 'src/codex.c', 'src/http.c', 'src/model.c'),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-codex-pat', codex_pat_test, env: normalized_test_env)
 
 ibmbob_test = executable(
   'codexbar-linux-ibmbob-tests',
@@ -627,6 +647,21 @@ opencode_go_test = executable(
 )
 test('codexbar-linux-opencode-go', opencode_go_test, env: normalized_test_env)
 
+billing_parity_test = executable(
+  'codexbar-linux-billing-parity-tests',
+  files(
+    'tests/test_billing_parity.c',
+    'src/codex.c',
+    'src/openrouter.c',
+    'src/http.c',
+    'src/model.c',
+    'src/token_accounts.c',
+  ),
+  include_directories: source_includes,
+  dependencies: core_deps,
+)
+test('codexbar-linux-billing-parity', billing_parity_test, env: normalized_test_env)
+
 diagnose_cli_test = find_program('tests/test_diagnose_cli.sh')
 test(
   'codexbar-linux-diagnose-cli',
@@ -702,7 +737,7 @@ process_test = executable(
   'codexbar-linux-process-tests',
   files('src/process.c', 'tests/test_process.c'),
   include_directories: source_includes,
-  dependencies: [glib_dep, gio_dep],
+  dependencies: [glib_dep, gio_dep, util_dep],
 )
 test('codexbar-linux-process', process_test, env: normalized_test_env, depends: process_supervisor)
 

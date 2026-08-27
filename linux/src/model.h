@@ -59,6 +59,11 @@ typedef struct {
 } CodexBarQuotaWindow;
 
 typedef struct {
+    CodexBarQuotaWindow window;
+    char *owned_reset_description;
+} CodexBarQuotaWindowProjection;
+
+typedef struct {
     char *id;
     char *title;
     double remaining;
@@ -154,6 +159,7 @@ typedef struct {
     json_object *credit_events;
     json_object *usage_extensions;
     json_object *raw;
+    char *runtime_scope;
     GPtrArray *quota_windows;
     GPtrArray *balances;
 } CodexBarProvider;
@@ -170,6 +176,12 @@ CodexBarProvider *codexbar_provider_new(void);
 CodexBarQuotaWindow *codexbar_quota_window_new(const char *id, const char *title);
 void codexbar_provider_add_quota_window(CodexBarProvider *provider, CodexBarQuotaWindow *window);
 CodexBarQuotaWindow *codexbar_provider_quota_window(const CodexBarProvider *provider, guint index);
+const CodexBarQuotaWindow *codexbar_provider_projected_quota_window(
+    const CodexBarProvider *provider,
+    guint index,
+    gint64 now_ms,
+    CodexBarQuotaWindowProjection *projection);
+void codexbar_quota_window_projection_clear(CodexBarQuotaWindowProjection *projection);
 void codexbar_pace_free(CodexBarPace *pace);
 void codexbar_quota_window_free(CodexBarQuotaWindow *window);
 CodexBarBalance *codexbar_balance_new(const char *id, const char *title, double remaining, const char *unit);

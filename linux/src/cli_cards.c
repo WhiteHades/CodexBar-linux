@@ -230,7 +230,11 @@ static GPtrArray *make_card(const CodexBarProvider *provider, gboolean include_c
     if (provider->note && provider->note[0] != '\0') card_line(lines, provider->note);
 
     for (guint index = 0; index < provider->quota_windows->len; index++) {
-        add_quota_lines(lines, g_ptr_array_index(provider->quota_windows, index));
+        CodexBarQuotaWindowProjection projection = {0};
+        const CodexBarQuotaWindow *window = codexbar_provider_projected_quota_window(
+            provider, index, g_get_real_time() / 1000, &projection);
+        add_quota_lines(lines, window);
+        codexbar_quota_window_projection_clear(&projection);
     }
     if (provider->provider_cost) {
         char *line = provider_cost_text(provider->provider_cost);
@@ -303,8 +307,10 @@ static void render_brief(const CodexBarSnapshot *snapshot) {
     for (guint index = 0; index < snapshot->providers->len; index++) {
         const CodexBarProvider *provider = g_ptr_array_index(snapshot->providers, index);
         if (provider->error) continue;
+        CodexBarQuotaWindowProjection projection = {0};
         const CodexBarQuotaWindow *window = provider->quota_windows->len > 0
-            ? g_ptr_array_index(provider->quota_windows, 0)
+            ? codexbar_provider_projected_quota_window(
+                  provider, 0, g_get_real_time() / 1000, &projection)
             : NULL;
         char *name = safe_text(provider_name(provider), 20);
         double display_percent = window
@@ -321,6 +327,7 @@ static void render_brief(const CodexBarSnapshot *snapshot) {
         g_free(reset);
         g_free(usage);
         g_free(name);
+        codexbar_quota_window_projection_clear(&projection);
     }
 }
 

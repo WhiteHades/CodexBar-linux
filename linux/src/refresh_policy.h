@@ -1,6 +1,11 @@
 #pragma once
 
+#include "model.h"
+
 #include <glib.h>
+
+#define CODEXBAR_RESET_BOUNDARY_GRACE_MILLISECONDS 30000
+#define CODEXBAR_RESET_BOUNDARY_MINIMUM_DELAY_MILLISECONDS 5000
 
 typedef enum {
     CODEXBAR_REFRESH_MANUAL,
@@ -38,11 +43,23 @@ typedef struct {
     CodexBarRefreshReason reason;
 } CodexBarRefreshDecision;
 
+typedef struct {
+    gboolean scheduled;
+    gint64 refresh_at_ms;
+    gint64 boundary_ms;
+} CodexBarResetBoundaryDecision;
+
 CodexBarRefreshFrequency codexbar_refresh_frequency_parse(const char *raw, gboolean existing_state);
 const char *codexbar_refresh_frequency_raw(CodexBarRefreshFrequency frequency);
 gboolean codexbar_refresh_frequency_is_adaptive(CodexBarRefreshFrequency frequency);
 CodexBarRefreshDecision codexbar_refresh_policy_decide(CodexBarRefreshFrequency frequency,
                                                        CodexBarRefreshPolicyInput input);
 gint64 codexbar_refresh_next_fixed_deadline(gint64 previous_deadline_us,
-                                            gint64 completed_at_us,
-                                            gint64 interval_us);
+                                             gint64 completed_at_us,
+                                             gint64 interval_us);
+CodexBarResetBoundaryDecision codexbar_refresh_next_reset_boundary(
+    const CodexBarSnapshot *snapshot,
+    gint64 now_ms,
+    guint normal_refresh_seconds,
+    const gint64 *attempted_boundaries_ms,
+    guint attempted_boundary_count);

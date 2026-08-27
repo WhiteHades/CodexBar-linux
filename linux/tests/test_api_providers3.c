@@ -587,17 +587,22 @@ static void test_doubao_bearer(void) {
     codexbar_provider_free(provider);
 }
 
-static void test_doubao_signed_and_agent_fallback(void) {
+static void test_doubao_signed_plan_families_are_isolated(void) {
     reset_fixture();
     fixture.urls[0] =
         "https://open.volcengineapi.com/?Action=GetCodingPlanUsage&Version=2024-01-01";
     fixture.statuses[0] = 200;
-    fixture.bodies[0] = "{\"Result\":{\"Status\":\"Reclaimed\"}}";
+    fixture.bodies[0] =
+        "{\"Result\":{\"Status\":\"Running\",\"QuotaUsage\":["
+        "{\"Level\":\"session\",\"Percent\":12.5},"
+        "{\"Level\":\"weekly\",\"Percent\":25},"
+        "{\"Level\":\"monthly\",\"Percent\":50}]}}";
     fixture.urls[1] = "https://open.volcengineapi.com/?Action=GetAFPUsage&Version=2024-01-01";
     fixture.statuses[1] = 200;
     fixture.bodies[1] =
-        "{\"Result\":{\"AFPWeekly\":{\"Quota\":35000,\"Used\":7000,"
-        "\"ResetTime\":1785686400000}}}";
+        "{\"Result\":{\"AFPFiveHour\":{\"Quota\":10000,\"Used\":500},"
+        "\"AFPWeekly\":{\"Quota\":35000,\"Used\":7000},"
+        "\"AFPMonthly\":{\"Quota\":100000,\"Used\":15000}}}";
     CodexBarProviderConfig config = {
         .api_key = "AKLTTEST",
         .secret_key = "secret",
@@ -609,7 +614,33 @@ static void test_doubao_signed_and_agent_fallback(void) {
     g_assert_no_error(error);
     g_assert_nonnull(provider);
     g_assert_cmpuint(fixture.count, ==, 2);
-    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 20.0);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 6);
+    const char *ids[] = {
+        "primary", "secondary", "tertiary",
+        "doubao-agent-session", "doubao-agent-weekly", "doubao-agent-monthly",
+    };
+    for (guint index = 0; index < G_N_ELEMENTS(ids); index++) {
+        g_assert_cmpstr(codexbar_provider_quota_window(provider, index)->id, ==, ids[index]);
+    }
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 12.5);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 4)->used_percent, ==, 20.0);
+    codexbar_provider_free(provider);
+
+    fixture.urls[2] =
+        "https://open.volcengineapi.com/?Action=GetCodingPlanUsage&Version=2024-01-01";
+    fixture.statuses[2] = 200;
+    fixture.bodies[2] =
+        "{\"Result\":{\"Status\":\"Running\",\"QuotaUsage\":["
+        "{\"Level\":\"session\",\"Percent\":3}]}}";
+    fixture.urls[3] = "https://open.volcengineapi.com/?Action=GetAFPUsage&Version=2024-01-01";
+    fixture.statuses[3] = 404;
+    provider = codexbar_doubao_fetch_with_transport(&config, stub_transport, 1781654400000, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(fixture.count, ==, 4);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 1);
+    g_assert_cmpstr(codexbar_provider_quota_window(provider, 0)->id, ==, "primary");
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 3.0);
     codexbar_provider_free(provider);
 }
 
@@ -625,6 +656,6 @@ int main(int argc, char **argv) {
     g_test_add_func("/api-providers3/doubao/cli-parse", test_doubao_cli_parse);
     g_test_add_func("/api-providers3/doubao/sources", test_doubao_source_routing);
     g_test_add_func("/api-providers3/doubao/bearer", test_doubao_bearer);
-    g_test_add_func("/api-providers3/doubao/signed", test_doubao_signed_and_agent_fallback);
+    g_test_add_func("/api-providers3/doubao/signed", test_doubao_signed_plan_families_are_isolated);
     return g_test_run();
 }

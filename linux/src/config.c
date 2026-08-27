@@ -936,8 +936,9 @@ GPtrArray *codexbar_config_validate(const CodexBarConfig *config) {
             const char *valid_regions = NULL;
             if (g_str_equal(provider->id, "minimax")) valid_regions = "global,cn";
             if (g_str_equal(provider->id, "zai")) valid_regions = "global,bigmodel-cn";
-            if (g_str_equal(provider->id, "alibaba") || g_str_equal(provider->id, "alibabatokenplan")) {
-                valid_regions = "intl,cn";
+            if (g_str_equal(provider->id, "alibaba")) valid_regions = "intl,cn";
+            if (g_str_equal(provider->id, "alibabatokenplan")) {
+                valid_regions = "intl,cn,intl-personal,cn-personal";
             }
             if (g_str_equal(provider->id, "moonshot")) valid_regions = "international,china";
             if (valid_regions && !value_in_csv(valid_regions, provider->region)) {

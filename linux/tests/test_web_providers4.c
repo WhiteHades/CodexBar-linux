@@ -200,6 +200,18 @@ static void test_command_parser_and_transport(void) {
     g_assert_cmpfloat_with_epsilon(monthly->used_percent, 87.5, 0.0001);
     codexbar_provider_free(provider);
 
+    const char *pro_v1_subscription =
+        "{\"success\":true,\"data\":{\"planId\":\"individual-pro-v1\","
+        "\"status\":\"active\",\"currentPeriodEnd\":\"2026-09-01T00:00:00Z\"}}";
+    provider = codexbar_commandcode_parse(
+        command_credits(), strlen(command_credits()), pro_v1_subscription, strlen(pro_v1_subscription), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->plan, ==, "Pro");
+    monthly = codexbar_provider_quota_window(provider, 2);
+    /* The shared fixture has $8.75 remaining from the Pro plan's $80 monthly total. */
+    g_assert_cmpfloat_with_epsilon(monthly->used_percent, 89.0625, 0.0001);
+    codexbar_provider_free(provider);
+
     const char *failed_subscription = "{\"success\":false,\"error\":\"temporarily unavailable\"}";
     provider = codexbar_commandcode_parse(
         command_credits(), strlen(command_credits()),
@@ -219,6 +231,21 @@ static void test_command_parser_and_transport(void) {
     g_assert_true(json_object_object_get_ex(
         provider->usage_extensions, "commandCodeSubscriptionEnrichmentUnavailable", &unavailable));
     g_assert_true(json_object_get_boolean(unavailable));
+    codexbar_provider_free(provider);
+
+    const char *depleted_with_purchased =
+        "{\"credits\":{\"monthlyCredits\":0,\"purchasedCredits\":5,"
+        "\"premiumMonthlyCredits\":0,\"opensourceMonthlyCredits\":0},"
+        "\"windowLimits\":{\"fiveHour\":{\"cap\":3,\"used\":1},"
+        "\"weekly\":{\"cap\":15,\"used\":3}}}";
+    provider = codexbar_commandcode_parse(
+        depleted_with_purchased, strlen(depleted_with_purchased),
+        command_subscription(), strlen(command_subscription()), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat_with_epsilon(
+        codexbar_provider_quota_window(provider, 0)->used_percent, 100.0 / 3.0, 0.0001);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 1)->used_percent, ==, 20);
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 2)->used_percent, ==, 100);
     codexbar_provider_free(provider);
 
     CodexBarProviderConfig config = config_with_cookie("secret");
