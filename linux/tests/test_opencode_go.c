@@ -311,6 +311,19 @@ static void test_web_usage_parser(void) {
     g_assert_cmpfloat(window(provider, 2, "tertiary")->used_percent, ==, 75);
     codexbar_provider_free(provider);
 
+    const char *api_percent_units =
+        "{\"usage\":{"
+        "\"rolling\":{\"usagePercent\":1,\"resetInSec\":3600},"
+        "\"weekly\":{\"usagePercent\":0.5,\"resetInSec\":7200},"
+        "\"monthly\":{\"usagePercent\":75,\"resetInSec\":10800}}}";
+    provider = codexbar_opencode_go_parse_web_usage(
+        api_percent_units, strlen(api_percent_units), 1800000000000LL, &error);
+    g_assert_no_error(error);
+    g_assert_cmpfloat(window(provider, 0, "primary")->used_percent, ==, 1);
+    g_assert_cmpfloat(window(provider, 1, "secondary")->used_percent, ==, 0.5);
+    g_assert_cmpfloat(window(provider, 2, "tertiary")->used_percent, ==, 75);
+    codexbar_provider_free(provider);
+
     const char *oversized_reset =
         "{\"rollingUsage\":{\"usagePercent\":25,\"resetInSec\":1e100}}";
     provider = codexbar_opencode_go_parse_web_usage(

@@ -456,6 +456,7 @@ static gboolean opencode_go_reset_at(json_object *object,
 
 static gboolean opencode_go_json_window(json_object *object,
                                         gint64 now_ms,
+                                        gboolean direct_percent_units,
                                         double *percent,
                                         gint64 *reset_seconds) {
     static const char *const percent_keys[] = {
@@ -486,7 +487,7 @@ static gboolean opencode_go_json_window(json_object *object,
         }
         if (!has_used || !has_limit || limit <= 0) return FALSE;
         *percent = used / limit * 100.0;
-    } else if (*percent >= 0 && *percent <= 1.0) {
+    } else if (!direct_percent_units && *percent >= 0 && *percent <= 1.0) {
         *percent *= 100.0;
     }
     *percent = CLAMP(*percent, 0.0, 100.0);
@@ -515,7 +516,11 @@ static void opencode_go_collect_windows(json_object *value,
     if (json_object_is_type(value, json_type_object)) {
         double percent = 0;
         gint64 reset = 0;
-        if (opencode_go_json_window(value, now_ms, &percent, &reset)) {
+        gboolean api_percent_units = path &&
+                                     (g_str_has_prefix(path, "usage.rolling") ||
+                                      g_str_has_prefix(path, "usage.weekly") ||
+                                      g_str_has_prefix(path, "usage.monthly"));
+        if (opencode_go_json_window(value, now_ms, api_percent_units, &percent, &reset)) {
             WebWindowCandidate *candidate = g_new0(WebWindowCandidate, 1);
             candidate->percent = percent;
             candidate->reset_seconds = reset;
