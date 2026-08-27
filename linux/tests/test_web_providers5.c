@@ -21,6 +21,8 @@ static Fixture fixture;
 static guint alibaba_personal_count;
 static gboolean alibaba_personal_china;
 static gboolean alibaba_personal_user_info;
+static gboolean alibaba_personal_empty_usage_once;
+static guint alibaba_personal_usage_requests;
 
 static CodexBarHttpResponse *response(long status, const char *body, const char *url) {
     CodexBarHttpResponse *value = g_new0(CodexBarHttpResponse, 1);
@@ -148,8 +150,14 @@ static CodexBarHttpResponse *alibaba_personal_transport(const CodexBarHttpReques
     g_assert_null(strstr(request->body, "switchAgent"));
     g_assert_nonnull(strstr(request->body, "switchUserType"));
 
-    if (api_index == 1) {
+    if (strstr(request->url, "/usage&_v=undefined")) {
         g_assert_nonnull(strstr(request->url, "/usage&_v=undefined"));
+        alibaba_personal_usage_requests++;
+        if (alibaba_personal_empty_usage_once && alibaba_personal_usage_requests == 1) {
+            return response(200,
+                            "{\"code\":\"SUCCESS\",\"data\":{},\"successResponse\":true}",
+                            request->url);
+        }
         return response(200,
                         "{\"code\":\"200\",\"data\":{\"DataV2\":{\"data\":{"
                         "\"success\":true,\"data\":{\"per5HourPercentage\":0.25,"
@@ -157,7 +165,7 @@ static CodexBarHttpResponse *alibaba_personal_transport(const CodexBarHttpReques
                         "\"per1WeekResetTime\":1785234900000}}}},\"successResponse\":true}",
                         request->url);
     }
-    if (api_index == 2) {
+    if (strstr(request->url, "/subscription&_v=undefined")) {
         g_assert_nonnull(strstr(request->url, "/subscription&_v=undefined"));
         g_assert_nonnull(strstr(request->body,
                                 alibaba_personal_china ? "sfm_tokenplansolo_public_cn"
@@ -168,7 +176,7 @@ static CodexBarHttpResponse *alibaba_personal_transport(const CodexBarHttpReques
                         "\"successResponse\":true}",
                         request->url);
     }
-    g_assert_cmpuint(api_index, ==, 3);
+    (void)api_index;
     g_assert_nonnull(strstr(request->url, "/quota-config&_v=undefined"));
     return response(200,
                     "{\"code\":\"200\",\"data\":{\"DataV2\":{\"data\":{"
@@ -256,6 +264,8 @@ static void test_alibaba_transport(void) {
         config.region = g_strdup(regions[index]);
         alibaba_personal_china = index == 0;
         alibaba_personal_user_info = index == 1;
+        alibaba_personal_empty_usage_once = FALSE;
+        alibaba_personal_usage_requests = 0;
         alibaba_personal_count = 0;
         provider = codexbar_alibaba_token_plan_fetch_with_transport_and_cancellable(
             &config, alibaba_personal_transport, NULL, 1000, &error);
@@ -273,6 +283,23 @@ static void test_alibaba_transport(void) {
         codexbar_provider_free(provider);
         clear_config(&config);
     }
+
+    config = config_with_cookie(
+        "login_aliyunid_ticket=ticket; sec_token=cookie-sec; cna=anon; csrf=csrf-value");
+    config.region = g_strdup("cn-personal");
+    alibaba_personal_china = TRUE;
+    alibaba_personal_user_info = FALSE;
+    alibaba_personal_empty_usage_once = TRUE;
+    alibaba_personal_usage_requests = 0;
+    alibaba_personal_count = 0;
+    provider = codexbar_alibaba_token_plan_fetch_with_transport_and_cancellable(
+        &config, alibaba_personal_transport, NULL, 1000, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(provider);
+    g_assert_cmpuint(alibaba_personal_usage_requests, ==, 2);
+    g_assert_cmpuint(provider->quota_windows->len, ==, 2);
+    codexbar_provider_free(provider);
+    clear_config(&config);
 }
 
 static void test_mimo_parser(void) {

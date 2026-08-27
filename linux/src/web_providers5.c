@@ -662,8 +662,8 @@ static CodexBarProvider *alibaba_personal_parse(const char *usage_json,
     gboolean has_week = usage && find_number(usage, week_keys, &week_ratio);
     if (!usage || (!has_five && !has_week)) {
         if (usage) json_object_put(usage);
-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                            "Alibaba Token Plan Personal payload is invalid");
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK,
+                            "Alibaba Token Plan Personal usage is temporarily unavailable; it will refresh automatically");
         return NULL;
     }
     json_object *subscription_parsed = subscription_json ? parse_json(subscription_json, strlen(subscription_json)) : NULL;
@@ -786,8 +786,27 @@ static CodexBarProvider *alibaba_personal_fetch(const CodexBarProviderConfig *co
     CodexBarHttpResponse *quota = alibaba_personal_api(
         base, quota_api, NULL, cookie, sec_token, csrf, china, origin, dashboard,
         transport, cancellable, NULL);
-    CodexBarProvider *provider = alibaba_personal_parse(
-        usage->body, subscription ? subscription->body : NULL, quota ? quota->body : NULL, now_ms, error);
+    CodexBarProvider *provider = NULL;
+    for (guint attempt = 0; attempt < 3 && !provider; attempt++) {
+        GError *parse_error = NULL;
+        provider = alibaba_personal_parse(
+            usage->body, subscription ? subscription->body : NULL, quota ? quota->body : NULL, now_ms, &parse_error);
+        if (provider) {
+            g_clear_error(&parse_error);
+            break;
+        }
+        gboolean retryable = g_error_matches(parse_error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
+        if (!retryable || attempt == 2 || (cancellable && g_cancellable_is_cancelled(cancellable))) {
+            g_propagate_error(error, parse_error);
+            break;
+        }
+        g_clear_error(&parse_error);
+        codexbar_http_response_free(usage);
+        usage = alibaba_personal_api(
+            base, usage_api, NULL, cookie, sec_token, csrf, china, origin, dashboard,
+            transport, cancellable, error);
+        if (!usage) break;
+    }
     codexbar_http_response_free(quota);
     codexbar_http_response_free(subscription);
     codexbar_http_response_free(usage);
