@@ -75,7 +75,7 @@ static gboolean parse_options(int argc, char **argv, CostOptions *options, GErro
                    g_str_equal(argument, "-v")) {
             continue;
         } else if (g_str_equal(argument, "--help") || g_str_equal(argument, "-h")) {
-            puts("Usage: codexbar-linux cost [--provider <codex|claude|both|all>] [--format <text|json>]\n"
+            puts("Usage: codexbar-linux cost [--provider <codex|claude|cursor|antigravity|all>] [--format <text|json>]\n"
                  "                           [--days <1..365>] [--group-by project|model] [--refresh]");
             return FALSE;
         } else {
@@ -112,7 +112,13 @@ static json_object *cost_json_value(double cost) {
 
 static void print_report_text(const CodexBarCostReport *report, gboolean group_projects, gboolean group_models) {
     gboolean codex = g_str_equal(report->provider, "codex");
-    printf("%s %s\n", codex ? "Codex" : "Claude", codex ? "API-equivalent estimate (not billed)" : "Cost (API-rate estimate)");
+    gboolean claude = g_str_equal(report->provider, "claude");
+    gboolean cursor = g_str_equal(report->provider, "cursor");
+    const char *name = codex ? "Codex" : claude ? "Claude" : cursor ? "Cursor" : "Antigravity";
+    const char *kind = codex ? "API-equivalent estimate (not billed)"
+                            : claude ? "Cost (API-rate estimate)"
+                                     : cursor ? "Local metered cost" : "Local token history";
+    printf("%s %s\n", name, kind);
     if (group_models) {
         printf("Models (Last %d days):\n", report->history_days);
         if (report->models->len == 0) puts("-");
@@ -151,8 +157,10 @@ static void print_report_text(const CodexBarCostReport *report, gboolean group_p
         g_free(today_cost);
         g_free(today_tokens);
     }
-    puts(codex ? "Not a subscription bill or plan value; local usage times public API prices"
-               : "Estimate from local usage and public API prices");
+    if (codex) puts("Not a subscription bill or plan value; local usage times public API prices");
+    else if (claude) puts("Estimate from local usage and public API prices");
+    else if (cursor) puts("Read from tokscale-compatible local Cursor usage exports");
+    else puts("Token counts only; local Antigravity history does not contain authoritative cost");
 }
 
 static json_object *day_json(const CodexBarCostDay *day) {
@@ -356,11 +364,11 @@ int codexbar_cli_cost_run(int argc, char **argv) {
         }
         return 0;
     }
-    const char *providers[] = {"codex", "claude"};
-    if (!options.provider || g_ascii_strcasecmp(options.provider, "all") == 0 ||
-        g_ascii_strcasecmp(options.provider, "both") == 0) {
+    const char *providers[] = {"codex", "claude", "cursor", "antigravity"};
+    if (!options.provider || g_ascii_strcasecmp(options.provider, "all") == 0) {
         return run_reports(&options, providers, G_N_ELEMENTS(providers));
     }
+    if (g_ascii_strcasecmp(options.provider, "both") == 0) return run_reports(&options, providers, 2);
     char *lowercase = g_ascii_strdown(options.provider, -1);
     const CodexBarProviderDescriptor *descriptor = codexbar_provider_registry_find(lowercase);
     g_free(lowercase);
@@ -368,8 +376,9 @@ int codexbar_cli_cost_run(int argc, char **argv) {
         fprintf(stderr, "Error: Unknown provider: %s\n", options.provider);
         return 1;
     }
-    if (!g_str_equal(descriptor->id, "codex") && !g_str_equal(descriptor->id, "claude")) {
-        fprintf(stderr, "Error: cost is only supported for Claude and Codex.\n");
+    if (!g_str_equal(descriptor->id, "codex") && !g_str_equal(descriptor->id, "claude") &&
+        !g_str_equal(descriptor->id, "cursor") && !g_str_equal(descriptor->id, "antigravity")) {
+        fprintf(stderr, "Error: cost is only supported for Claude, Codex, Cursor, and Antigravity.\n");
         return 1;
     }
     const char *selected[] = {descriptor->id};

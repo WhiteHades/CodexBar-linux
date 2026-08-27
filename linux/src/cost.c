@@ -15,6 +15,7 @@ enum {
     MAX_DIRECTORY_DEPTH = 64,
     MAX_JSONL_FILES = 4096,
     MAX_TRACE_ROWS = 4096,
+    MAX_CSV_COLUMNS = 32,
 };
 
 typedef struct {
@@ -92,6 +93,15 @@ typedef struct {
     const char *current_since;
     GHashTable *seen_entries;
 } PiScan;
+
+typedef struct {
+    CodexBarCostReport *report;
+    const char *since;
+    const char *current_since;
+    char *session_id;
+    char *model;
+    GHashTable *response_ids;
+} AntigravityScan;
 
 typedef gboolean (*JsonlFileCallback)(const char *path, gpointer user_data, GError **error);
 
@@ -446,8 +456,15 @@ static gint compare_string(gconstpointer left, gconstpointer right) {
 }
 
 static CodexBarCostModel *find_model(CodexBarCostReport *report, const char *raw_model) {
-    char *id = g_str_equal(report->provider, "codex") ? normalize_codex_model(raw_model)
-                                                       : normalize_claude_model(raw_model);
+    char *id = NULL;
+    if (g_str_equal(report->provider, "codex")) {
+        id = normalize_codex_model(raw_model);
+    } else if (g_str_equal(report->provider, "claude")) {
+        id = normalize_claude_model(raw_model);
+    } else {
+        id = g_ascii_strdown(raw_model && raw_model[0] != '\0' ? raw_model : "unknown", -1);
+        g_strstrip(id);
+    }
     for (guint index = 0; index < report->models->len; index++) {
         CodexBarCostModel *model = g_ptr_array_index(report->models, index);
         if (g_str_equal(model->id, id)) {
@@ -1440,6 +1457,516 @@ static void aggregate_claude_row(gpointer key, gpointer value, gpointer user_dat
     }
 }
 
+static gboolean parse_nonnegative(const char *raw, gint64 *value) {
+    char *clean = g_strdup(raw ? raw : "");
+    g_strstrip(clean);
+    for (char *cursor = clean; *cursor; cursor++) {
+        if (*cursor == ',' || *cursor == '$') memmove(cursor, cursor + 1, strlen(cursor));
+    }
+    if (clean[0] == '\0') {
+        g_free(clean);
+        *value = 0;
+        return TRUE;
+    }
+    char *end = NULL;
+    errno = 0;
+    gint64 parsed = g_ascii_strtoll(clean, &end, 10);
+    gboolean ok = errno == 0 && end && *end == '\0' && parsed >= 0;
+    g_free(clean);
+    if (ok) *value = parsed;
+    return ok;
+}
+
+static GPtrArray *parse_csv_line(const char *line) {
+    GPtrArray *columns = g_ptr_array_new_with_free_func(g_free);
+    GString *field = g_string_new(NULL);
+    gboolean quoted = FALSE;
+    for (const char *cursor = line; *cursor; cursor++) {
+        if (*cursor == '"') {
+            if (quoted && cursor[1] == '"') {
+                g_string_append_c(field, '"');
+                cursor++;
+            } else {
+                quoted = !quoted;
+            }
+        } else if (*cursor == ',' && !quoted) {
+            char *value = g_string_free(field, FALSE);
+            g_strstrip(value);
+            g_ptr_array_add(columns, value);
+            if (columns->len > MAX_CSV_COLUMNS) break;
+            field = g_string_new(NULL);
+        } else if (*cursor != '\r' && *cursor != '\n') {
+            g_string_append_c(field, *cursor);
+        }
+    }
+    if (columns->len <= MAX_CSV_COLUMNS) {
+        char *value = g_string_free(field, FALSE);
+        g_strstrip(value);
+        g_ptr_array_add(columns, value);
+    } else {
+        g_string_free(field, TRUE);
+    }
+    return columns;
+}
+
+static void add_local_usage(CodexBarCostReport *report,
+                            const char *day,
+                            const char *model_name,
+                            const char *session_id,
+                            gint64 input,
+                            gint64 cache_read,
+                            gint64 cache_write,
+                            gint64 output,
+                            gint64 total,
+                            gboolean cost_known,
+                            double cost,
+                            gboolean current) {
+    if (current) {
+        CodexBarCostDay *report_day = find_day(report->days, day);
+        report_day->input_tokens += input;
+        report_day->cache_read_tokens += cache_read;
+        report_day->cache_creation_tokens += cache_write;
+        report_day->output_tokens += output;
+        report_day->total_tokens += total;
+        if (cost_known) report_day->cost_usd += cost;
+        else report_day->cost_known = FALSE;
+    }
+    CodexBarCostModel *model = find_model(report, model_name);
+    add_unique_string(model->raw_aliases, model_name ? model_name : "unknown");
+    if (current) {
+        add_unique_string(model->session_ids, session_id);
+        model->input_tokens += input;
+        model->cached_input_tokens += cache_read;
+        model->output_tokens += output;
+        model->total_tokens += total;
+        if (cost_known) {
+            model->known_cost_usd += cost;
+            model->priced_tokens += total;
+            model->standard_tokens += total;
+            model->standard_cost_usd += cost;
+        } else {
+            model->unpriced_tokens += total;
+        }
+        CodexBarCostDay *model_day = find_day(model->days, day);
+        model_day->input_tokens += input;
+        model_day->cache_read_tokens += cache_read;
+        model_day->cache_creation_tokens += cache_write;
+        model_day->output_tokens += output;
+        model_day->total_tokens += total;
+        if (cost_known) model_day->cost_usd += cost;
+        else model_day->cost_known = FALSE;
+    } else {
+        if (session_id) g_hash_table_add(model->previous_session_ids, g_strdup(session_id));
+        model->previous_total_tokens += total;
+        if (cost_known) {
+            model->previous_priced_tokens += total;
+            model->previous_known_cost_usd += cost;
+        } else {
+            model->previous_unpriced_tokens += total;
+        }
+    }
+}
+
+static gboolean scan_cursor_csv(CodexBarCostReport *report,
+                                const char *root,
+                                const char *since,
+                                const char *current_since,
+                                GError **error) {
+    GDir *directory = g_dir_open(root, 0, NULL);
+    if (!directory) return TRUE;
+    const char *name = NULL;
+    guint files = 0;
+    while ((name = g_dir_read_name(directory))) {
+        if (!g_str_has_prefix(name, "usage") || !g_str_has_suffix(name, ".csv") ||
+            g_str_has_prefix(name, "usage.backup") || ++files > MAX_JSONL_FILES) continue;
+        char *path = g_build_filename(root, name, NULL);
+        struct stat info;
+        if (lstat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size > MAX_JSONL_FILE_BYTES) {
+            g_free(path);
+            continue;
+        }
+        FILE *stream = fopen(path, "r");
+        g_free(path);
+        if (!stream) continue;
+        char *line = g_malloc(MAX_JSONL_LINE_BYTES + 2);
+        if (!fgets(line, MAX_JSONL_LINE_BYTES + 2, stream)) {
+            g_free(line);
+            fclose(stream);
+            continue;
+        }
+        GPtrArray *header = parse_csv_line(line);
+        gboolean has_kind = FALSE;
+        for (guint index = 0; index < header->len; index++) {
+            if (g_ascii_strcasecmp(g_ptr_array_index(header, index), "kind") == 0) has_kind = TRUE;
+        }
+        guint model = has_kind ? (header->len >= 11 ? 4 : 2) : 1;
+        guint input_with = has_kind ? (header->len >= 11 ? 6 : 4) : 2;
+        guint input_without = input_with + 1, cache_read = input_with + 2, output = input_with + 3;
+        guint cost_index = input_with + 5;
+        while (fgets(line, MAX_JSONL_LINE_BYTES + 2, stream)) {
+            GPtrArray *columns = parse_csv_line(line);
+            if (columns->len <= cost_index || columns->len <= output || strlen(g_ptr_array_index(columns, 0)) < 10) {
+                g_ptr_array_unref(columns);
+                continue;
+            }
+            char *day = g_strndup(g_ptr_array_index(columns, 0), 10);
+            gint64 with_cache = 0, input = 0, read = 0, out = 0, total = 0;
+            gboolean valid = parse_nonnegative(g_ptr_array_index(columns, input_with), &with_cache) &&
+                             parse_nonnegative(g_ptr_array_index(columns, input_without), &input) &&
+                             parse_nonnegative(g_ptr_array_index(columns, cache_read), &read) &&
+                             parse_nonnegative(g_ptr_array_index(columns, output), &out);
+            guint total_index = cost_index - 1;
+            char *total_header = total_index < header->len
+                                     ? g_ascii_strdown(g_ptr_array_index(header, total_index), -1)
+                                     : NULL;
+            gboolean has_total = total_header && g_strrstr(total_header, "total") != NULL;
+            g_free(total_header);
+            if (has_total) valid = valid && parse_nonnegative(g_ptr_array_index(columns, total_index), &total);
+            gint64 write = MAX((gint64)0, with_cache - input);
+            if (!has_total) total = input + read + write + out;
+            char *cost_raw = g_strdup(g_ptr_array_index(columns, cost_index));
+            g_strstrip(cost_raw);
+            char *cost_clean = g_malloc(strlen(cost_raw) + 1);
+            guint cost_length = 0;
+            for (const char *cursor = cost_raw; *cursor; cursor++) {
+                if (*cursor != '$' && *cursor != ',') cost_clean[cost_length++] = *cursor;
+            }
+            cost_clean[cost_length] = '\0';
+            char *end = NULL;
+            double cost = cost_clean[0] == '\0' ? 0 : g_ascii_strtod(cost_clean, &end);
+            gboolean cost_valid = cost_clean[0] == '\0' || (end && *end == '\0' && cost >= 0);
+            if (valid && cost_valid && total > 0 && day_in_range(day, since, report->today)) {
+                add_local_usage(report, day, g_ptr_array_index(columns, model), name, input, read, write, out,
+                                total, TRUE, cost, g_strcmp0(day, current_since) >= 0);
+            }
+            g_free(cost_clean);
+            g_free(cost_raw);
+            g_free(day);
+            g_ptr_array_unref(columns);
+        }
+        g_ptr_array_unref(header);
+        g_free(line);
+        fclose(stream);
+    }
+    g_dir_close(directory);
+    (void)error;
+    return TRUE;
+}
+
+static char *millis_day(gint64 milliseconds) {
+    if (milliseconds <= 0 || milliseconds > 253402300799999LL) return NULL;
+    GDateTime *utc = g_date_time_new_from_unix_utc(milliseconds / 1000);
+    if (!utc) return NULL;
+    GDateTime *local = g_date_time_to_local(utc);
+    char *day = g_date_time_format(local, "%Y-%m-%d");
+    g_date_time_unref(local);
+    g_date_time_unref(utc);
+    return day;
+}
+
+static gboolean exact_json_counter(json_object *object, const char *first, const char *second,
+                                   gboolean required, gint64 *value) {
+    json_object *left = object_field(object, first);
+    json_object *right = second ? object_field(object, second) : NULL;
+    if (!left && !right) return !required;
+    if ((left && !json_object_is_type(left, json_type_int)) ||
+        (right && !json_object_is_type(right, json_type_int))) return FALSE;
+    gint64 parsed = left ? json_object_get_int64(left) : json_object_get_int64(right);
+    if (parsed < 0 || (left && right && parsed != json_object_get_int64(right))) return FALSE;
+    *value = parsed;
+    return TRUE;
+}
+
+static gboolean antigravity_line(json_object *object, const char *path, gpointer user_data) {
+    AntigravityScan *scan = user_data;
+    const char *type = string_field(object, "type");
+    if (g_strcmp0(type, "session_meta") == 0) {
+        const char *id = string_field(object, "sessionId");
+        const char *model = string_field(object, "modelId");
+        if (!model) model = string_field(object, "model_id");
+        if (id && (!scan->session_id || g_str_equal(scan->session_id, id))) {
+            g_free(scan->session_id);
+            scan->session_id = g_strdup(id);
+            g_free(scan->model);
+            scan->model = g_strdup(model);
+        }
+        return TRUE;
+    }
+    if (g_strcmp0(type, "usage") != 0) return TRUE;
+    const char *id = string_field(object, "sessionId");
+    if (!id) id = scan->session_id;
+    const char *model = string_field(object, "modelId");
+    if (!model) model = string_field(object, "model_id");
+    if (!model) model = scan->model;
+    const char *response = string_field(object, "responseId");
+    if (!response) response = string_field(object, "response_id");
+    if (response && g_hash_table_contains(scan->response_ids, response)) return TRUE;
+    gint64 timestamp = 0, input = 0, output = 0, read = 0, write = 0, reasoning = 0;
+    gboolean valid = exact_json_counter(object, "timestamp", NULL, TRUE, &timestamp) &&
+                     exact_json_counter(object, "input", NULL, TRUE, &input) &&
+                     exact_json_counter(object, "output", NULL, TRUE, &output) &&
+                     exact_json_counter(object, "cacheRead", "cache_read", FALSE, &read) &&
+                     exact_json_counter(object, "cacheWrite", "cache_write", FALSE, &write) &&
+                     exact_json_counter(object, "reasoning", NULL, FALSE, &reasoning);
+    char *day = millis_day(timestamp);
+    if (valid && id && day && reasoning == 0 && (input > 0 || output > 0 || read > 0 || write > 0) &&
+        day_in_range(day, scan->since, scan->report->today)) {
+        if (response) g_hash_table_add(scan->response_ids, g_strdup(response));
+        add_local_usage(scan->report, day, model, id, input, read, write, output,
+                        input + read + write + output, FALSE, 0,
+                        g_strcmp0(day, scan->current_since) >= 0);
+    }
+    g_free(day);
+    (void)path;
+    return TRUE;
+}
+
+static gboolean scan_antigravity_file(const char *path, gpointer user_data, GError **error) {
+    AntigravityScan *scan = user_data;
+    g_clear_pointer(&scan->session_id, g_free);
+    g_clear_pointer(&scan->model, g_free);
+    return scan_jsonl_file(path, antigravity_line, scan, error);
+}
+
+typedef struct {
+    guint number;
+    guint wire;
+    guint64 integer;
+    const guint8 *data;
+    gsize length;
+} ProtoField;
+
+typedef struct {
+    const guint8 *data;
+    gsize length;
+    gsize offset;
+    gboolean valid;
+} ProtoReader;
+
+static gboolean proto_varint(ProtoReader *reader, guint64 *value) {
+    *value = 0;
+    for (guint index = 0; index < 10 && reader->offset < reader->length; index++) {
+        guint8 byte = reader->data[reader->offset++];
+        if (index == 9 && byte > 1) break;
+        *value |= (guint64)(byte & 0x7f) << (index * 7);
+        if ((byte & 0x80) == 0) return TRUE;
+    }
+    reader->valid = FALSE;
+    return FALSE;
+}
+
+static gboolean proto_field(ProtoReader *reader, ProtoField *field) {
+    if (reader->offset >= reader->length) return FALSE;
+    guint64 tag = 0;
+    if (!proto_varint(reader, &tag) || tag >> 3 == 0 || tag >> 3 > 536870911) return FALSE;
+    *field = (ProtoField){.number = (guint)(tag >> 3), .wire = (guint)(tag & 7)};
+    if (field->wire == 0) return proto_varint(reader, &field->integer);
+    guint64 count = 0;
+    if (field->wire == 1) count = 8;
+    else if (field->wire == 5) count = 4;
+    else if (field->wire != 2 || !proto_varint(reader, &count)) {
+        reader->valid = FALSE;
+        return FALSE;
+    }
+    if (count > reader->length - reader->offset) {
+        reader->valid = FALSE;
+        return FALSE;
+    }
+    field->data = reader->data + reader->offset;
+    field->length = (gsize)count;
+    reader->offset += (gsize)count;
+    return TRUE;
+}
+
+static char *proto_string(const ProtoField *field) {
+    if (field->wire != 2 || !g_utf8_validate((const char *)field->data, (gssize)field->length, NULL)) return NULL;
+    char *value = g_strndup((const char *)field->data, field->length);
+    g_strstrip(value);
+    if (value[0] == '\0') g_clear_pointer(&value, g_free);
+    return value;
+}
+
+static gboolean parse_antigravity_timestamp(const ProtoField *generation, gint64 *milliseconds) {
+    if (generation->wire != 2) return FALSE;
+    ProtoReader outer = {generation->data, generation->length, 0, TRUE};
+    ProtoField field;
+    while (proto_field(&outer, &field)) {
+        if (field.number != 4 || field.wire != 2) continue;
+        ProtoReader stamp = {field.data, field.length, 0, TRUE};
+        guint64 seconds = 0, nanos = 0;
+        gboolean has_seconds = FALSE;
+        ProtoField part;
+        while (proto_field(&stamp, &part)) {
+            if (part.wire != 0) continue;
+            if (part.number == 1) {
+                seconds = part.integer;
+                has_seconds = TRUE;
+            } else if (part.number == 2) {
+                nanos = part.integer;
+            }
+        }
+        if (!stamp.valid || !has_seconds || seconds == 0 || seconds > 253402300799ULL || nanos > 999999999) return FALSE;
+        *milliseconds = (gint64)seconds * 1000 + (gint64)(nanos / 1000000);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static gboolean parse_antigravity_usage(const ProtoField *usage,
+                                        gint64 *input,
+                                        gint64 *read,
+                                        gint64 *output,
+                                        gint64 *reasoning,
+                                        char **response) {
+    if (usage->wire != 2) return FALSE;
+    ProtoReader reader = {usage->data, usage->length, 0, TRUE};
+    ProtoField field;
+    while (proto_field(&reader, &field)) {
+        if (field.wire == 0 && field.integer <= G_MAXINT64) {
+            if (field.number == 1 || field.number == 2) *input += (gint64)field.integer;
+            else if (field.number == 5) *read = (gint64)field.integer;
+            else if (field.number == 9) *output = (gint64)field.integer;
+            else if (field.number == 10) *reasoning = (gint64)field.integer;
+        } else if (field.number == 11) {
+            char *value = proto_string(&field);
+            if (value) {
+                g_free(*response);
+                *response = value;
+            }
+        }
+    }
+    return reader.valid;
+}
+
+static gboolean parse_antigravity_turn(const void *bytes,
+                                       gsize length,
+                                       gint64 *timestamp,
+                                       gint64 *input,
+                                       gint64 *read,
+                                       gint64 *output,
+                                       gint64 *reasoning,
+                                       char **model,
+                                       char **response) {
+    ProtoReader root = {bytes, length, 0, TRUE};
+    ProtoField root_field;
+    gboolean found_chat = FALSE;
+    while (proto_field(&root, &root_field)) {
+        if (root_field.number != 1 || root_field.wire != 2) continue;
+        found_chat = TRUE;
+        ProtoReader chat = {root_field.data, root_field.length, 0, TRUE};
+        ProtoField field;
+        while (proto_field(&chat, &field)) {
+            if (field.number == 4 && !parse_antigravity_usage(&field, input, read, output, reasoning, response)) return FALSE;
+            if (field.number == 9) (void)parse_antigravity_timestamp(&field, timestamp);
+            if (field.number == 19) {
+                char *value = proto_string(&field);
+                if (value) {
+                    g_free(*model);
+                    *model = value;
+                }
+            }
+        }
+        if (!chat.valid) return FALSE;
+    }
+    return root.valid && found_chat && *timestamp > 0 && (*input > 0 || *read > 0 || *output > 0);
+}
+
+static gboolean antigravity_schema_supported(sqlite3 *database) {
+    sqlite3_stmt *statement = NULL;
+    if (sqlite3_prepare_v2(database, "PRAGMA main.table_xinfo('gen_metadata')", -1, &statement, NULL) != SQLITE_OK) {
+        return FALSE;
+    }
+    gboolean idx = FALSE, data = FALSE, valid = TRUE;
+    guint columns = 0;
+    while (sqlite3_step(statement) == SQLITE_ROW && ++columns <= 64) {
+        if (sqlite3_column_type(statement, 1) != SQLITE_TEXT || sqlite3_column_int(statement, 6) != 0) {
+            valid = FALSE;
+            break;
+        }
+        const char *name = (const char *)sqlite3_column_text(statement, 1);
+        if (g_ascii_strcasecmp(name, "idx") == 0) idx = TRUE;
+        if (g_ascii_strcasecmp(name, "data") == 0) data = TRUE;
+    }
+    sqlite3_finalize(statement);
+    return valid && columns <= 64 && idx && data;
+}
+
+static gboolean scan_antigravity_database(const char *path, AntigravityScan *scan, GError **error) {
+    sqlite3 *database = NULL;
+    if (sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK || !database) {
+        if (database) sqlite3_close(database);
+        return TRUE;
+    }
+    sqlite3_limit(database, SQLITE_LIMIT_LENGTH, MAX_JSONL_LINE_BYTES);
+    if (!antigravity_schema_supported(database)) {
+        sqlite3_close(database);
+        return TRUE;
+    }
+    sqlite3_stmt *statement = NULL;
+    const char *query = "SELECT idx, data FROM main.gen_metadata NOT INDEXED LIMIT ?";
+    if (sqlite3_prepare_v2(database, query, -1, &statement, NULL) != SQLITE_OK) {
+        sqlite3_close(database);
+        return TRUE;
+    }
+    sqlite3_bind_int(statement, 1, MAX_TRACE_ROWS + 1);
+    char *session = g_path_get_basename(path);
+    char *suffix = g_strrstr(session, ".db");
+    if (suffix && suffix[3] == '\0') *suffix = '\0';
+    guint rows = 0;
+    while (sqlite3_step(statement) == SQLITE_ROW && ++rows <= MAX_TRACE_ROWS) {
+        if (sqlite3_column_type(statement, 0) != SQLITE_INTEGER || sqlite3_column_int64(statement, 0) < 0 ||
+            sqlite3_column_type(statement, 1) != SQLITE_BLOB) continue;
+        int length = sqlite3_column_bytes(statement, 1);
+        const void *bytes = sqlite3_column_blob(statement, 1);
+        if (!bytes || length <= 0 || length > MAX_JSONL_LINE_BYTES) continue;
+        gint64 timestamp = 0, input = 0, read = 0, output = 0, reasoning = 0;
+        char *model = NULL, *response = NULL;
+        if (parse_antigravity_turn(bytes, (gsize)length, &timestamp, &input, &read, &output, &reasoning,
+                                   &model, &response)) {
+            char *key = response ? g_strdup_printf("response:%s", response)
+                                 : g_strdup_printf("row:%s:%" G_GINT64_FORMAT,
+                                                   session, sqlite3_column_int64(statement, 0));
+            char *day = millis_day(timestamp);
+            if (day && !g_hash_table_contains(scan->response_ids, key) &&
+                day_in_range(day, scan->since, scan->report->today)) {
+                g_hash_table_add(scan->response_ids, key);
+                key = NULL;
+                add_local_usage(scan->report, day, model, session, input, read, 0, output,
+                                input + read + output, FALSE, 0,
+                                g_strcmp0(day, scan->current_since) >= 0);
+            }
+            g_free(day);
+            g_free(key);
+        }
+        g_free(model);
+        g_free(response);
+    }
+    g_free(session);
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
+    (void)error;
+    return TRUE;
+}
+
+static gboolean scan_antigravity_database_directory(const char *root, AntigravityScan *scan, GError **error) {
+    GDir *directory = g_dir_open(root, 0, NULL);
+    if (!directory) return TRUE;
+    const char *name = NULL;
+    guint files = 0;
+    gboolean ok = TRUE;
+    while (ok && (name = g_dir_read_name(directory))) {
+        if (!g_str_has_suffix(name, ".db") || ++files > MAX_JSONL_FILES) continue;
+        char *path = g_build_filename(root, name, NULL);
+        struct stat info;
+        if (lstat(path, &info) == 0 && S_ISREG(info.st_mode) && info.st_size <= MAX_JSONL_FILE_BYTES) {
+            ok = scan_antigravity_database(path, scan, error);
+        }
+        g_free(path);
+    }
+    g_dir_close(directory);
+    return ok;
+}
+
 static CodexBarCostReport *new_report(const char *provider, int history_days) {
     CodexBarCostReport *report = g_new0(CodexBarCostReport, 1);
     report->provider = g_strdup(provider);
@@ -1463,7 +1990,8 @@ static char *since_day(int history_days) {
 }
 
 CodexBarCostReport *codexbar_cost_scan(const char *provider, int history_days, GError **error) {
-    if (!g_str_equal(provider, "codex") && !g_str_equal(provider, "claude")) {
+    if (!g_str_equal(provider, "codex") && !g_str_equal(provider, "claude") &&
+        !g_str_equal(provider, "cursor") && !g_str_equal(provider, "antigravity")) {
         g_set_error(error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE, "Cost is not supported for %s.", provider);
         return NULL;
     }
@@ -1501,7 +2029,7 @@ CodexBarCostReport *codexbar_cost_scan(const char *provider, int history_days, G
         g_ptr_array_unref(roots);
         g_hash_table_unref(scan.priority_turns);
         g_hash_table_unref(scan.baselines);
-    } else {
+    } else if (g_str_equal(provider, "claude")) {
         ClaudeScan scan = {
             .report = report,
             .since = since,
@@ -1532,6 +2060,50 @@ CodexBarCostReport *codexbar_cost_scan(const char *provider, int history_days, G
         g_ptr_array_unref(roots);
         g_hash_table_unref(scan.keyed_rows);
         g_ptr_array_unref(scan.unkeyed_rows);
+    } else if (g_str_equal(provider, "cursor")) {
+        const char *override = g_getenv("CODEXBAR_COST_CURSOR_ROOT");
+        char *root = override && override[0] != '\0'
+                         ? g_strdup(override)
+                         : g_build_filename(g_get_user_config_dir(), "tokscale", "cursor-cache", NULL);
+        ok = scan_cursor_csv(report, root, since, current_since, error);
+        g_free(root);
+    } else {
+        AntigravityScan scan = {
+            .report = report,
+            .since = since,
+            .current_since = current_since,
+            .response_ids = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL),
+        };
+        const char *override = g_getenv("CODEXBAR_COST_ANTIGRAVITY_ROOT");
+        char *root = override && override[0] != '\0'
+                         ? g_strdup(override)
+                         : g_build_filename(g_get_user_config_dir(), "tokscale", "antigravity-cache", "sessions", NULL);
+        GPtrArray *roots = g_ptr_array_new_with_free_func(g_free);
+        g_ptr_array_add(roots, root);
+        ok = scan_roots(roots, scan_antigravity_file, &scan, error);
+        g_ptr_array_unref(roots);
+        if (ok) {
+            const char *database_override = g_getenv("CODEXBAR_COST_ANTIGRAVITY_DB_ROOT");
+            if (database_override && database_override[0] != '\0') {
+                ok = scan_antigravity_database_directory(database_override, &scan, error);
+            } else {
+                const char *gemini_home = g_getenv("GEMINI_CLI_HOME");
+                char *first = gemini_home && gemini_home[0] != '\0'
+                                  ? g_build_filename(gemini_home, "antigravity-cli", "conversations", NULL)
+                                  : g_build_filename(g_get_home_dir(), ".gemini", "antigravity-cli", "conversations", NULL);
+                char *second = g_build_filename(g_get_home_dir(), ".gemini", "antigravity", NULL);
+                char *third = g_build_filename(g_get_home_dir(), ".gemini", "antigravity", "conversations", NULL);
+                ok = scan_antigravity_database_directory(first, &scan, error) &&
+                     scan_antigravity_database_directory(second, &scan, error) &&
+                     scan_antigravity_database_directory(third, &scan, error);
+                g_free(first);
+                g_free(second);
+                g_free(third);
+            }
+        }
+        g_hash_table_unref(scan.response_ids);
+        g_free(scan.session_id);
+        g_free(scan.model);
     }
     g_free(current_since);
     g_free(since);

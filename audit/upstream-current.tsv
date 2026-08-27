@@ -34,7 +34,7 @@ daa16fb844d1e3d733157d415b82af01fb5f7164	non-linux	Fix single-quota icon scaling
 87a16ffafc71a13362f02c17db14bb994b6b253e	non-linux	docs: credit #3138 #3148 #3153 #3155 #3159 changelog entries	upstream documentation, localization, or macOS release metadata
 6538ac34597e9062f7a9b0e4e6ed0b2d3944807d	already-covered	fix(spend): silent refresh and invalidation coverage (#3106)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
 926f5b337f3765c40304b748f3a5aa20fdb5c92f	already-covered	Improve Antigravity retrieval: retired Flash alias and offline fallback (#3119)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
-7427660af27d8994214fe5a2b57c2d2d7a73d7a8	pending	feat(spend): add tokscale-compatible local readers for Cursor and Antigravity (#3113)	-
+7427660af27d8994214fe5a2b57c2d2d7a73d7a8	ported	feat(spend): add tokscale-compatible local readers for Cursor and Antigravity (#3113)	linux/src/cost.c; linux/src/cli_cost.c; linux/tests/test_cost_cli.sh
 ec1c13d924b963d93c4ccf30a25c439fadcc0182	non-linux	docs: credit #3106 #3113 #3119 changelog entries	upstream documentation, localization, or macOS release metadata
 b83a967f8427e1b3ae334c6974c362378da56c52	already-covered	feat: add CHF display currency (#3149)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
 3f3d75b78a86652bb098510896cd6be7e2fe9a05	non-linux	test: fix currency fixtures after CHF became supported	upstream Swift/AppKit CI or test-only change; native checks are independent
@@ -106,9 +106,8 @@ f2b2b5ea14bb4fdd2b39ec388642903f07b034ab	already-covered	fix: publish Codex loca
 3992cbc8d834a567092d853ab520825cc8460f15	superseded	Merge pull request #3230 from steipete/codex/fix-local-ledger-publication	behavior is classified on the merged parent commit
 4d713b092771372042e1717c82e6974141e2595e	already-covered	fix(openrouter): distinguish key limits from account balance (#3231)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
 8b1b9668e946a71ad9d6e98f6a53102e1488159f	non-linux	test: stabilize Kiro race and streamline architecture scans (#3233)	upstream Swift/AppKit CI or test-only change; native checks are independent
-5b8602981baac73a52228e266084586a2c2b7b1a	pending	fix(cursor): estimate omitted costs and preserve coverage	-
+5b8602981baac73a52228e266084586a2c2b7b1a	already-covered	fix(cursor): estimate omitted costs and preserve coverage	linux/src/cost.c retains priced/unpriced coverage; upstream estimation is confined to the macOS cookie-authenticated Cursor dashboard path
 d9e950e49c954eea6cfe090d70e878eb4642119e	already-covered	fix(grok): bind usage to captured account credentials (#3237)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
 e02e78d98274832305a72f4086bf4630edf83f77	already-covered	fix(spend): refresh independent history after token publications (#3239)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
 b4694bd7edbf0479c330c7e8e91bbdcfd1044cac	non-linux	test: isolate cost and Gemini subprocess fixtures (#3241)	upstream Swift/AppKit CI or test-only change; native checks are independent
-d94c71acfc00fc09bef284d888000042ead66d79	pending	fix: add bounded Antigravity local token history (#3212)	-
-
+d94c71acfc00fc09bef284d888000042ead66d79	ported	fix: add bounded Antigravity local token history (#3212)	linux/src/cost.c bounded JSONL and read-only SQLite/protobuf readers; linux/tests/test_cost_cli.sh

@@ -11,6 +11,9 @@ trap 'rm -rf "$work"' EXIT
 codex=$work/codex
 claude=$work/claude/projects/sample
 mkdir -p "$codex" "$claude"
+cursor=$work/cursor-cache
+antigravity=$work/antigravity-cache/sessions
+mkdir -p "$cursor" "$antigravity"
 fixed_timestamp='2026-08-03T12:00:00Z'
 timestamp=$fixed_timestamp
 previous_timestamp='2026-06-24T12:00:00Z'
@@ -77,6 +80,49 @@ cat >"$claude/session.jsonl" <<EOF
 {"timestamp":"$timestamp","type":"assistant","requestId":"request-1","message":{"id":"message-1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"cache_read_input_tokens":20,"cache_creation_input_tokens":10,"output_tokens":5}}}
 EOF
 
+cat >"$cursor/usage.csv" <<EOF
+Date,Model,Input with Cache Write,Input without Cache Write,Cache Read,Output,Total Tokens,Cost
+$timestamp,cursor-model,130,100,20,50,200,\$0.42
+EOF
+
+cat >"$antigravity/session.jsonl" <<EOF
+{"type":"session_meta","sessionId":"ag-session","modelId":"gemini-2.5-pro"}
+{"type":"usage","timestamp":1785758400000,"input":100,"cacheRead":20,"cacheWrite":5,"output":30,"responseId":"response-1"}
+{"type":"usage","timestamp":1785758400000,"input":100,"cacheRead":20,"cacheWrite":5,"output":30,"responseId":"response-1"}
+EOF
+
+antigravity_db=$work/antigravity-db
+mkdir -p "$antigravity_db"
+"$python" - "$antigravity_db/db-session.db" <<'PY'
+import sqlite3
+import sys
+
+def varint(value):
+    out = bytearray()
+    while value > 127:
+        out.append((value & 127) | 128)
+        value >>= 7
+    out.append(value)
+    return bytes(out)
+
+def scalar(field, value):
+    return varint(field << 3) + varint(value)
+
+def message(field, value):
+    return varint((field << 3) | 2) + varint(len(value)) + value
+
+usage = scalar(2, 40) + scalar(5, 10) + scalar(9, 5) + message(11, b'db-response')
+stamp = scalar(1, 1785758400)
+generation = message(4, stamp)
+chat = message(4, usage) + message(9, generation) + message(19, b'gemini-2.5-flash')
+payload = message(1, chat)
+db = sqlite3.connect(sys.argv[1])
+db.execute('create table gen_metadata (idx integer, data blob)')
+db.execute('insert into gen_metadata values (?, ?)', (7, payload))
+db.commit()
+db.close()
+PY
+
 output=$(CODEXBAR_COST_NOW="$fixed_timestamp" CODEXBAR_COST_CODEX_ROOT="$codex" \
   CODEXBAR_COST_CODEX_TRACE_DB="$trace" CODEXBAR_COST_PI_ROOT="$pi" CODEXBAR_COST_OMP_ROOT="$omp" \
   CODEXBAR_COST_CLAUDE_ROOT="$work/claude" \
@@ -118,11 +164,26 @@ case "$output" in
     ;;
 esac
 
+output=$(CODEXBAR_COST_NOW="$fixed_timestamp" CODEXBAR_COST_CURSOR_ROOT="$cursor" \
+  "$binary" cost --provider cursor --json)
+case "$output" in
+  '[{"provider":"cursor"'*'"sessionTokens":200'*'"sessionCostUSD":0.42'*'"id":"cursor-model"'*'"totalTokens":200'*) ;;
+  *) printf 'unexpected Cursor cost output: %s\n' "$output" >&2; exit 1 ;;
+esac
+
+output=$(CODEXBAR_COST_NOW="$fixed_timestamp" CODEXBAR_COST_ANTIGRAVITY_ROOT="$antigravity" \
+  CODEXBAR_COST_ANTIGRAVITY_DB_ROOT="$antigravity_db" \
+  "$binary" cost --provider antigravity --json)
+case "$output" in
+  '[{"provider":"antigravity"'*'"sessionTokens":210'*'"sessionCostUSD":null'*'"id":"gemini-2.5-pro"'*'"totalTokens":155'*'"unpricedTokens":155'*'"id":"gemini-2.5-flash"'*'"totalTokens":55'*'"unpricedTokens":55'*) ;;
+  *) printf 'unexpected Antigravity cost output: %s\n' "$output" >&2; exit 1 ;;
+esac
+
 if "$binary" cost --provider openrouter >"$work/output" 2>"$work/error"; then
     printf 'unsupported provider unexpectedly succeeded\n' >&2
     exit 1
 fi
-[ "$(cat "$work/error")" = 'Error: cost is only supported for Claude and Codex.' ]
+[ "$(cat "$work/error")" = 'Error: cost is only supported for Claude, Codex, Cursor, and Antigravity.' ]
 
 if "$binary" cost --days 0 >"$work/output" 2>"$work/error"; then
     printf 'invalid day count unexpectedly succeeded\n' >&2
