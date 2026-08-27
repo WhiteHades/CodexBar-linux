@@ -1925,7 +1925,7 @@ static gboolean scan_antigravity_database(const char *path, AntigravityScan *sca
                                    &model, &response)) {
             char *key = response ? g_strdup_printf("response:%s", response)
                                  : g_strdup_printf("row:%s:%" G_GINT64_FORMAT,
-                                                   session, sqlite3_column_int64(statement, 0));
+                                                   session, (gint64)sqlite3_column_int64(statement, 0));
             char *day = millis_day(timestamp);
             if (day && !g_hash_table_contains(scan->response_ids, key) &&
                 day_in_range(day, scan->since, scan->report->today)) {
