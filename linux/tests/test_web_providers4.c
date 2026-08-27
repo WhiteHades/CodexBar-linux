@@ -200,6 +200,17 @@ static void test_command_parser_and_transport(void) {
     g_assert_cmpfloat_with_epsilon(monthly->used_percent, 87.5, 0.0001);
     codexbar_provider_free(provider);
 
+    const char *pro_v1_subscription =
+        "{\"success\":true,\"data\":{\"planId\":\"individual-pro-v1\","
+        "\"status\":\"active\",\"currentPeriodEnd\":\"2026-09-01T00:00:00Z\"}}";
+    provider = codexbar_commandcode_parse(
+        command_credits(), strlen(command_credits()), pro_v1_subscription, strlen(pro_v1_subscription), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->plan, ==, "Pro");
+    monthly = codexbar_provider_quota_window(provider, 2);
+    g_assert_cmpfloat_with_epsilon(monthly->used_percent, 90.625, 0.0001);
+    codexbar_provider_free(provider);
+
     const char *failed_subscription = "{\"success\":false,\"error\":\"temporarily unavailable\"}";
     provider = codexbar_commandcode_parse(
         command_credits(), strlen(command_credits()),

@@ -259,6 +259,17 @@ static void test_amp_parsers(void) {
                       ==, 7.0);
     codexbar_provider_free(provider);
 
+    const char *bold =
+        "**Signed in as user@example.com (Acme)**\n"
+        "**Amp Pro Subscription:** 80% other usage and 60% orb usage remaining - "
+        "resets upon renewal in 2 days";
+    provider = codexbar_amp_parse_display_text(bold, strlen(bold), 1000, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(provider->account, ==, "user@example.com");
+    g_assert_cmpstr(provider->plan, ==, "Pro");
+    g_assert_cmpfloat(codexbar_provider_quota_window(provider, 0)->used_percent, ==, 20);
+    codexbar_provider_free(provider);
+
     const char *free_without_marker = "Amp Free: 75% remaining today";
     provider = codexbar_amp_parse_display_text(
         free_without_marker, strlen(free_without_marker), 1000, &error);

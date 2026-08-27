@@ -616,6 +616,10 @@ static CodexBarProvider *amp_parse_display_text_with_source(const char *text,
     char *input = g_strndup(text, length);
     char *clean = strip_ansi(input);
     g_free(input);
+    char **bold_parts = g_strsplit(clean, "**", -1);
+    g_free(clean);
+    clean = g_strjoinv("", bold_parts);
+    g_strfreev(bold_parts);
     static const char absolute_pattern[] =
         "^\\s*Amp Free:\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*/\\s*\\$?"
         "([0-9][0-9,]*(?:\\.[0-9]+)?)\\s+remaining(?:\\s*\\(replenishes\\s*\\+\\$?"

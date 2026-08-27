@@ -308,6 +308,7 @@ CodexBarProvider *codexbar_commandcode_parse(const char *credits,
         if (g_ascii_strcasecmp(plan_id, "individual-go") == 0) total = 10, plan_name = "Go";
         else if (g_ascii_strcasecmp(plan_id, "individual-goat") == 0) total = 70, plan_name = "GOAT";
         else if (g_ascii_strcasecmp(plan_id, "individual-pro") == 0) total = 30, plan_name = "Pro";
+        else if (g_ascii_strcasecmp(plan_id, "individual-pro-v1") == 0) total = 80, plan_name = "Pro";
         else if (g_ascii_strcasecmp(plan_id, "individual-max") == 0) total = 150, plan_name = "Max";
         else if (g_ascii_strcasecmp(plan_id, "individual-ultra") == 0) total = 300, plan_name = "Ultra";
     }
