@@ -208,6 +208,7 @@ static void test_command_parser_and_transport(void) {
     g_assert_no_error(error);
     g_assert_cmpstr(provider->plan, ==, "Pro");
     monthly = codexbar_provider_quota_window(provider, 2);
+    /* The shared fixture has $8.75 remaining from the Pro plan's $80 monthly total. */
     g_assert_cmpfloat_with_epsilon(monthly->used_percent, 89.0625, 0.0001);
     codexbar_provider_free(provider);
 
