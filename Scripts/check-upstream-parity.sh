@@ -3,7 +3,7 @@
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ledger=$repo/audit/upstream-parity.tsv
+ledger=$repo/audit/upstream-current.tsv
 require_complete=false
 
 if test "${1:-}" = "--require-complete"; then

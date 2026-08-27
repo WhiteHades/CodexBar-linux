@@ -4,7 +4,7 @@ set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 check=$repo/Scripts/check-upstream-parity.sh
-ledger=$repo/audit/upstream-parity.tsv
+ledger=$repo/audit/upstream-current.tsv
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/codexbar-upstream-parity-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 

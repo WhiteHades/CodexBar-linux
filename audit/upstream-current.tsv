@@ -1,0 +1,114 @@
+# upstream	https://github.com/steipete/CodexBar.git
+# base	f74117aeb7a9ee02a78c0f08ca354ff26b2292e0
+# target	d94c71acfc00fc09bef284d888000042ead66d79
+# columns	commit	disposition	finding	evidence
+f74117aeb7a9ee02a78c0f08ca354ff26b2292e0	non-linux	docs: credit #3082 changelog entry	upstream documentation, localization, or macOS release metadata
+4394708cc516b41e8276b62210147cbe123d36d7	already-covered	Fix Codex CLI approval policy (#3118)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+3abd3e3956250c8f760f67291ae640fd77ef391d	non-linux	docs: credit #3118 changelog entry	upstream documentation, localization, or macOS release metadata
+5506a78a4754c3527ed00331d3bf47dbe69e454f	ported	fix(commandcode): Add support for individual-pro-v1 plan ($80/mo credits) (#3116)	linux/src/web_providers4.c; linux/tests/test_web_providers4.c
+961d7fd104488458c27d2989b8cbf75b6627f288	ported	fix(alibaba): tolerate the Personal usage gateway's empty-Success responses (#3128)	linux/src/web_providers5.c; linux/tests/test_web_providers5.c
+e85543ecf0f16709299263e3de7efb8fbf544041	non-linux	docs: credit #3116 and #3128 changelog entries	upstream documentation, localization, or macOS release metadata
+416ef870aaf0d93cf5cb8ca7dde0f22752727095	already-covered	fix(claude): migrate email-keyed iCloud snapshots to slot keys (#3111)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+5bc78a2c309b4780cbb78ebd6cabcc601f93c9fc	already-covered	fix(codex): isolate profile-scoped token cost snapshots (#3132)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+c0a17996b164a69a5dc14e05efddce9f8c464930	non-linux	docs: credit #3111 changelog entry	upstream documentation, localization, or macOS release metadata
+1cf98b330a7928ef743185f2a9057831b65ad78a	already-covered	perf(spend): parallelize loads and memoize model build (#3105)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+00faa6ed477a0b41c0f871c4ce0f312c1441635f	non-linux	docs: credit #3105 changelog entry	upstream documentation, localization, or macOS release metadata
+df18670d6148c53389275043ccade5a48ca3cb20	already-covered	Persist Codex priority-turn scan cursor across relaunches (#3130)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+95afa63a5e8c060a6ffd4749d7f5155e3a67951f	non-linux	docs: credit #3130 changelog entry	upstream documentation, localization, or macOS release metadata
+d2ef26296a45de3aa05895495cb7684ef46f7c1b	already-covered	fix(codex): show Business monthly credit on stacked cards (#3112)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+5c7109524790baae5c2c51d47ecd07392088ab67	non-linux	Fix menu bar layout editor drag-and-drop (#3121)	AppKit menu-bar presentation has no native Linux analogue
+c87c35becbbd95b4a0b3167aff3533d16398e2b4	already-covered	Add Grok Bot Support to Cursor Card (#3127)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+3e01a600d7ab7029121c836219329469234dd44b	non-linux	docs: credit #3112 #3121 #3127 changelog entries	upstream documentation, localization, or macOS release metadata
+51ce63f3a2336d2790d8b25a31863e726db73898	non-linux	test: repair gatekeeper anchors after #3121; dedup #3112 changelog entry	upstream documentation, localization, or macOS release metadata
+27c7f334e3c46c96ff8c063afbe0c7944ba5e0b7	non-linux	chore: finalize 0.54.1 changelog and bump build to 128	upstream documentation, localization, or macOS release metadata
+d6d281e898a0691685d04640bb40d1ff2c3390ea	non-linux	docs: update appcast for 0.54.1	upstream documentation, localization, or macOS release metadata
+4b14ed9c57d3506d1455b2736a1d1a8ff2b9c718	non-linux	chore: open 0.54.2 unreleased changelog section	upstream documentation, localization, or macOS release metadata
+6ef5c5a9a20c754e3cf8973a0ad536c7caf7e9cf	already-covered	Stop re-merging the Codex plan-utilization history with itself on every refresh (#3141)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+07bd85a5e6e93a00cae5c6365794a5f18c6bcafd	already-covered	Fix Codex day cost blanked by trace-only priority turns (#3150)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+63dc1cd520f08f0112bea9f123fc623e2ad334f5	non-linux	docs: credit #3141 and #3150 changelog entries	upstream documentation, localization, or macOS release metadata
+c2701d241f97b44f80f414f8400108b48e93dd23	already-covered	fix(qwen-cloud): restore Brave browser support in cookie import (#3148)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+b843190cb324c93c3fb2ee3a49e5a6905333d08e	already-covered	Fix OpenRouter completed-day activity query (#3138)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+0b715a4f6fd5f5841f634300ad07f7db2c2a714c	already-covered	Preserve unknown Grok period usage (#3159)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+9b034df6d999a52aa59a79f24506467773737bc5	already-covered	fix: report non-writable CLI path conflicts (#3153)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+daa16fb844d1e3d733157d415b82af01fb5f7164	non-linux	Fix single-quota icon scaling (#3155)	AppKit menu-bar presentation has no native Linux analogue
+87a16ffafc71a13362f02c17db14bb994b6b253e	non-linux	docs: credit #3138 #3148 #3153 #3155 #3159 changelog entries	upstream documentation, localization, or macOS release metadata
+6538ac34597e9062f7a9b0e4e6ed0b2d3944807d	already-covered	fix(spend): silent refresh and invalidation coverage (#3106)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+926f5b337f3765c40304b748f3a5aa20fdb5c92f	already-covered	Improve Antigravity retrieval: retired Flash alias and offline fallback (#3119)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+7427660af27d8994214fe5a2b57c2d2d7a73d7a8	pending	feat(spend): add tokscale-compatible local readers for Cursor and Antigravity (#3113)	-
+ec1c13d924b963d93c4ccf30a25c439fadcc0182	non-linux	docs: credit #3106 #3113 #3119 changelog entries	upstream documentation, localization, or macOS release metadata
+b83a967f8427e1b3ae334c6974c362378da56c52	already-covered	feat: add CHF display currency (#3149)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+3f3d75b78a86652bb098510896cd6be7e2fe9a05	non-linux	test: fix currency fixtures after CHF became supported	upstream Swift/AppKit CI or test-only change; native checks are independent
+d92783689570faa306a3da27cc98837c71584c09	already-covered	fix(codex): tokscale parity for token counts - max cached, clamped, reasoning split, stale (#3120)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+23ccb7dac5418a9037447102ca2c5c559478c0a8	non-linux	docs: credit #3120 changelog entry	upstream documentation, localization, or macOS release metadata
+03c5e5232d5157e9deae1efa72e19e470ea6a549	non-linux	test: fix remaining CHF unconvertible fixtures after #3149	upstream Swift/AppKit CI or test-only change; native checks are independent
+1699ad81bbaaebc1977153eb4ae86e5b3bad7025	already-covered	fix: detect ChatGPT-hosted Codex activity (#3163)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+6de934e7e20945f002b53c3b42db64d62d4f6ad5	already-covered	fix(antigravity): reuse signed-in agy for quota refresh (#3161)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+100deb6faeeaa97f179845ef0591cb9b1102639e	non-linux	docs: credit #3161 and #3163 changelog entries	upstream documentation, localization, or macOS release metadata
+146f47316dca1ba68b278ab5c7dd0e7784eb60d4	already-covered	Fix Claude web cookie refresh (#3162)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+971ba9d8c4808fdda3c3dbbea7834fb6fe329765	non-linux	docs: credit #3162 changelog entry	upstream documentation, localization, or macOS release metadata
+d8d03a122109199fe304f3142f56449974e30715	already-covered	Price OpenCodex usage once per entry and stop per-entry catalog/overlay reloads (#3136)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+1835ccd218b696ddcfd112c8f9fab871ef93b150	non-linux	docs: credit #3136 changelog entry	upstream documentation, localization, or macOS release metadata
+90e6651cd7333e09f479dba332949aab910c77f1	already-covered	Detect Google's live Gemini consumer-tier shutdown response (#3139)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+d21639270142a7b7d02f3da49f761698531a766e	non-linux	Preserve merged Warp bonus lane (#3166)	AppKit menu-bar presentation has no native Linux analogue
+26958f73a8764dcfa71aaa1a5a37f43aa031bd38	non-linux	docs: credit #3166 changelog entry	upstream documentation, localization, or macOS release metadata
+a639fdf0398cf6a3d142673028bdcbed6db850e5	non-linux	docs: restructure 0.54.2 changelog into house sections	upstream documentation, localization, or macOS release metadata
+20af94d7191927a84d43085eb8d9f9e1c83b6a65	non-linux	docs: date 0.55.0 changelog	upstream documentation, localization, or macOS release metadata
+fa50cf2dcdb67796dfc200c422d7b7c4f325a294	non-linux	chore: bump version to 0.55.0 (build 129)	upstream documentation, localization, or macOS release metadata
+061593ca15d904ab29858d23ed5e38298d6cad95	non-linux	docs: update appcast for 0.55.0	upstream documentation, localization, or macOS release metadata
+c9e7f4df556d914e4652e21fcb30ee9f3845a0b2	non-linux	docs: open 0.55.1 changelog	upstream documentation, localization, or macOS release metadata
+6a247f0785f1ee6ce19825090e3a8c28e4c805da	ported	fix(amp): parse bold CLI usage labels	linux/src/web_providers2.c; linux/tests/test_web_providers2.c
+11803f4f38715130dc39f46832103c3f1ba836c8	already-covered	fix(openrouter): accept activity timestamp dates	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+2db6a577944899c57c83c1bbffdcc40c53660048	non-linux	feat(opencodego): expose monthly tertiary lane in menu bar layouts	AppKit menu-bar presentation has no native Linux analogue
+b6a4ce968c168fb5465f840c466f7e6a9b0ff9db	non-linux	test: record opencodego tertiary metric capability	upstream Swift/AppKit CI or test-only change; native checks are independent
+31cb6dfb9b93f5ef97ae25b7ec6b2cddd6f96cbb	non-linux	fix: improve Turkish localization (#3178)	upstream documentation, localization, or macOS release metadata
+17ade2b11a0e045f70a1a4c3e2885e5a4adaeeb7	already-covered	perf: parse OpenCodex usage logs incrementally (#3140)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+ff5c5b936673253a293f6a8fed1d7f106698a719	already-covered	fix: restore Fireworks API billing spend display (#3185)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+75894c9fb983e83d69e3e1ac384011e46d379a66	already-covered	fix: finish visible Codex spend catch-up safely (#3114)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+0194d88de2d49bde64f3ce6d73dbfc0296eb509c	already-covered	fix: restore Grok usage without losing account context (#3181)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+f10b6056554ef688d8e3e9775ad4d9875003f030	already-covered	feat: add accurate UAE dirham display currency (#3186)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+0a1aa53598c94003a87bcdcca4af88b0ad508421	already-covered	fix: recover Codex weekly resets without stale account evidence (#3177)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+d6c6285239118eb1375199130f860abf683f2eaf	already-covered	fix: refresh Codex usage cards without mixing account identities (#3189)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+54e2714da46e052b141852291ece728db5ed993b	non-linux	fix: preserve shortcut recorder language throughout editing (#3190)	AppKit menu-bar presentation has no native Linux analogue
+41d904fd6d884b7df73ac180a913ccbf04a9d7d6	already-covered	perf: keep Grok session scans off the menu thread (#3198)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+26132179a00a684e37c836c9a3e5653c71058df3	already-covered	fix: preserve account-scoped spend totals during catch-up (#3051)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+c2eff4c8b6b5b072d28b13d1afd240a337bf3e5a	already-covered	feat: add CLI-first Bailian token plan usage (#3080)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+1bdafe415b7ee20d1d27772d2dfd1b97b7ac7e40	already-covered	fix: recover cancelled claude-swap version probes (#3199)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+3cde772b9f026b8df3807adb374b7e8377a1f2c5	non-linux	test: cover automatic Codex refresh persistence (#3200)	upstream Swift/AppKit CI or test-only change; native checks are independent
+dfc176cdf9451dff29b4334c8e8f82ea3dd0c65b	non-linux	chore: prepare CodexBar 0.55.1 release	upstream documentation, localization, or macOS release metadata
+10587234b54eb6f00efc129566cc25ba744dcc32	non-linux	docs: update appcast for 0.55.1	upstream documentation, localization, or macOS release metadata
+cf79d1310493f2d028af62cc21e422b5f33c70a5	non-linux	chore: begin CodexBar 0.55.2 development	upstream documentation, localization, or macOS release metadata
+aa49594b851f12a7701f5ca736236990d01e6403	already-covered	Fix deferred file budget starvation in cost scanner	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+41d877d469c57613ed71dfa48d94c42ce90d338b	already-covered	Fix deferred phase starvation from time budget and strengthen boost guarantee	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+cb1a5d6a2285738f07516960e661587b3753bca5	already-covered	Address review feedback: fix dedup state leak and test determinism	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+35ff9a1865d2cbfba509a52d634df30f9a5ab2df	already-covered	Sort deferred files by remaining bytes and record scan attempts	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+b4448cdcbe3f5347f60c635f96709db258da6289	already-covered	Document why deferred file starvation via growth cannot occur	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+97fc3b458c230a2f3bad52fcbc526dc2c69ad466	already-covered	Clear a stale Codex connectivity failure when publication is withheld	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+70a37b98d203d48a920916bc044e1d9a7f9e8921	already-covered	Reset the Codex failure gate when a successful fetch is withheld	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+0b54a928ff0602e292efc4b4c26c022356917f2e	already-covered	fix: isolate CLI installer shell environment (#3217)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+4e1f7a3ef36241b5bccf8499a78a91ad2f4b9d77	ported	fix: preserve OpenCode Go API percentage units (#3218)	linux/src/opencode_go.c; linux/tests/test_opencode_go.c
+abe8f9180a75404e9726deec482434c2b4d37e42	non-linux	ci: require Linux matrix success in aggregate checks (#3219)	upstream Swift/AppKit CI or test-only change; native checks are independent
+6e99898b7c9e3ba99a5d2c679e9d65e13a8148dc	already-covered	fix: resolve Antigravity quotas independently per cadence (#3220)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+c4931c6cfc847caa9e4fd3a6518738424e13de8e	already-covered	fix: guard withheld Codex error recovery by refresh ownership	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+53be40244ce62527010b7eab46d5608f99ce317f	already-covered	Honor Codex access-token JWT expiry	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+c7ab0a29a087cbb5691cf7ee56d46aae15dccbee	non-linux	test: align provider ownership anchors after Codex recovery	upstream Swift/AppKit CI or test-only change; native checks are independent
+37c3daf8ae0155b673ec01c0ced47e55952f3da1	superseded	Merge pull request #3214 from olddonkey/fix/codex-clear-stale-error-on-withheld-publication	behavior is classified on the merged parent commit
+27a89fb2d5186fc9b0465bce5640cea0d2f592ec	non-linux	test: isolate Codex credential files from ambient accounts	upstream Swift/AppKit CI or test-only change; native checks are independent
+bb89f0b22f3dcbb9dfcd0bb753dd9baff84e328a	superseded	Merge pull request #3223 from steipete/codex/test-codex-file-isolation	behavior is classified on the merged parent commit
+e2a4d426b48e1f1b666a3d1a4f29064092cb958d	non-linux	fix: honor Claude extra usage fill preference	AppKit menu-bar presentation has no native Linux analogue
+cf1c4095e00e841ea4ec877edadd9672fab01658	superseded	Merge pull request #3227 from steipete/codex/claude-extra-usage-fill	behavior is classified on the merged parent commit
+a42bfb5cf4ee9a4238eb5e95e57af878e33a4b77	non-linux	fix: disclose saved menu layout overrides	AppKit menu-bar presentation has no native Linux analogue
+ea4a72f5d6ae838ddcdec97e448d1fc0455fa8a8	superseded	Merge pull request #3228 from steipete/codex/menu-layout-override-disclosure	behavior is classified on the merged parent commit
+87860e5e1a1dc3706265a1e826056ea8e3184891	already-covered	fix(codex): preserve native OAuth expiry semantics	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+0660761522b1a34f7c991039c3a2e98f17042c3e	superseded	Merge pull request #3222 from anagnorisis2peripeteia/fix/codex-oauth-jwt-expiry	behavior is classified on the merged parent commit
+25c4a45c9824e2e2ceda068aa5fec6b6b194101f	already-covered	fix: fairly schedule pending Codex cost scans	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+2a38c2c298b1b713fbce89141d0ffe3b5b264009	superseded	Merge pull request #3207 from IchenDEV/fix/deferred-file-budget-starvation	behavior is classified on the merged parent commit
+f2b2b5ea14bb4fdd2b39ec388642903f07b034ab	already-covered	fix: publish Codex local-only cost refreshes	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+3992cbc8d834a567092d853ab520825cc8460f15	superseded	Merge pull request #3230 from steipete/codex/fix-local-ledger-publication	behavior is classified on the merged parent commit
+4d713b092771372042e1717c82e6974141e2595e	already-covered	fix(openrouter): distinguish key limits from account balance (#3231)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+8b1b9668e946a71ad9d6e98f6a53102e1488159f	non-linux	test: stabilize Kiro race and streamline architecture scans (#3233)	upstream Swift/AppKit CI or test-only change; native checks are independent
+5b8602981baac73a52228e266084586a2c2b7b1a	pending	fix(cursor): estimate omitted costs and preserve coverage	-
+d9e950e49c954eea6cfe090d70e878eb4642119e	already-covered	fix(grok): bind usage to captured account credentials (#3237)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+e02e78d98274832305a72f4086bf4630edf83f77	already-covered	fix(spend): refresh independent history after token publications (#3239)	native C/GLib provider, runtime, or scanner contract reviewed in linux/src and linux/tests
+b4694bd7edbf0479c330c7e8e91bbdcfd1044cac	non-linux	test: isolate cost and Gemini subprocess fixtures (#3241)	upstream Swift/AppKit CI or test-only change; native checks are independent
+d94c71acfc00fc09bef284d888000042ead66d79	pending	fix: add bounded Antigravity local token history (#3212)	-
+
