@@ -18,8 +18,15 @@ expect_failure() {
 }
 
 "$check" "$ledger" >/dev/null
-if "$check" --require-complete "$ledger" >/dev/null 2>&1; then
-    printf '%s\n' 'upstream parity check accepted pending rows as complete' >&2
+if ! "$check" --require-complete "$ledger" >/dev/null 2>&1; then
+    printf '%s\n' 'upstream parity check rejected the complete ledger' >&2
+    exit 1
+fi
+
+awk -F '\t' 'BEGIN {OFS = "\t"; changed = 0} /^#/ || /^$/ {print; next} \
+    !changed {$2 = "pending"; $4 = "-"; changed = 1} {print}' "$ledger" >"$tmp/pending.tsv"
+if "$check" --require-complete "$tmp/pending.tsv" >/dev/null 2>&1; then
+    printf '%s\n' 'upstream parity check accepted a pending ledger as complete' >&2
     exit 1
 fi
 
